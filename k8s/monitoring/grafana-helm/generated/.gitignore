@@ -1,0 +1,6 @@
+# Rendered Helm values ARE tracked by monorepo convention (see root .gitignore
+# note). render.py regenerates them from values/ + templates; commit the
+# snapshot so others can inspect what's deployed without running render.py.
+#
+# Treat any token inside a rendered value as public — rotate before committing
+# a real one.

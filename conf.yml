@@ -1,0 +1,259 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# signal-forge — deploy-local.sh configuration
+#
+# deploy-local.sh reads this file on every run. Every knob the script consumes
+# is below; nothing in the script is hardcoded beyond what's here.
+#
+# Sections (top-to-bottom = deploy-time order):
+#   cluster            k3d cluster lifecycle (name, namespace, host ports)
+#   corporate_ca       Zscaler CA injection (auto-skipped when file absent)
+#   images             Docker build contexts, per-image build args
+#   manifests          kubectl apply stages (infra → datastores → app → post)
+#   datastore_ready    readiness gate between datastores and app stages
+#   monitoring         observability pipeline — mode, destinations, Helm release
+#   endpoints          pretty-printed at the end of a successful deploy
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─── Cluster ──────────────────────────────────────────────────────────────────
+cluster:
+  name: otel-lab
+  # Kubernetes namespace for this lab's services. The Helm release lives in its
+  # own namespace (see monitoring.helm.namespace).
+  namespace: otel-lab
+  # Host port mappings → k3d `-p <host>:<target>`. Single source of truth:
+  #   - deploy-local.sh assembles k3d --port args from here
+  #   - deploy-local.sh derives the endpoints banner at the end of a deploy from
+  #     `label` + `credentials` (no separate endpoints: block)
+  #   - a drift-check parses every Service manifest in k8s/ and refuses to
+  #     deploy unless each `nodePort:` value appears in a `target:` below
+  # target format:
+  #   "<container-port>@loadbalancer"    → LB listens on container-port
+  #   "<nodeport>@server:0"              → k3d server node, K8s NodePort
+  # mode (optional): only print this entry in the post-deploy banner when
+  #   monitoring.mode matches. Omit = always print. Used to suppress local-only
+  #   URLs (Grafana/Jaeger/Prometheus) from the banner in cloud mode where the
+  #   corresponding services aren't deployed.
+  ports:
+    - host: 8080
+      target: "80@loadbalancer"
+      label: "Frontend"
+    - host: 8443
+      target: "443@loadbalancer"
+      label: "Frontend TLS"
+      # TLS host: signal-forge.local. Add 127.0.0.1 signal-forge.local to
+      # /etc/hosts to hit the TLS rule in k8s/infra/ingress.yaml.
+      # Requires security.tls.enabled: true + cert-manager.
+      url: "https://signal-forge.local:8443"
+    - host: 16686
+      target: "30686@server:0"
+      label: "Jaeger"
+      mode: local
+    - host: 3000
+      target: "30300@server:0"
+      label: "Grafana"
+      credentials: "admin/admin"
+      mode: local
+    - host: 9090
+      target: "30090@server:0"
+      label: "Prometheus"
+      mode: local
+    - host: 15672
+      target: "30672@server:0"
+      label: "RabbitMQ"
+      credentials: "guest/guest"
+
+# ─── Corporate CA (Zscaler) ──────────────────────────────────────────────────
+# Auto-skipped when the file is missing, so non-corporate machines leave this as-is.
+corporate_ca:
+  path: zcert.crt
+  # Seconds to wait after cert injection for k3s to settle before reloading the LB.
+  settle_seconds: 8
+
+# ─── Images ──────────────────────────────────────────────────────────────────
+# Container images to build + side-load into the cluster. Tag is shared; each
+# build context is relative to this file.
+#
+# build_args_from_env:
+#   Shell env var names → --build-arg. Skipped when the var is unset in the shell.
+#
+# build_args_from_conf:
+#   Map of build-arg name → conf.yml dotted path. Value is read from this file
+#   at build time; no shell export required. Precedence: build_args_from_env
+#   wins over build_args_from_conf (shell override beats file).
+images:
+  tag: local
+  builds:
+    - name: otel-frontend
+      context: src/frontend
+      inject_ca: true
+      build_args_from_env:
+        - FARO_API_KEY
+      build_args_from_conf:
+        FARO_API_KEY: monitoring.grafana_cloud.faro.api_key
+    - name: gateway-api
+      context: src/gateway-api
+      inject_ca: true
+    - name: order-api
+      context: src/order-api
+      inject_ca: true
+    - name: notification-svc
+      context: src/notification-svc
+      inject_ca: true
+
+# ─── Manifests ───────────────────────────────────────────────────────────────
+# kubectl apply stages. Paths are relative to this file and applied in order.
+# Datastores are a separate stage so we can block on their readiness before the
+# app stage rolls.
+manifests:
+  infra:
+    - k8s/infra/namespace.yaml
+    - k8s/infra/secrets.yaml
+    - k8s/infra/pdb.yaml
+    - k8s/infra/network-policies.yaml
+  datastores:
+    - k8s/datastores/mysql/
+    - k8s/datastores/postgres/
+    - k8s/datastores/redis/
+    - k8s/datastores/rabbitmq/
+  app:
+    - k8s/app/gateway/
+    - k8s/app/order/
+    - k8s/app/notification/
+    - k8s/app/frontend/
+  post:
+    - k8s/infra/ingress.yaml
+
+# ─── Datastore readiness gate ────────────────────────────────────────────────
+datastore_ready:
+  selector: "tier=datastore"
+  timeout: 600s
+
+# ─── Observability (SLOs, alerts) ───────────────────────────────────────────
+# SLO rules ship as a PrometheusRule CRD. Requires kube-prometheus-stack OR
+# grafana/k8s-monitoring with prometheusOperatorObjects.enabled=true. Leave
+# disabled by default so lab clusters without Prom-Op CRDs still deploy clean.
+observability:
+  slo_rules:
+    enabled: false
+    manifest: k8s/monitoring/slo-rules.yaml
+
+# ─── Security (TLS, PSP/PSA, image signing expectations) ─────────────────────
+# Disable `security.tls.enabled: false` to skip cert-manager install and the
+# TLS Issuer. Ingress still works on http://localhost:8080 via the hostless
+# rule in k8s/infra/ingress.yaml.
+security:
+  tls:
+    enabled: true
+    hostname: signal-forge.local
+    cert_manager:
+      namespace: cert-manager
+      release: cert-manager
+      chart: jetstack/cert-manager
+      version: "v1.18.2"
+      repo:
+        name: jetstack
+        url: https://charts.jetstack.io
+
+# ─── Monitoring ──────────────────────────────────────────────────────────────
+# Two-mode observability pipeline:
+#
+#   mode=local   bespoke Alloy DaemonSet → in-cluster Jaeger / Prom / Loki / Grafana
+#                (the Helm release is OPTIONAL; enable with --with-helm)
+#
+#   mode=cloud   grafana/k8s-monitoring Helm release → Grafana Cloud
+#                (the Helm release is MANDATORY and auto-installed;
+#                 the bespoke Alloy DaemonSet is NOT applied)
+monitoring:
+  mode: cloud
+
+  # Name of the Kubernetes Secret that stores Grafana Cloud credentials.
+  # Applied by deploy-local.sh to both cluster.namespace and helm.namespace.
+  # Referenced by values-cloud.yaml (chart destinations) and the frontend
+  # Deployment (FARO_COLLECTOR_URL env var).
+  secret_name: grafana-cloud-secrets
+
+  # Stamped as the `deployment_environment` label on every signal leaving the
+  # cluster (metrics labels, log streams, trace resource attrs).
+  deployment_environment: signal-forge-dev
+
+  manifests:
+    # Manifests applied only in mode=local. In mode=cloud the Helm release
+    # below replaces this entire list.
+    local:
+      - k8s/monitoring/grafana/                  # bespoke Alloy DaemonSet + RBAC + Service
+      - k8s/monitoring/grafana/local/            # alloy-config ConfigMap with local destinations
+      - k8s/monitoring/local/jaeger/
+      - k8s/monitoring/local/prometheus/
+      - k8s/monitoring/local/loki/
+      - k8s/monitoring/local/grafana/
+    cloud: []
+
+  # ─── Grafana Cloud credentials ───────────────────────────────────────────
+  # Single source of truth. deploy-local.sh materializes these into the
+  # {monitoring.secret_name} Secret. values-cloud.yaml.tmpl is rendered with
+  # the URLs/deployment_environment from this block.
+  grafana_cloud:
+    # Azure Key Vault source metadata. Consumed ONLY by
+    # scripts/fetch-grafana-cloud-conf-from-akv.sh, which authenticates with a
+    # service principal (ARM_CLIENT_ID / ARM_CLIENT_SECRET in .env), pulls every
+    # Grafana Cloud secret from this vault, and writes the fetched values back
+    # into the fields below (api_key, tempo.*, mimir.*, loki.*, faro.*) in place.
+    # Safe to track in git — these are IDs / names, not credentials.
+    akv:
+      tenant_id: "59fa7797-abec-4505-81e6-8ce092642190"
+      subscription_id: "f2402ef5-a794-4d6e-ad6b-0de0de7c36a5"
+      resource_group: "mf-cc-dt-azrsrp-foundation-prd-rg"
+      vault_name: "mf-cc-dt-azrsrp-prd-kv"
+
+    # Shared Access Policy token for data-plane writes (metrics/logs/traces).
+    api_key: "***REMOVED***"
+
+    # Tempo — OTLP gRPC. Endpoint format: <host>:443 (no scheme).
+    tempo:
+      endpoint: "tempo-prod-29-prod-us-central-7.grafana.net:443"
+      user: "1541184"
+
+    # Mimir — Prometheus remote_write. Endpoint format: https://<host>/api/prom/push
+    mimir:
+      endpoint: "https://prometheus-us-central2.grafana.net/api/prom/push"
+      user: "3102416"
+
+    # Loki — push. Endpoint format: https://<host>/loki/api/v1/push
+    loki:
+      endpoint: "https://logs-prod-037.grafana.net/loki/api/v1/push"
+      user: "1546883"
+
+    # Faro — browser RUM. endpoint = runtime collector URL (used by frontend
+    # at container start via grafana-cloud-secrets/FARO_COLLECTOR_URL).
+    # api_key = source-map upload key (used by webpack at build time; can also
+    # be supplied via shell `export FARO_API_KEY=...` which wins over this value).
+    faro:
+      endpoint: "https://faro-api-prod-us-central-7.grafana.net/faro/api/v1"
+      api_key: "***REMOVED***"
+
+  # ─── Helm release: grafana/k8s-monitoring ────────────────────────────────
+  # In cloud mode this IS the cloud exporter pipeline — auto-installed.
+  # In local mode it's opt-in via `./deploy-local.sh --with-helm`.
+  helm:
+    namespace: monitoring
+    release: grafana-k8s
+    chart: grafana/k8s-monitoring
+    version: "3.8.4"
+
+    # Block until rollout succeeds.
+    wait: true
+    timeout: "5m"
+
+    # Per-mode values file. The `cloud` file is a template (${...} placeholders)
+    # rendered by deploy-local.sh from monitoring.grafana_cloud / deployment_environment.
+    values_file_by_mode:
+      local: k8s/monitoring/grafana-helm/values-local.yaml
+      cloud: k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl
+
+    repo:
+      name: grafana
+      url: https://grafana.github.io/helm-charts
+
+# ─── Endpoints banner ────────────────────────────────────────────────────────
+# The endpoints printed at the end of a successful deploy are derived from
+# cluster.ports[].label / .credentials. No separate knob here.

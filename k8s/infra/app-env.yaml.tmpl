@@ -1,0 +1,29 @@
+# app-env.yaml.tmpl — shared env vars for all signal-forge app Deployments.
+#
+# TEMPLATE FILE. Rendered by deploy-local.sh before the `app` stage rolls.
+# App Deployments (gateway/order/notification) pull this via
+#   envFrom:
+#     - configMapRef:
+#         name: signal-forge-app-env
+#
+# Why this ConfigMap exists:
+#   Before this, every app Deployment hardcoded the OTLP endpoint
+#   (`grafana-k8s-alloy-receiver.monitoring.svc.cluster.local:4317`) and the
+#   OTEL_RESOURCE_ATTRIBUTES string. Any change to helm.release / helm.namespace
+#   / cluster.namespace / deployment_environment would silently drift three
+#   deployment YAMLs. Centralising here makes conf.yml the single source.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: signal-forge-app-env
+  namespace: ${APP_NAMESPACE}
+data:
+  # OTLP destination: the k8s-monitoring Helm chart's alloy-receiver.
+  # Derived from monitoring.helm.release + monitoring.helm.namespace.
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://${HELM_RELEASE}-alloy-receiver.${HELM_NAMESPACE}.svc.cluster.local:4317"
+  OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+  # Logs exporter disabled on the app side; pod stdout is tailed by alloy-logs.
+  OTEL_LOGS_EXPORTER: "none"
+  OTEL_METRICS_EXEMPLAR_FILTER: "trace_based"
+  # Resource attributes stamped on every signal leaving the app.
+  OTEL_RESOURCE_ATTRIBUTES: "service.namespace=${APP_NAMESPACE},service.version=1.0.0,deployment.environment=${DEPLOYMENT_ENVIRONMENT}"

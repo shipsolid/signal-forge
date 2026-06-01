@@ -1,0 +1,22 @@
+# NOTE: .env is tracked here by monorepo convention (see root .gitignore) —
+# it scaffolds Grafana Cloud + Azure credentials for the learning lab. Treat
+# values as public; rotate / replace anything ever committed with real creds.
+#
+# zcert.crt (corporate CA) and rendered Helm values under
+# k8s/monitoring/grafana-helm/generated/ ARE tracked by monorepo convention.
+
+# .NET build output
+src/**/bin/
+src/**/obj/
+src/**/TestResults/
+
+# Python bytecode and caches
+src/**/__pycache__/
+src/**/*.pyc
+src/**/.pytest_cache/
+
+# Angular / frontend build artefacts
+src/frontend/coverage/
+src/frontend/out-tsc/
+
+zcert.crt

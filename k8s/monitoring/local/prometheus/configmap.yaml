@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: otel-lab
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    # Enable exemplar storage
+    storage:
+      exemplars:
+        max_exemplars: 100000
+
+    scrape_configs:
+      - job_name: prometheus
+        static_configs:
+          - targets: ['localhost:9090']
+
+      # Alloy metrics are now scraped by grafana/k8s-monitoring in the
+      # monitoring namespace — no separate scrape job needed here.

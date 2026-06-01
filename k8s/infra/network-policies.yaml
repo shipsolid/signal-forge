@@ -1,0 +1,196 @@
+# NetworkPolicies for the otel-lab namespace.
+#
+# IMPORTANT — k3d flannel does NOT enforce NetworkPolicies.
+# These manifests are written as the production baseline. On a real cluster
+# with Calico/Cilium/Weave they will be enforced; on default k3d they are
+# silently accepted but not evaluated. Verify in-cluster with a NetworkPolicy
+# tester (e.g. netshoot pod) before relying on these for isolation.
+# To enforce locally: k3d cluster create --k3s-arg '--flannel-backend=none@server:*'
+# and install calico/cilium.
+#
+# Policy model:
+#   default-deny         baseline for every pod in otel-lab (deny ingress + egress)
+#   allow-dns            every pod can resolve DNS (kube-system CoreDNS)
+#   allow-ingress        traefik controller → any pod in otel-lab
+#   allow-intra-app      app pods ↔ app pods (gateway→order, gateway→notification)
+#   allow-app-to-ds      app pods → datastore pods
+#   allow-app-to-alloy   app pods → grafana-k8s-alloy-receiver (monitoring ns)
+#   allow-egress-cloud   datastore + Alloy egress to the internet (Grafana Cloud)
+---
+# DEFAULT DENY — every pod in otel-lab starts with zero allowed traffic.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: otel-lab
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+# DNS — every pod needs to resolve cluster + external names.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: otel-lab
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# Ingress from the cluster ingress-controller (traefik on k3d) into app pods.
+# Matches by namespace label — works with both stock k3d (kube-system traefik)
+# and dedicated ingress namespaces.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-controller
+  namespace: otel-lab
+spec:
+  podSelector:
+    matchLabels:
+      tier: app
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector: {}   # any namespace — traefik lives in kube-system on k3d
+      ports:
+        - protocol: TCP
+          port: 5000   # gateway-api
+        - protocol: TCP
+          port: 5001   # order-api
+        - protocol: TCP
+          port: 8000   # notification-svc
+        - protocol: TCP
+          port: 8080   # otel-frontend (unprivileged nginx)
+---
+# App ↔ app (gateway calls order-api and notification-svc).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-to-app
+  namespace: otel-lab
+spec:
+  podSelector:
+    matchLabels:
+      tier: app
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              tier: app
+      ports:
+        - protocol: TCP
+          port: 5000
+        - protocol: TCP
+          port: 5001
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8080
+---
+# App → datastore (mysql, postgres, redis, rabbitmq).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-to-datastore
+  namespace: otel-lab
+spec:
+  podSelector:
+    matchLabels:
+      tier: app
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              tier: datastore
+      ports:
+        - protocol: TCP
+          port: 3306    # mysql
+        - protocol: TCP
+          port: 5432    # postgres
+        - protocol: TCP
+          port: 6379    # redis
+        - protocol: TCP
+          port: 5672    # rabbitmq amqp
+---
+# Datastore → accept traffic only from app tier.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-datastore-from-app
+  namespace: otel-lab
+spec:
+  podSelector:
+    matchLabels:
+      tier: datastore
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              tier: app
+---
+# App → Alloy receiver (OTLP ingress) in ns/monitoring.
+# Matches by namespace label kubernetes.io/metadata.name="monitoring" (set by
+# kubelet on every namespace since k8s 1.22).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-to-alloy-receiver
+  namespace: otel-lab
+spec:
+  podSelector:
+    matchLabels:
+      tier: app
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: alloy-receiver
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+---
+# Frontend → Faro collector (external Grafana Cloud) when FARO_URL is set.
+# Broad egress to HTTPS because frontend is the only path to grafana.net for RUM.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-egress-https
+  namespace: otel-lab
+spec:
+  podSelector:
+    matchLabels:
+      app: otel-frontend
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        # Allow egress to anywhere on 443 except the cluster pod and service CIDRs
+        # (those are covered by the other per-tier policies above). If your CNI
+        # supports it, scope down to grafana.net FQDN via a Cilium CiliumNetworkPolicy.
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.42.0.0/16   # k3d default pod CIDR
+              - 10.43.0.0/16   # k3d default service CIDR
+      ports:
+        - protocol: TCP
+          port: 443

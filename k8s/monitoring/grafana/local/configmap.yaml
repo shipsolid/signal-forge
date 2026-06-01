@@ -1,0 +1,346 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alloy-config
+  namespace: otel-lab
+  # Grafana Alloy — LOCAL backend configuration.
+  # Routes all signals to self-hosted backends running in the otel-lab namespace.
+  # Use collector/grafana-cloud/configmap.yaml to route to Grafana Cloud instead.
+  #
+  # Signal flow:
+  #
+  #  Applications           Alloy                     Local Backends
+  #  ──────────             ──────────────────────     ───────────────
+  #  OTLP (gRPC/HTTP) ─┐
+  #  Faro (browser RUM)─┤
+  #                     ▼
+  #             k8sattributes       ← pod metadata enrichment
+  #                     │
+  #            ┌────────┴────────┐
+  #         traces            metrics+logs
+  #            │                  │
+  #        filter                 │        ← drops /healthz spans
+  #            │                  │
+  #     ┌──────┴──────┐           │
+  #  spanmetrics   tail_sampling  │
+  #     │               │         │
+  #     └───────┬───────┘         │
+  #             ▼                 ▼
+  #           batch ◄─────────────┘
+  #             │
+  #    ┌────────┴──────────┐
+  #  jaeger           prometheus
+  #
+  #  SEPARATELY: pod stdout → loki.process → loki.write → local Loki
+data:
+  config.river: |
+
+    // ============================================================
+    // RECEIVERS
+    // ============================================================
+
+    otelcol.receiver.otlp "default" {
+      grpc {
+        endpoint = "0.0.0.0:4317"
+      }
+      http {
+        endpoint = "0.0.0.0:4318"
+      }
+      output {
+        traces  = [otelcol.processor.k8sattributes.default.input]
+        metrics = [otelcol.processor.k8sattributes.default.input]
+        logs    = [otelcol.processor.k8sattributes.default.input]
+      }
+    }
+
+    // Faro receiver: browser RUM (Web Vitals, JS errors, route/fetch spans).
+    faro.receiver "frontend" {
+      server {
+        listen_address       = "0.0.0.0"
+        listen_port          = 12347
+        cors_allowed_origins = ["*"]
+      }
+      output {
+        traces = [otelcol.processor.k8sattributes.default.input]
+        logs   = [loki.write.local.receiver]
+      }
+    }
+
+
+    // ============================================================
+    // PROCESSORS
+    // ============================================================
+
+    // k8sattributes: enriches every signal with pod/node/namespace metadata.
+    otelcol.processor.k8sattributes "default" {
+      extract {
+        metadata = [
+          "k8s.namespace.name",
+          "k8s.deployment.name",
+          "k8s.pod.name",
+          "k8s.node.name",
+          "k8s.container.name",
+        ]
+        label {
+          from      = "pod"
+          key_regex = "app\\.kubernetes\\.io/.*"
+        }
+      }
+      pod_association {
+        source { from = "connection" }
+      }
+      output {
+        traces  = [otelcol.processor.transform.env_label.input]
+        metrics = [otelcol.processor.transform.env_label.input]
+        logs    = [otelcol.processor.transform.env_label.input]
+      }
+    }
+
+    // env_label: stamps deployment.environment as a resource attribute.
+    otelcol.processor.transform "env_label" {
+      error_mode = "ignore"
+
+      trace_statements {
+        context    = "resource"
+        statements = ["set(attributes[\"deployment.environment\"], \"signal-forge-dev\") where attributes[\"deployment.environment\"] == nil"]
+      }
+
+      metric_statements {
+        context    = "resource"
+        statements = ["set(attributes[\"deployment.environment\"], \"signal-forge-dev\") where attributes[\"deployment.environment\"] == nil"]
+      }
+
+      // Promote resource attributes to datapoint-level so the Prometheus exporter
+      // exposes them as labels.  Without this, service.name only maps to the
+      // synthetic job label; service_name (and peers) won't appear in Prometheus.
+      metric_statements {
+        context = "datapoint"
+        statements = [
+          "set(attributes[\"service.name\"],              resource.attributes[\"service.name\"])              where resource.attributes[\"service.name\"] != nil",
+          "set(attributes[\"service.namespace\"],         resource.attributes[\"service.namespace\"])         where resource.attributes[\"service.namespace\"] != nil",
+          "set(attributes[\"service.version\"],           resource.attributes[\"service.version\"])           where resource.attributes[\"service.version\"] != nil",
+          "set(attributes[\"deployment.environment\"],    resource.attributes[\"deployment.environment\"])    where resource.attributes[\"deployment.environment\"] != nil",
+          "set(attributes[\"k8s.namespace.name\"],        resource.attributes[\"k8s.namespace.name\"])        where resource.attributes[\"k8s.namespace.name\"] != nil",
+          "set(attributes[\"k8s.deployment.name\"],       resource.attributes[\"k8s.deployment.name\"])       where resource.attributes[\"k8s.deployment.name\"] != nil",
+        ]
+      }
+
+      log_statements {
+        context    = "resource"
+        statements = ["set(attributes[\"deployment.environment\"], \"signal-forge-dev\") where attributes[\"deployment.environment\"] == nil"]
+      }
+
+      output {
+        traces  = [otelcol.processor.filter.healthz.input]
+        metrics = [otelcol.processor.batch.default.input]
+        logs    = [otelcol.processor.batch.default.input]
+      }
+    }
+
+    // filter: drops /healthz spans before they reach spanmetrics or the sampler.
+    otelcol.processor.filter "healthz" {
+      error_mode = "ignore"
+      traces {
+        span = [
+          "attributes[\"http.route\"] == \"/healthz\"",
+          "attributes[\"url.path\"] == \"/healthz\"",
+        ]
+      }
+      output {
+        traces = [
+          otelcol.connector.spanmetrics.default.input,
+          otelcol.processor.tail_sampling.default.input,
+        ]
+      }
+    }
+
+    // tail_sampling: keep 100% errors, 100% slow (>2s), 25% of the rest.
+    otelcol.processor.tail_sampling "default" {
+      decision_wait               = "10s"
+      num_traces                  = 1000
+      expected_new_traces_per_sec = 100
+
+      policy {
+        name = "errors-always"
+        type = "status_code"
+        status_code {
+          status_codes = ["ERROR"]
+        }
+      }
+      policy {
+        name = "slow-requests"
+        type = "latency"
+        latency {
+          threshold_ms = 2000
+        }
+      }
+      policy {
+        name = "probabilistic-rest"
+        type = "probabilistic"
+        probabilistic {
+          sampling_percentage = 25
+        }
+      }
+
+      output {
+        traces = [otelcol.processor.batch.default.input]
+      }
+    }
+
+    // spanmetrics: generates RED metrics from traces (runs BEFORE tail sampling
+    // so counters reflect 100% of traffic, not just sampled traces).
+    otelcol.connector.spanmetrics "default" {
+      dimension { name = "http.method" }
+      dimension { name = "http.route" }
+      dimension { name = "http.status_code" }
+      dimension { name = "rpc.method" }
+      dimension { name = "rpc.service" }
+      dimension { name = "messaging.operation" }
+      histogram {
+        explicit {
+          buckets = ["5ms", "10ms", "25ms", "50ms", "100ms", "250ms", "500ms", "1s", "2.5s", "5s", "10s"]
+        }
+      }
+      exemplars {
+        enabled = true
+      }
+      output {
+        metrics = [otelcol.processor.batch.default.input]
+      }
+    }
+
+    otelcol.processor.batch "default" {
+      timeout         = "5s"
+      send_batch_size = 1024
+      output {
+        traces  = [otelcol.exporter.otlp.jaeger_local.input]
+        metrics = [otelcol.exporter.prometheus.local.input]
+        // OTLP logs not used — apps set OTEL_LOGS_EXPORTER=none and rely on
+        // the pod-stdout tailing pipeline below.
+      }
+    }
+
+
+    // ============================================================
+    // EXPORTERS — LOCAL
+    // ============================================================
+
+    // Traces → Jaeger all-in-one (OTLP gRPC).
+    otelcol.exporter.otlp "jaeger_local" {
+      client {
+        endpoint = "jaeger.otel-lab.svc.cluster.local:4317"
+        tls { insecure = true }
+      }
+    }
+
+    // Metrics → local Prometheus via remote-write.
+    // Prometheus must be started with --web.enable-remote-write-receiver.
+    //
+    // resource_to_telemetry_conversion: promotes all remaining OTel resource
+    // attributes as Prometheus labels.  The datapoint-level promotion in the
+    // env_label transform handles the key service.* and k8s.* attributes
+    // explicitly; this block catches anything else (e.g. telemetry.sdk.*).
+    otelcol.exporter.prometheus "local" {
+      resource_to_telemetry_conversion {
+        enabled = true
+      }
+      forward_to = [prometheus.remote_write.local.receiver]
+    }
+
+    prometheus.remote_write "local" {
+      endpoint {
+        url = "http://prometheus.otel-lab.svc.cluster.local:9090/api/v1/write"
+      }
+    }
+
+
+    // ============================================================
+    // LOG TAILING PIPELINE
+    // pod stdout → trace-correlation → local Loki
+    // ============================================================
+
+    discovery.kubernetes "pods" {
+      role = "pod"
+      namespaces {
+        names = ["otel-lab"]
+      }
+    }
+
+    discovery.relabel "pod_logs" {
+      targets = discovery.kubernetes.pods.targets
+      rule {
+        source_labels = ["__meta_kubernetes_namespace"]
+        target_label  = "namespace"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_name"]
+        target_label  = "pod"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_container_name"]
+        target_label  = "container"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_label_app"]
+        target_label  = "app"
+      }
+    }
+
+    loki.source.kubernetes "pod_logs" {
+      targets    = discovery.relabel.pod_logs.output
+      forward_to = [loki.process.trace_correlation.receiver]
+    }
+
+    // Extract TraceId/SpanId from .NET and Python JSON log lines and promote
+    // them to Loki structured metadata for "Logs for this span" correlation.
+    loki.process "trace_correlation" {
+      stage.json {
+        expressions = {
+          dotnet_trace = "TraceId",
+          dotnet_span  = "SpanId",
+          dotnet_level = "Level",
+          python_trace = "otelTraceID",
+          python_span  = "otelSpanID",
+          python_level = "levelname",
+        }
+      }
+
+      stage.template {
+        source   = "trace_id"
+        template = "{{ if .dotnet_trace }}{{ .dotnet_trace }}{{ else }}{{ .python_trace }}{{ end }}"
+      }
+
+      stage.template {
+        source   = "span_id"
+        template = "{{ if .dotnet_span }}{{ .dotnet_span }}{{ else }}{{ .python_span }}{{ end }}"
+      }
+
+      stage.template {
+        source   = "level"
+        template = "{{ if .dotnet_level }}{{ .dotnet_level }}{{ else }}{{ .python_level }}{{ end }}"
+      }
+
+      stage.labels {
+        values = {
+          level = "",
+        }
+      }
+
+      stage.structured_metadata {
+        values = {
+          trace_id = "trace_id",
+          span_id  = "span_id",
+        }
+      }
+
+      forward_to = [loki.write.local.receiver]
+    }
+
+    loki.write "local" {
+      endpoint {
+        url = "http://loki.otel-lab.svc.cluster.local:3100/loki/api/v1/push"
+      }
+      external_labels = {
+        deployment_environment = "signal-forge-dev",
+      }
+    }

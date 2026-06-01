@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-frontend
+  namespace: otel-lab
+spec:
+  selector:
+    app: otel-frontend
+  ports:
+    - port: 80
+      # targetPort=8080 because the image is nginxinc/nginx-unprivileged
+      # (UID 101 can't bind <1024 without CAP_NET_BIND_SERVICE).
+      targetPort: 8080

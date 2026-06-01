@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-frontend
+  namespace: otel-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-frontend
+      tier: app
+  template:
+    metadata:
+      labels:
+        app: otel-frontend
+        tier: app
+        app.kubernetes.io/name: otel-frontend
+        app.kubernetes.io/component: frontend
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: otel-frontend
+          image: otel-frontend:local
+          imagePullPolicy: Never
+          securityContext:
+            # readOnlyRootFilesystem intentionally OMITTED: docker-entrypoint.sh
+            # writes /usr/share/nginx/html/assets/env.js at container start.
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - containerPort: 8080
+          env:
+            # Faro collector URL — comes from grafana-cloud-secrets so that cloud vs
+            # local k3d is controlled entirely by make secrets-fetch-akv.
+            # optional: true → if the secret key is absent/empty the env var is unset
+            # and docker-entrypoint.sh falls back to the in-cluster Alloy Faro receiver.
+            - name: FARO_URL
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-cloud-secrets
+                  key: FARO_COLLECTOR_URL
+                  optional: true
+            - name: API_BASE_URL
+              value: "/api"
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 5"]
+      terminationGracePeriodSeconds: 30

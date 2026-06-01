@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: otel-lab
+data:
+  # This script runs ONLY on first container startup (when PGDATA is empty).
+  # PostgreSQL's docker-entrypoint skips /docker-entrypoint-initdb.d entirely
+  # on subsequent starts, so IF NOT EXISTS guards are belt-and-suspenders
+  # safety for manual re-runs or tooling that replays the script.
+  init.sql: |
+    -- Create the application database if it does not already exist.
+    -- PostgreSQL 15+ supports CREATE DATABASE IF NOT EXISTS; for older versions
+    -- we use the SELECT-based guard pattern.
+    SELECT 'CREATE DATABASE orderdb'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'orderdb')\gexec
+
+    -- Create the application user idempotently.
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'orderuser') THEN
+        CREATE USER orderuser WITH PASSWORD 'order_pw';
+      END IF;
+    END
+    $$;
+
+    GRANT ALL PRIVILEGES ON DATABASE orderdb TO orderuser;
+
+    -- Allow orderuser to create schemas inside orderdb
+    -- (required for EF Core migrations run as orderuser).
+    \connect orderdb
+    GRANT ALL ON SCHEMA public TO orderuser;

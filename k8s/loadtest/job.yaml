@@ -1,0 +1,78 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-loadtest
+  namespace: otel-lab
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: k6
+          image: grafana/k6:latest
+          args: ["run", "/scripts/script.js"]
+          resources:
+            requests:
+              cpu: 200m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: scripts
+          configMap:
+            name: k6-script
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k6-script
+  namespace: otel-lab
+data:
+  script.js: |
+    import http from 'k6/http';
+    import { check, sleep } from 'k6';
+
+    export const options = {
+      stages: [
+        { duration: '30s', target: 5 },
+        { duration: '2m',  target: 20 },
+        { duration: '30s', target: 0 },
+      ],
+    };
+
+    const BASE = 'http://gateway-api.otel-lab.svc.cluster.local:5000';
+
+    export default function () {
+      const project = http.post(`${BASE}/api/projects`, JSON.stringify({
+        name: `Project-${Date.now()}`,
+        owner: 'k6-user',
+      }), { headers: { 'Content-Type': 'application/json' } });
+      check(project, { 'project created': (r) => r.status === 201 });
+      const projectId = JSON.parse(project.body).id;
+
+      const order = http.post(`${BASE}/api/orders`, JSON.stringify({
+        projectId: projectId,
+        description: 'Load test order',
+        amount: Math.random() * 10000,
+      }), { headers: { 'Content-Type': 'application/json' } });
+      check(order, { 'order created': (r) => r.status === 201 });
+
+      sleep(1);
+
+      const notifications = http.get(`${BASE}/api/notifications`);
+      check(notifications, { 'notifications ok': (r) => r.status === 200 });
+
+      http.get(`${BASE}/api/projects`);
+      http.get(`${BASE}/api/projects/${projectId}`);
+      http.get(`${BASE}/api/projects/${projectId}/orders`);
+
+      if (Math.random() < 0.1) http.get(`${BASE}/api/slow`);
+      if (Math.random() < 0.05) http.get(`${BASE}/api/error`);
+
+      sleep(0.5);
+    }

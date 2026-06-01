@@ -1,0 +1,34 @@
+# Kustomize base for the signal-forge stack.
+#
+# Layout strategy: the manifests live in their original k8s/{infra,app,datastores}/
+# directories (not physically moved into base/) so we don't churn git history
+# or break deploy-local.sh's stage-by-stage apply. This kustomization.yaml acts
+# as the logical base that overlays reference via `../../base`. Each
+# subdirectory has its own kustomization.yaml (Kustomize forbids a parent
+# kustomization from directly loading files outside its own tree without
+# --load-restrictor=LoadRestrictionsNone — sub-kustomizations are portable).
+#
+# Usage:
+#   kustomize build k8s/base                     # render the full stack
+#   kubectl apply -k k8s/overlays/dev            # dev render + apply
+#
+# deploy-local.sh still applies the individual stages listed in conf.yml. This
+# layout is for kustomize-native consumers (ArgoCD / Flux / Rancher Fleet).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: otel-lab
+
+resources:
+  - ../infra
+  - ../datastores/mysql
+  - ../datastores/postgres
+  - ../datastores/redis
+  - ../datastores/rabbitmq
+  - ../app/gateway
+  - ../app/order
+  - ../app/notification
+  - ../app/frontend
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: signal-forge

@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway-api
+  namespace: otel-lab
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gateway-api
+      tier: app
+  template:
+    metadata:
+      labels:
+        app: gateway-api
+        tier: app
+        app.kubernetes.io/name: gateway-api
+        app.kubernetes.io/component: api-gateway
+        app.kubernetes.io/version: "1.0.0"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1654
+        runAsGroup: 1654
+        fsGroup: 1654
+        seccompProfile:
+          type: RuntimeDefault
+      # Soft anti-affinity: prefer scheduling replicas on distinct nodes.
+      # No-op on single-node k3d; meaningful on multi-node clusters.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: gateway-api
+      containers:
+        - name: gateway-api
+          image: gateway-api:local
+          imagePullPolicy: Never
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - containerPort: 5000
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          envFrom:
+            # Shared OTLP endpoint + resource attributes. Generated from conf.yml
+            # by deploy-local.sh → apply_app_env_configmap. See k8s/infra/app-env.yaml.tmpl.
+            - configMapRef:
+                name: signal-forge-app-env
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            - name: ASPNETCORE_URLS
+              value: http://+:5000
+            - name: ConnectionStrings__DefaultConnection
+              valueFrom:
+                secretKeyRef:
+                  name: db-secrets
+                  key: GATEWAY_DB_CONNECTION
+            - name: OrderApi__Address
+              value: "http://order-api:5001"
+            - name: NotificationSvc__Address
+              value: "http://notification-svc:8000"
+            # Must match DiagnosticsConfig.ServiceName in src/gateway-api/Telemetry/DiagnosticsConfig.cs
+            # (env var takes precedence over AddService() in ResourceBuilder — keep in sync)
+            - name: OTEL_SERVICE_NAME
+              value: gateway-api
+          resources:
+            requests:
+              cpu: 150m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 5000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 5000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+      terminationGracePeriodSeconds: 30
+      volumes:
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package orders;
+
+option csharp_namespace = "OrderApi.Protos";
+
+// OrderService manages the order lifecycle for the otel-lab.
+// Called by gateway-api (gRPC client) over h2c (HTTP/2 cleartext) on port 5001.
+// All three RPCs are instrumented automatically by Grpc.Net.Client and
+// AddGrpcClientInstrumentation(), producing rpc.system/rpc.service/rpc.method spans.
+service OrderService {
+  // CreateOrder validates the request, persists the order to PostgreSQL, and
+  // publishes an order.created event to RabbitMQ with W3C traceparent injected
+  // into the message headers for async trace propagation.
+  // Errors: INVALID_ARGUMENT (validation), INTERNAL (DB/broker failure).
+  rpc CreateOrder (CreateOrderRequest) returns (CreateOrderResponse);
+
+  // GetOrdersByProject streams all orders for a project in insertion order.
+  // Uses server-side streaming so the gateway can forward rows incrementally
+  // without buffering the entire result set — O(1) memory regardless of count.
+  // Errors: INTERNAL (DB failure).
+  rpc GetOrdersByProject (GetOrdersByProjectRequest) returns (stream OrderResponse);
+
+  // GetOrder fetches a single order by its primary key.
+  // Errors: NOT_FOUND (unknown order_id), INTERNAL (DB failure).
+  rpc GetOrder (GetOrderRequest) returns (OrderResponse);
+}
+
+// CreateOrderRequest carries the fields required to create a new order.
+message CreateOrderRequest {
+  // project_id must be > 0. Validated server-side; INVALID_ARGUMENT if violated.
+  int32 project_id = 1;
+  // description must be 1–500 characters. INVALID_ARGUMENT if empty or too long.
+  string description = 2;
+  // amount must be in range (0, 999_999.99]. INVALID_ARGUMENT if outside range.
+  double amount = 3;
+}
+
+// CreateOrderResponse is returned after a successful CreateOrder call.
+message CreateOrderResponse {
+  // order_id is the auto-incremented primary key assigned by PostgreSQL.
+  int32 order_id = 1;
+  // status is always "Created" on success.
+  string status = 2;
+}
+
+// GetOrdersByProjectRequest identifies which project's orders to stream.
+message GetOrdersByProjectRequest {
+  // project_id must be > 0.
+  int32 project_id = 1;
+}
+
+// GetOrderRequest identifies a single order to fetch.
+message GetOrderRequest {
+  // order_id is the primary key returned by CreateOrder.
+  int32 order_id = 1;
+}
+
+// OrderResponse is the wire representation of a persisted order.
+// Returned by both GetOrder (unary) and GetOrdersByProject (stream).
+message OrderResponse {
+  int32  id          = 1;
+  int32  project_id  = 2;
+  string description = 3;
+  double amount      = 4;
+  // status is "Created" for all orders produced by this lab service.
+  string status      = 5;
+  // created_at is an ISO-8601 UTC timestamp string, e.g. "2026-01-15T10:30:00Z".
+  string created_at  = 6;
+}

@@ -1,0 +1,84 @@
+# Prod overlay — larger replicas, tighter resources, prod ingress host, no
+# local-only manifests (no in-cluster Prometheus/Jaeger/Loki/Grafana — those
+# are only applied by deploy-local.sh when monitoring.mode=local; they're not
+# in the base Kustomization).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+labels:
+  - pairs:
+      signal-forge.environment: prod
+
+# Prod-sized replica counts + resource asks.
+patches:
+  - target: { kind: Deployment, name: gateway-api }
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 6
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 500m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 512Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "2"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 1Gi
+  - target: { kind: Deployment, name: order-api }
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 6
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 500m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 512Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "2"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 1Gi
+  - target: { kind: Deployment, name: notification-svc }
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 4
+  - target: { kind: Ingress, name: otel-lab-ingress }
+    patch: |
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: signal-forge.example.com
+      - op: replace
+        path: /spec/rules/0/host
+        value: signal-forge.example.com
+  # Anti-affinity becomes required (not preferred) in prod.
+  - target: { kind: Deployment, name: gateway-api }
+    patch: |
+      - op: replace
+        path: /spec/template/spec/affinity/podAntiAffinity
+        value:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: gateway-api
+  - target: { kind: Deployment, name: order-api }
+    patch: |
+      - op: replace
+        path: /spec/template/spec/affinity/podAntiAffinity
+        value:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: order-api

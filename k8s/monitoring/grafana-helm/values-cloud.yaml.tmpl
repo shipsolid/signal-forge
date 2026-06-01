@@ -1,0 +1,254 @@
+# =============================================================================
+# values-cloud.yaml.tmpl — Helm values for grafana/k8s-monitoring on local k3d,
+# exporting to Grafana Cloud.
+#
+# TEMPLATE FILE. Do not pass this to helm directly — it is rendered by
+# deploy-local.sh, which substitutes ${...} placeholders from conf.yml's
+# monitoring.grafana_cloud / deployment_environment / secret_name / cluster.name
+# / helm.namespace, writes the rendered YAML to a tmp file, and passes that to
+# `helm upgrade -f`.
+#
+# Destinations:
+#   grafana-cloud-metrics   prometheus remote_write  → Mimir
+#   grafana-cloud-logs      loki push                → Loki
+#   grafana-cloud-traces    otlp gRPC (traces only)  → Tempo
+#
+# Credential wiring: each destination uses `secret.create: false` + `*Key` refs
+# pointing at ${SECRET_NAME} in ${SECRET_NAMESPACE} (populated by deploy-local.sh
+# from monitoring.grafana_cloud).
+#
+# Why prometheus (remote_write) instead of otlp for metrics:
+#   prometheus-us-central2.grafana.net exposes BOTH /api/prom/push (remote_write)
+#   and /otlp (OTLP HTTP). The chart's prometheus destination converts app OTLP
+#   metrics → Prometheus format on Alloy's side, which matches how the rest of
+#   the chart's scraped infra metrics are shipped. One ingestion path for both
+#   flows makes dashboard/query UX identical.
+# =============================================================================
+
+cluster:
+  name: ${CLUSTER_NAME}
+
+destinations:
+  # Metrics → Grafana Cloud Mimir (Prometheus remote_write).
+  # Covers BOTH the infra metrics scraped by alloy-metrics AND the app OTLP
+  # metrics arriving at alloy-receiver — Alloy converts OTLP → Prometheus.
+  - name: grafana-cloud-metrics
+    type: prometheus
+    url: ${MIMIR_URL}
+    # Promote OTel resource attributes (service.name, k8s.*) as Prometheus labels
+    # so they are queryable as service_name, k8s_deployment_name, etc. rather
+    # than only appearing in the synthetic job label.
+    openTelemetryConversion:
+      resourceToTelemetryConversion: true
+    extraLabels:
+      deployment_environment: ${DEPLOYMENT_ENVIRONMENT}
+    auth:
+      type: basic
+      usernameKey: GRAFANA_CLOUD_MIMIR_USER
+      passwordKey: GRAFANA_CLOUD_API_KEY
+    secret:
+      create: false
+      name: ${SECRET_NAME}
+      namespace: ${SECRET_NAMESPACE}
+
+  # Logs → Grafana Cloud Loki (push).
+  - name: grafana-cloud-logs
+    type: loki
+    url: ${LOKI_URL}
+    extraLabels:
+      deployment_environment: ${DEPLOYMENT_ENVIRONMENT}
+    auth:
+      type: basic
+      usernameKey: GRAFANA_CLOUD_LOKI_USER
+      passwordKey: GRAFANA_CLOUD_API_KEY
+    secret:
+      create: false
+      name: ${SECRET_NAME}
+      namespace: ${SECRET_NAMESPACE}
+
+  # Traces → Grafana Cloud Tempo (OTLP gRPC, traces only).
+  - name: grafana-cloud-traces
+    type: otlp
+    protocol: grpc
+    url: ${TEMPO_ENDPOINT}
+    extraLabels:
+      deployment_environment: ${DEPLOYMENT_ENVIRONMENT}
+    metrics:
+      enabled: false
+    logs:
+      enabled: false
+    traces:
+      enabled: true
+    auth:
+      type: basic
+      usernameKey: GRAFANA_CLOUD_TEMPO_USER
+      passwordKey: GRAFANA_CLOUD_API_KEY
+    secret:
+      create: false
+      name: ${SECRET_NAME}
+      namespace: ${SECRET_NAMESPACE}
+
+# ── Cluster Metrics ────────────────────────────────────────────────────────────
+clusterMetrics:
+  enabled: true
+  opencost:
+    enabled: false
+  kepler:
+    enabled: false
+  kubelet:
+    enabled: true
+  kubeletResource:
+    enabled: true
+  cadvisor:
+    enabled: true
+  node-exporter:
+    enabled: true
+  kube-state-metrics:
+    enabled: true
+
+# ── Annotation Autodiscovery ───────────────────────────────────────────────────
+# Add k8s.grafana.com/scrape: "true" on a pod to have alloy-metrics scrape it.
+annotationAutodiscovery:
+  enabled: true
+
+# ── Prometheus Operator Objects ────────────────────────────────────────────────
+# No Prometheus-Operator CRDs in the lab — disable to avoid startup errors.
+prometheusOperatorObjects:
+  enabled: false
+
+# ── Cluster Events ─────────────────────────────────────────────────────────────
+clusterEvents:
+  enabled: true
+  excludeLevels: ["Normal"]
+
+# ── Node Logs ──────────────────────────────────────────────────────────────────
+nodeLogs:
+  enabled: true
+  extraLogProcessingStages: |-
+    stage.match {
+      selector = "{level=~\"(?i)info|debug|notice\"}"
+      action   = "drop"
+    }
+
+# ── Pod Logs ───────────────────────────────────────────────────────────────────
+podLogs:
+  enabled: true
+  extraLogProcessingStages: |-
+    stage.replace {
+      expression = "\\x1b\\[[0-9;]*[mKJHfABCDsu]"
+      replace    = ""
+    }
+
+    stage.match {
+      selector = "{namespace=\"kube-system\"}"
+      stage.drop {
+        expression          = "(?i)(\"level\"\\s*:\\s*\"(trace|debug|info|information|warn|warning)\"|\\blevel=\\\"?(trace|debug|info|information|warn|warning)\\\"?\\b)"
+        drop_counter_reason = "kube_system_below_error"
+      }
+    }
+
+# ── Application Observability ──────────────────────────────────────────────────
+# alloy-receiver is the SOLE OTLP ingress. Apps push to:
+#   grafana-k8s-alloy-receiver.monitoring.svc.cluster.local:4317
+applicationObservability:
+  enabled: true
+  receivers:
+    otlp:
+      grpc:
+        enabled: true
+        port: 4317
+      http:
+        enabled: true
+        port: 4318
+    zipkin:
+      enabled: false
+
+# ── Auto Instrumentation (Beyla) ───────────────────────────────────────────────
+autoInstrumentation:
+  enabled: false
+
+# ── Profiling (Pyroscope) ─────────────────────────────────────────────────────
+profiling:
+  enabled: false
+
+# ── Collector Common ───────────────────────────────────────────────────────────
+collectorCommon:
+  alloy:
+    controller:
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+
+# ── Per-Alloy-Agent Overrides ─────────────────────────────────────────────────
+# remoteConfig disabled: Grafana Fleet Management would override local rules.
+alloy-metrics:
+  enabled: true
+  alloy:
+    extraEnv:
+      - name: CLUSTER_NAME
+        value: ${CLUSTER_NAME}
+      - name: NAMESPACE
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+  remoteConfig:
+    enabled: false
+
+alloy-singleton:
+  enabled: true
+  alloy:
+    extraEnv:
+      - name: CLUSTER_NAME
+        value: ${CLUSTER_NAME}
+      - name: NAMESPACE
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+  remoteConfig:
+    enabled: false
+
+alloy-logs:
+  enabled: true
+  alloy:
+    extraEnv:
+      - name: CLUSTER_NAME
+        value: ${CLUSTER_NAME}
+      - name: NAMESPACE
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+      - name: NODE_NAME
+        valueFrom:
+          fieldRef:
+            fieldPath: spec.nodeName
+  remoteConfig:
+    enabled: false
+
+alloy-receiver:
+  enabled: true
+  alloy:
+    extraPorts:
+      - name: otlp-grpc
+        port: 4317
+        targetPort: 4317
+        protocol: TCP
+      - name: otlp-http
+        port: 4318
+        targetPort: 4318
+        protocol: TCP
+    extraEnv:
+      - name: CLUSTER_NAME
+        value: ${CLUSTER_NAME}
+      - name: NAMESPACE
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+      - name: NODE_NAME
+        valueFrom:
+          fieldRef:
+            fieldPath: spec.nodeName
+  remoteConfig:
+    enabled: false
+
+alloy-profiles:
+  enabled: false

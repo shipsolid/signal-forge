@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-init
+  namespace: otel-lab
+data:
+  init.sql: |
+    CREATE DATABASE IF NOT EXISTS gatewaydb;
+    CREATE USER IF NOT EXISTS 'gateway'@'%' IDENTIFIED BY 'gateway_pw';
+    GRANT ALL PRIVILEGES ON gatewaydb.* TO 'gateway'@'%';
+    FLUSH PRIVILEGES;

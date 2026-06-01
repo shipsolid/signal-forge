@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: otel-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+      tier: datastore
+  template:
+    metadata:
+      labels:
+        app: redis
+        tier: datastore
+    spec:
+      securityContext:
+        # redis:7.4-alpine runs as UID 999 (redis user).
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: redis
+          image: redis:7.4-alpine
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # Enable AOF persistence so cached notifications survive pod restarts.
+          # appendonly yes + appendfsync everysec gives durability with minimal I/O overhead.
+          # --dir /data → writable volume (needed because readOnlyRootFilesystem: true).
+          command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--dir", "/data"]
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        # AOF data directory — emptyDir so it survives readOnlyRootFilesystem
+        # (still ephemeral per-pod; see docs/infrastructure/datastores.md).
+        - name: data
+          emptyDir: {}

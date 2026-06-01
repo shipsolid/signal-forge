@@ -1,0 +1,67 @@
+# PodDisruptionBudgets for app and datastore tiers.
+#
+# App tier: 2 replicas each, minAvailable=1 → rolling updates and voluntary
+# node drains never take all replicas down simultaneously.
+#
+# Datastore tier: 1 replica each. A minAvailable=1 PDB here blocks voluntary
+# evictions entirely — the right behaviour for single-replica stores; kubectl
+# drain must --force or wait for manual intervention.
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gateway-api
+  namespace: otel-lab
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: gateway-api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: order-api
+  namespace: otel-lab
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: order-api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: notification-svc
+  namespace: otel-lab
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: notification-svc
+---
+# otel-frontend: single replica today; PDB set so voluntary evictions block
+# until a new replica is scheduled (graceful rollout).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: otel-frontend
+  namespace: otel-lab
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: otel-frontend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: datastores
+  namespace: otel-lab
+spec:
+  # Single-replica stateful stores — block any voluntary eviction.
+  # On k3d this matters less (1 node), but catches ops errors on real clusters.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      tier: datastore

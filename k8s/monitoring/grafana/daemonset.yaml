@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: alloy
+  namespace: otel-lab
+spec:
+  selector:
+    matchLabels:
+      app: alloy
+  template:
+    metadata:
+      labels:
+        app: alloy
+    spec:
+      serviceAccountName: alloy
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
+      containers:
+        - name: alloy
+          image: grafana/alloy:v1.14.0
+          args:
+            - run
+            - /etc/alloy/config.river
+            - --storage.path=/var/lib/alloy/data
+          env:
+            # Grafana Cloud credentials sourced from grafana-cloud-secrets.
+            # Populated via: make secrets-fetch-akv (pulls from Azure Key Vault).
+            # Each signal has its own numeric instance ID (username); API key is shared.
+            - name: GRAFANA_CLOUD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-cloud-secrets
+                  key: GRAFANA_CLOUD_API_KEY
+                  optional: true
+            - name: GRAFANA_CLOUD_TEMPO_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-cloud-secrets
+                  key: GRAFANA_CLOUD_TEMPO_ENDPOINT
+                  optional: true
+            - name: GRAFANA_CLOUD_TEMPO_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-cloud-secrets
+                  key: GRAFANA_CLOUD_TEMPO_USER
+                  optional: true
+            - name: GRAFANA_CLOUD_MIMIR_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-cloud-secrets
+                  key: GRAFANA_CLOUD_MIMIR_ENDPOINT
+                  optional: true
+            - name: GRAFANA_CLOUD_MIMIR_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-cloud-secrets
+                  key: GRAFANA_CLOUD_MIMIR_USER
+                  optional: true
+            - name: GRAFANA_CLOUD_LOKI_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-cloud-secrets
+                  key: GRAFANA_CLOUD_LOKI_ENDPOINT
+                  optional: true
+            - name: GRAFANA_CLOUD_LOKI_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-cloud-secrets
+                  key: GRAFANA_CLOUD_LOKI_USER
+                  optional: true
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+              hostPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+              hostPort: 4318
+            - name: faro
+              containerPort: 12347
+              hostPort: 12347
+            - name: metrics
+              containerPort: 12345
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alloy
+            - name: data
+              mountPath: /var/lib/alloy/data
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: alloy-config
+        - name: data
+          hostPath:
+            path: /var/lib/alloy/data
+            type: DirectoryOrCreate
+        - name: varlog
+          hostPath:
+            path: /var/log
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers

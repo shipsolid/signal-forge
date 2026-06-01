@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: otel-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.51.0
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            # Required for Alloy to push metrics via prometheus.remote_write.
+            # Without this flag, Prometheus rejects remote-write requests with 404.
+            - "--web.enable-remote-write-receiver"
+            # Required for exemplar storage.
+            # Without this, Prometheus silently discards exemplars attached to
+            # histogram observations and Grafana cannot render click-to-trace dots.
+            - "--enable-feature=exemplar-storage"
+          ports:
+            - containerPort: 9090
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: data
+          # emptyDir is intentionally ephemeral for the lab.
+          # On pod restart, metric history is lost. Use a PVC in production.
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: otel-lab
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
+      # NodePort 30090 mapped to host port 9090 via k3d -p "9090:30090@server:0"
+      nodePort: 30090
+  type: NodePort

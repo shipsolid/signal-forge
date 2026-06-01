@@ -1,0 +1,269 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'd-services/11-signal-forge/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'd-services/11-signal-forge/**'
+
+defaults:
+  run:
+    working-directory: d-services/11-signal-forge
+
+jobs:
+  # ── .NET services ────────────────────────────────────────────────────────────
+  test-dotnet:
+    name: .NET tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore src/
+
+      - name: Build
+        run: dotnet build src/ --no-restore --configuration Release
+
+      - name: Test — order-api
+        run: dotnet test src/order-api.Tests/order-api.Tests.csproj --no-build --configuration Release --logger "trx;LogFileName=order-api-results.trx"
+
+      - name: Test — gateway-api
+        run: dotnet test src/gateway-api.Tests/gateway-api.Tests.csproj --no-build --configuration Release --logger "trx;LogFileName=gateway-api-results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-test-results
+          path: d-services/11-signal-forge/src/**/*.trx
+
+  # ── Python service ───────────────────────────────────────────────────────────
+  test-python:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: d-services/11-signal-forge/src/notification-svc/requirements-test.txt
+
+      - name: Install dependencies
+        run: pip install -r src/notification-svc/requirements-test.txt
+        working-directory: d-services/11-signal-forge
+
+      - name: Test — notification-svc
+        run: python -m pytest src/notification-svc/tests/ -v --tb=short
+        working-directory: d-services/11-signal-forge
+
+  # ── Angular frontend ─────────────────────────────────────────────────────────
+  test-frontend:
+    name: Frontend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: d-services/11-signal-forge/src/frontend/package-lock.json
+
+      - name: Install app dependencies
+        run: npm ci
+        working-directory: d-services/11-signal-forge/src/frontend
+
+      - name: Install Jest + preset
+        run: |
+          npm install --prefix /tmp/ng-test-deps \
+            jest jest-environment-jsdom jest-preset-angular \
+            @types/jest typescript --legacy-peer-deps
+
+      - name: Test — frontend
+        run: |
+          NODE_PATH=/tmp/ng-test-deps/node_modules \
+            /tmp/ng-test-deps/node_modules/.bin/jest --config jest.config.js --ci
+        working-directory: d-services/11-signal-forge/src/frontend
+
+  # ── Vulnerability scanning ───────────────────────────────────────────────────
+  vuln-scan:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore .NET packages
+        run: dotnet restore src/
+
+      - name: Scan .NET packages for known vulnerabilities
+        run: |
+          dotnet list src/ package --vulnerable --include-transitive 2>&1 | tee vuln-dotnet.txt
+          if grep -q "has the following vulnerable packages" vuln-dotnet.txt; then
+            echo "::error::Vulnerable .NET packages found"
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Scan Python packages for known vulnerabilities
+        run: pip-audit -r src/notification-svc/requirements.txt --format json --output vuln-python.json || true
+
+      - name: Fail on Python vulnerabilities
+        run: |
+          if python3 -c "import json,sys; d=json.load(open('vuln-python.json')); sys.exit(1 if d.get('dependencies') else 0)"; then
+            echo "No vulnerable Python packages found"
+          else
+            cat vuln-python.json
+            echo "::error::Vulnerable Python packages found"
+            exit 1
+          fi
+
+      - name: Upload vulnerability reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulnerability-reports
+          path: |
+            d-services/11-signal-forge/vuln-dotnet.txt
+            d-services/11-signal-forge/vuln-python.json
+
+  # ── Docker builds + supply-chain ─────────────────────────────────────────
+  # Every image is built, scanned (Trivy), SBOM'd (Syft), and signed (cosign).
+  # Signing uses keyless OIDC — no long-lived secrets. Requires `id-token: write`
+  # at the job level so the runner can fetch a Sigstore OIDC token.
+  build-images:
+    name: Build + scan + SBOM + sign
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # cosign keyless OIDC
+      packages: write   # push to ghcr.io on main
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - name: otel-frontend
+            context: src/frontend
+          - name: gateway-api
+            context: src/gateway-api
+          - name: order-api
+            context: src/order-api
+          - name: notification-svc
+            context: src/notification-svc
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build once, load locally so Trivy/Syft can scan the same artifact.
+      - name: Build ${{ matrix.service.name }}
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: d-services/11-signal-forge/${{ matrix.service.context }}
+          push: false
+          load: true
+          tags: ${{ matrix.service.name }}:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Image vulnerability scan (Trivy) ──────────────────────────────
+      # Fail the job on HIGH or CRITICAL vulnerabilities with a fix available.
+      # Unfixed are reported but don't block (nothing we can do about them).
+      - name: Trivy scan — ${{ matrix.service.name }}
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ matrix.service.name }}:ci
+          format: sarif
+          output: trivy-${{ matrix.service.name }}.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          vuln-type: os,library
+
+      - name: Upload Trivy SARIF to GitHub code-scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: d-services/11-signal-forge/trivy-${{ matrix.service.name }}.sarif
+          category: trivy-${{ matrix.service.name }}
+
+      # ── SBOM generation (Syft) ─────────────────────────────────────────
+      - name: Generate SBOM (CycloneDX) — ${{ matrix.service.name }}
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ matrix.service.name }}:ci
+          format: cyclonedx-json
+          output-file: sbom-${{ matrix.service.name }}.cdx.json
+          upload-artifact: false
+
+      # ── Push + sign (only on main, not PRs) ────────────────────────────
+      # On PRs we build/scan/SBOM but don't push or sign (no ghcr write).
+      - name: Login to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag + push ${{ matrix.service.name }}
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: push
+        run: |
+          IMAGE="ghcr.io/${{ github.repository_owner }}/signal-forge/${{ matrix.service.name }}"
+          SHA="${{ github.sha }}"
+          docker tag ${{ matrix.service.name }}:ci "${IMAGE}:${SHA}"
+          docker tag ${{ matrix.service.name }}:ci "${IMAGE}:latest"
+          docker push "${IMAGE}:${SHA}"
+          docker push "${IMAGE}:latest"
+          # Capture the registry digest for cosign.
+          DIGEST="$(docker buildx imagetools inspect "${IMAGE}:${SHA}" --format '{{.Manifest.Digest}}')"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Install cosign
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image (keyless OIDC) — ${{ matrix.service.name }}
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign --yes "${{ steps.push.outputs.image }}@${{ steps.push.outputs.digest }}"
+
+      - name: Attach SBOM attestation — ${{ matrix.service.name }}
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign attest --yes --predicate sbom-${{ matrix.service.name }}.cdx.json \
+            --type cyclonedx \
+            "${{ steps.push.outputs.image }}@${{ steps.push.outputs.digest }}"
+
+      - name: Upload SBOM artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.service.name }}
+          path: d-services/11-signal-forge/sbom-${{ matrix.service.name }}.cdx.json

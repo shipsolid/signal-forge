@@ -1,0 +1,103 @@
+{
+  "title": "SignalForge — Service Overview",
+  "uid": "service-overview",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Request Rate by Service",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "datasource": { "uid": "prometheus" },
+          "expr": "sum by (service_name) (rate(traces_spanmetrics_calls_total[1m]))",
+          "legendFormat": "{{service_name}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "P95 Latency by Route (span metrics)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "datasource": { "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (le, http_route, service_name) (rate(traces_spanmetrics_latency_bucket[5m])))",
+          "legendFormat": "{{service_name}} {{http_route}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Error Rate by Service",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "datasource": { "uid": "prometheus" },
+          "expr": "sum by (service_name) (rate(traces_spanmetrics_calls_total{status_code=\"STATUS_CODE_ERROR\"}[1m]))",
+          "legendFormat": "{{service_name}} errors"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "In-flight Requests (gateway)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "datasource": { "uid": "prometheus" },
+          "expr": "gateway_requests_inflight",
+          "legendFormat": "In-flight"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Orders Created Total",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 8 },
+      "targets": [
+        {
+          "datasource": { "uid": "prometheus" },
+          "expr": "sum(orders_created_total)",
+          "legendFormat": "Orders"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Notifications Processed",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "datasource": { "uid": "prometheus" },
+          "expr": "sum by (status) (rate(notifications_processed_total[1m]))",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "HTTP Request Duration Exemplars (gateway)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "options": { "exemplars": { "enabled": true } },
+      "targets": [
+        {
+          "datasource": { "uid": "prometheus" },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_request_duration_seconds_bucket{job=\"gateway-api\"}[5m])))",
+          "legendFormat": "P99",
+          "exemplarTraceIdDestinations": [{ "datasourceUid": "jaeger", "name": "traceID" }]
+        }
+      ]
+    }
+  ],
+  "time": { "from": "now-1h", "to": "now" }
+}

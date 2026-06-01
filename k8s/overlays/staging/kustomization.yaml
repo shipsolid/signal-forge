@@ -1,0 +1,36 @@
+# Staging overlay — larger replica counts, stricter limits, staging ingress host.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+labels:
+  - pairs:
+      signal-forge.environment: staging
+
+# Raise replica counts on app tier for staging.
+patches:
+  - target: { kind: Deployment, name: gateway-api }
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 3
+  - target: { kind: Deployment, name: order-api }
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 3
+  - target: { kind: Deployment, name: notification-svc }
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 3
+  - target: { kind: Ingress, name: otel-lab-ingress }
+    patch: |
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: signal-forge.staging.example.com
+      - op: replace
+        path: /spec/rules/0/host
+        value: signal-forge.staging.example.com

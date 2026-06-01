@@ -1,0 +1,76 @@
+{
+  "title": "SignalForge — Trace Analysis",
+  "uid": "trace-analysis",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Trace Search",
+      "type": "traces",
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "uid": "jaeger" },
+      "targets": [
+        {
+          "datasource": { "uid": "jaeger" },
+          "queryType": "search",
+          "service": "",
+          "operation": "",
+          "limit": 20
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Span Metrics — Call Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "targets": [
+        {
+          "datasource": { "uid": "prometheus" },
+          "expr": "sum by (span_name, service_name) (rate(traces_spanmetrics_calls_total[1m]))",
+          "legendFormat": "{{service_name}}/{{span_name}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Tail Sampling Effectiveness",
+      "type": "timeseries",
+      "description": "Compare span metrics (pre-sampling) vs sampled trace arrivals",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "targets": [
+        {
+          "datasource": { "uid": "prometheus" },
+          "expr": "sum(rate(traces_spanmetrics_calls_total[1m]))",
+          "legendFormat": "Total spans (pre-sample)"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Logs (Loki) — with trace correlation",
+      "type": "logs",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 22 },
+      "targets": [
+        {
+          "datasource": { "uid": "loki" },
+          "expr": "{namespace=\"otel-lab\"}",
+          "legendFormat": ""
+        }
+      ],
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": false
+      }
+    }
+  ],
+  "time": { "from": "now-1h", "to": "now" }
+}

@@ -1,0 +1,318 @@
+# =============================================================================
+# values-local.yaml — Helm values for grafana/k8s-monitoring on local k3d.
+#
+# Chart:   grafana/k8s-monitoring v3.8.4
+# Target:  otel-lab k3d cluster (local dev/learning)
+# Docs:    https://github.com/grafana/k8s-monitoring-helm/tree/main/charts/k8s-monitoring
+#
+# KEY DIFFERENCES vs. the cloud config in ../f-observability/09-grafana-k8s:
+#   ┌─────────────────────────────┬──────────────────────┬───────────────────────┐
+#   │ Feature                     │ 09-grafana-k8s (AKS) │ This file (k3d)       │
+#   ├─────────────────────────────┼──────────────────────┼───────────────────────┤
+#   │ Metrics destination         │ Grafana Cloud PROM   │ Local Prometheus :9090│
+#   │ Logs destination            │ Grafana Cloud Loki   │ Local Loki :3100      │
+#   │ Traces destination          │ Grafana Cloud OTLP   │ Local Jaeger :4317    │
+#   │ Profiling (Pyroscope)       │ Grafana Cloud        │ Disabled              │
+#   │ OpenCost                    │ Enabled              │ Disabled (no billing) │
+#   │ Kepler                      │ Enabled              │ Disabled (eBPF/k3d)   │
+#   │ autoInstrumentation (Beyla) │ Disabled             │ Disabled              │
+#   │ prometheusOperatorObjects   │ Enabled              │ Disabled (no CRDs)    │
+#   │ remoteConfig (Fleet Mgmt)   │ Disabled             │ Disabled              │
+#   └─────────────────────────────┴──────────────────────┴───────────────────────┘
+#
+# Deploy:
+#   helm repo add grafana https://grafana.github.io/helm-charts
+#   helm repo update
+#   helm upgrade --install grafana-k8s grafana/k8s-monitoring \
+#     --version 3.8.4 \
+#     -n monitoring --create-namespace \
+#     -f helm/values-local.yaml
+#
+# Or via Makefile:
+#   make deploy-helm
+# =============================================================================
+
+# ── Cluster identity ───────────────────────────────────────────────────────────
+cluster:
+  name: otel-lab
+
+# ── Destinations ──────────────────────────────────────────────────────────────
+# Three local destinations — all deployed in the otel-lab namespace by make deploy.
+# The k8s-monitoring chart's Alloy agents run in the "monitoring" namespace, so
+# they reference these services by full cluster DNS.
+destinations:
+
+  # Prometheus remote_write — receives scraped infra metrics and span-metrics.
+  # Prometheus is deployed with --web.enable-remote-write-receiver so it accepts
+  # push-mode writes from Alloy.
+  - name: local-prometheus
+    type: prometheus
+    url: http://prometheus.otel-lab.svc.cluster.local:9090/api/v1/write
+    # Promote OTel resource attributes (service.name, k8s.*) as Prometheus labels.
+    # Without this, service.name only maps to the synthetic job label and is not
+    # queryable as service_name. Generates: resource_to_telemetry_conversion = true
+    # on the otelcol.exporter.prometheus River block.
+    openTelemetryConversion:
+      resourceToTelemetryConversion: true
+    # Stamped on every metric series written by the Helm chart's Alloy agents.
+    extraLabels:
+      deployment_environment: signal-forge-dev
+
+  # Loki push — receives pod logs and cluster events.
+  # Loki is deployed as a StatefulSet with a 2Gi PVC in otel-lab namespace.
+  - name: local-loki
+    type: loki
+    url: http://loki.otel-lab.svc.cluster.local:3100/loki/api/v1/push
+    # Stamped on every log stream pushed by the Helm chart's Alloy agents.
+    extraLabels:
+      deployment_environment: signal-forge-dev
+
+  # OTLP gRPC — receives traces forwarded by alloy-receiver.
+  # Jaeger is deployed with COLLECTOR_OTLP_ENABLED=true; port 4317 accepts gRPC OTLP.
+  # Traces land in Jaeger's in-memory store and appear in the UI at localhost:16686.
+  #
+  # IMPORTANT: metrics and logs are DISABLED here — Jaeger's OTLP endpoint only
+  # implements opentelemetry.proto.collector.trace.v1.TraceService.  Routing
+  # metrics or logs to it produces a permanent "MetricsService not implemented"
+  # error and drops those signals silently.  Metrics are handled by local-prometheus;
+  # logs are handled by alloy-logs → local-loki.
+  - name: local-otlp
+    type: otlp
+    url: http://jaeger.otel-lab.svc.cluster.local:4317
+    protocol: grpc
+    tls:
+      insecure: true        # Jaeger has no TLS in the lab
+    # Stamped on every trace forwarded by alloy-receiver.
+    extraLabels:
+      deployment_environment: signal-forge-dev
+    metrics:
+      enabled: false
+    logs:
+      enabled: false
+    traces:
+      enabled: true
+
+# ── Cluster Metrics ────────────────────────────────────────────────────────────
+# Infrastructure metrics scraped by alloy-metrics (StatefulSet) and forwarded to
+# local-prometheus via remote_write.
+clusterMetrics:
+  enabled: true
+
+  # OpenCost: cost allocation metrics. Requires cloud billing APIs — skip for local.
+  opencost:
+    enabled: false
+
+  # Kepler: energy consumption via eBPF. k3d runs on a VM/WSL layer; eBPF counters
+  # are unavailable or meaningless without bare-metal hardware power interfaces.
+  kepler:
+    enabled: false
+
+  # Kubelet: pod/container lifecycle counts from each node's kubelet endpoint.
+  kubelet:
+    enabled: true
+
+  # Kubelet resource: CPU/memory usage from kubelet /metrics/resource (used by HPA).
+  kubeletResource:
+    enabled: true
+
+  # cAdvisor: per-container resource usage (CPU, memory, network, filesystem).
+  # This is the primary source of container-level resource graphs in Grafana.
+  cadvisor:
+    enabled: true
+
+  # Node Exporter: host-level OS metrics. k3d exposes the host's node-exporter data
+  # (since k3d containers share the host kernel); data reflects the WSL/VM node.
+  node-exporter:
+    enabled: true
+
+  # kube-state-metrics: Kubernetes object state (deployments, pods, PVCs, etc.).
+  # Deployed as part of the Helm chart release.
+  kube-state-metrics:
+    enabled: true
+
+# ── Annotation Autodiscovery ───────────────────────────────────────────────────
+# Scrapes any pod/service annotated with:
+#   k8s.grafana.com/scrape: "true"
+#   k8s.grafana.com/metrics.portNumber: "<port>"
+#
+# USAGE: Add these annotations to gateway-api, order-api, or notification-svc
+# pods to have alloy-metrics scrape their /metrics endpoints directly, in
+# addition to (or instead of) the OTLP push path.
+#
+# Example annotation on a Deployment pod template:
+#   k8s.grafana.com/scrape: "true"
+#   k8s.grafana.com/metrics.portNumber: "8080"
+annotationAutodiscovery:
+  enabled: true
+
+# ── Prometheus Operator Objects ────────────────────────────────────────────────
+# Watches for ServiceMonitor, PodMonitor, and Probe CRDs.
+# The lab doesn't install Prometheus Operator CRDs — disable to avoid startup errors.
+prometheusOperatorObjects:
+  enabled: false
+
+# ── Cluster Events ─────────────────────────────────────────────────────────────
+# Kubernetes cluster events (kubectl get events) forwarded to local-loki.
+# Only Warning events to reduce noise (Normal events = routine scheduling).
+clusterEvents:
+  enabled: true
+  excludeLevels: ["Normal"]
+
+# ── Node Logs ──────────────────────────────────────────────────────────────────
+# System logs from /var/log/journal (kubelet, containerd, systemd) → local-loki.
+# Forwarded by alloy-logs DaemonSet.
+nodeLogs:
+  enabled: true
+  extraLogProcessingStages: |-
+    // Drop INFO/DEBUG/NOTICE journal entries; keep WARN and above.
+    stage.match {
+      selector = "{level=~\"(?i)info|debug|notice\"}"
+      action   = "drop"
+    }
+
+# ── Pod Logs ───────────────────────────────────────────────────────────────────
+# Container stdout/stderr from all pods → local-loki.
+# Per-namespace level filtering mirrors the production config in 09-grafana-k8s.
+podLogs:
+  enabled: true
+  extraLogProcessingStages: |-
+    // Strip ANSI color codes emitted by some frameworks (React, some Python libs).
+    stage.replace {
+      expression = "\\x1b\\[[0-9;]*[mKJHfABCDsu]"
+      replace    = ""
+    }
+
+    // kube-system: only errors (very chatty at info/warn level in k3d).
+    stage.match {
+      selector = "{namespace=\"kube-system\"}"
+      stage.drop {
+        expression          = "(?i)(\"level\"\\s*:\\s*\"(trace|debug|info|information|warn|warning)\"|\\blevel=\\\"?(trace|debug|info|information|warn|warning)\\\"?\\b)"
+        drop_counter_reason = "kube_system_below_error"
+      }
+    }
+
+    // otel-lab app pods: keep all levels (debug useful for learning).
+    // No filter applied — full verbosity for the lab services.
+
+# ── Application Observability ──────────────────────────────────────────────────
+# Receives OTLP telemetry pushed by app pods and forwards to local-otlp (Jaeger).
+# alloy-receiver DaemonSet exposes ports 4317 (gRPC) and 4318 (HTTP) on each node.
+#
+# alloy-receiver DaemonSet is the SOLE OTLP collector for this lab.
+# The hand-rolled k8s/alloy/ DaemonSet is kept as reference only (not deployed).
+# App Deployments send to: grafana-k8s-alloy-receiver.monitoring.svc.cluster.local:4317
+applicationObservability:
+  enabled: true
+  receivers:
+    otlp:
+      grpc:
+        enabled: true
+        port: 4317
+      http:
+        enabled: true
+        port: 4318
+    zipkin:
+      enabled: false    # Jaeger supports Zipkin but the lab uses OTLP natively
+
+# ── Auto Instrumentation (Beyla) ───────────────────────────────────────────────
+# eBPF-based automatic instrumentation without code changes.
+# Disabled: the lab uses explicit OTel SDK instrumentation to teach the concepts.
+# Enable to compare eBPF auto-traces with manual SDK traces in Jaeger.
+autoInstrumentation:
+  enabled: false
+
+# ── Profiling (Pyroscope) ─────────────────────────────────────────────────────
+# Continuous profiling. Disabled: no local Pyroscope instance in the lab stack.
+# To enable, deploy Grafana Pyroscope (helm install pyroscope grafana/pyroscope)
+# and add a pyroscope destination above.
+profiling:
+  enabled: false
+
+# ── Collector Common ───────────────────────────────────────────────────────────
+# Settings merged into all Alloy collector instances.
+# k3d control-plane node does NOT have the NoSchedule taint that AKS nodes do,
+# so the AKS tolerations from 09-grafana-k8s are unnecessary but harmless.
+collectorCommon:
+  alloy:
+    controller:
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+
+# ── Per-Alloy-Agent Overrides ─────────────────────────────────────────────────
+# remoteConfig.enabled: false on every agent.
+# Reason: Grafana Fleet Management would override local metric filter rules if
+# enabled. See OTEL-PATTERNS.md §"Grafana Cloud Dual-Export" for details.
+
+alloy-metrics:
+  enabled: true
+  alloy:
+    extraEnv:
+      - name: CLUSTER_NAME
+        value: otel-lab
+      - name: NAMESPACE
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+  remoteConfig:
+    enabled: false
+
+alloy-singleton:
+  enabled: true
+  alloy:
+    extraEnv:
+      - name: CLUSTER_NAME
+        value: otel-lab
+      - name: NAMESPACE
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+  remoteConfig:
+    enabled: false
+
+alloy-logs:
+  enabled: true
+  alloy:
+    extraEnv:
+      - name: CLUSTER_NAME
+        value: otel-lab
+      - name: NAMESPACE
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+      - name: NODE_NAME
+        valueFrom:
+          fieldRef:
+            fieldPath: spec.nodeName
+  remoteConfig:
+    enabled: false
+
+alloy-receiver:
+  enabled: true
+  alloy:
+    extraPorts:
+      - name: otlp-grpc
+        port: 4317
+        targetPort: 4317
+        protocol: TCP
+      - name: otlp-http
+        port: 4318
+        targetPort: 4318
+        protocol: TCP
+    extraEnv:
+      - name: CLUSTER_NAME
+        value: otel-lab
+      - name: NAMESPACE
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+      - name: NODE_NAME
+        valueFrom:
+          fieldRef:
+            fieldPath: spec.nodeName
+  remoteConfig:
+    enabled: false
+
+# alloy-profiles: disabled — no local Pyroscope.
+alloy-profiles:
+  enabled: false
