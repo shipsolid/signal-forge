@@ -18,5 +18,13 @@ src/**/.pytest_cache/
 # Angular / frontend build artefacts
 src/frontend/coverage/
 src/frontend/out-tsc/
+src/frontend/dist/
+src/frontend/.angular/
+
+# Python virtual environments
+src/**/.venv/
+
+# Backup files created by credential fetch scripts
+*.bak
 
 zcert.crt
