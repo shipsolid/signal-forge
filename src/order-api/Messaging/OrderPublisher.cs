@@ -131,6 +131,7 @@ public class OrderPublisher : IOrderPublisher, IDisposable
         {
             var props = _channel.CreateBasicProperties();
             props.Persistent = true; // survives broker restart
+            props.Expiration = "3600000"; // 1h TTL — prevents unbounded queue growth if consumer is down
             props.Headers = new Dictionary<string, object>();
 
             // ── W3C traceparent injection ─────────────────────────────────────

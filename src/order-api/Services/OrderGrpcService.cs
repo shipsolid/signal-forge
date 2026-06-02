@@ -33,6 +33,8 @@ namespace OrderApi.Services;
 
 public class OrderGrpcService : Protos.OrderService.OrderServiceBase
 {
+    private const string OrderStatusCreated = "Created";
+
     private readonly AppDbContext _db;
     private readonly ILogger<OrderGrpcService> _logger;
 
@@ -73,7 +75,7 @@ public class OrderGrpcService : Protos.OrderService.OrderServiceBase
             ProjectId = request.ProjectId,
             Description = request.Description,
             Amount = (decimal)request.Amount,
-            Status = "Created",
+            Status = OrderStatusCreated,
             CreatedAt = DateTime.UtcNow
         };
 

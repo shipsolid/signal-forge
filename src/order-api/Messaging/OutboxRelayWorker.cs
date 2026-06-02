@@ -74,7 +74,7 @@ public class OutboxRelayWorker : BackgroundService
         _logger.LogInformation("OutboxRelayWorker stopped");
     }
 
-    private async Task DrainOutboxAsync(CancellationToken ct)
+    internal async Task DrainOutboxAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();

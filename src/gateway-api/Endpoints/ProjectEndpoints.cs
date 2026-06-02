@@ -135,8 +135,10 @@ public static class ProjectEndpoints
         OrderApi.Protos.OrderService.OrderServiceClient orderClient,
         ILogger<Program> logger)
     {
-        // ActivityKind.Client: this span initiates an outbound gRPC call to order-api.
-        using var fanout = DiagnosticsConfig.ActivitySource.StartActivity("gateway.fanout", ActivityKind.Client);
+        // ActivityKind.Internal: this span groups the downstream work. The gRPC stub below
+        // creates its own auto-instrumented Client span as a child — using Client here would
+        // duplicate the semantic and confuse the trace hierarchy.
+        using var fanout = DiagnosticsConfig.ActivitySource.StartActivity("gateway.fanout", ActivityKind.Internal);
         fanout?.SetTag("project.id", id);
 
         var sw = Stopwatch.StartNew();

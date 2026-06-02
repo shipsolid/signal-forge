@@ -35,4 +35,8 @@
     <Protobuf Include="Protos\orders.proto" GrpcServices="Server" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="order-api.Tests" />
+  </ItemGroup>
+
 </Project>

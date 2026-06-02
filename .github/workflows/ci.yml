@@ -129,7 +129,7 @@ jobs:
 
       - name: Fail on Python vulnerabilities
         run: |
-          if python3 -c "import json,sys; d=json.load(open('vuln-python.json')); sys.exit(1 if d.get('dependencies') else 0)"; then
+          if python3 -c "import json,sys; deps=json.load(open('vuln-python.json')).get('dependencies',[]); sys.exit(1 if any(d.get('vulns') for d in deps) else 0)"; then
             echo "No vulnerable Python packages found"
           else
             cat vuln-python.json

@@ -41,6 +41,7 @@ import json
 import logging
 import os
 import random
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -75,15 +76,17 @@ DLQ_QUEUE = "notifications.dlq"
 _counter = None
 _proc_hist = None
 _email_hist = None
+_instruments_lock = threading.Lock()
 
 
 def _instruments():
     """Lazily initialise metric instruments (requires MeterProvider to be set)."""
     global _counter, _proc_hist, _email_hist
-    if _counter is None:
-        _counter = notifications_processed_counter()
-        _proc_hist = processing_duration_histogram()
-        _email_hist = email_send_duration_histogram()
+    with _instruments_lock:
+        if _counter is None:
+            _counter = notifications_processed_counter()
+            _proc_hist = processing_duration_histogram()
+            _email_hist = email_send_duration_histogram()
     return _counter, _proc_hist, _email_hist
 
 
@@ -138,6 +141,9 @@ def handle_order_created(ch, method, properties, body: bytes) -> None:
     headers = properties.headers or {}
     ctx = extract(headers, getter=_getter)
 
+    # Initialise token before attach so the finally-block detach is always safe,
+    # even if an exception is raised between here and the attach() call.
+    token = None
     # Attach context to current thread so child spans (Redis, email) inherit it.
     token = attach(ctx)
 
@@ -237,7 +243,9 @@ def handle_order_created(ch, method, properties, body: bytes) -> None:
         # CRITICAL: detach the context even on error to prevent context leak.
         # Forgetting detach() on the thread would corrupt the context for the
         # next message delivery on the same thread.
-        detach(token)
+        # Guard: token is None if attach() was never reached (e.g. extraction raised).
+        if token is not None:
+            detach(token)
 
 
 def _mock_email_send(email_hist, order_id: int) -> None:
@@ -273,8 +281,10 @@ def start_consumer() -> None:
     """
     host = os.getenv("RABBITMQ_HOST", "rabbitmq")
     port = int(os.getenv("RABBITMQ_PORT", "5672"))
-    user = os.environ["RABBITMQ_USER"]
-    password = os.environ["RABBITMQ_PASSWORD"]
+    user = os.getenv("RABBITMQ_USER")
+    password = os.getenv("RABBITMQ_PASSWORD")
+    if not user or not password:
+        raise ValueError("RABBITMQ_USER and RABBITMQ_PASSWORD environment variables are required.")
 
     params = pika.ConnectionParameters(
         host=host,

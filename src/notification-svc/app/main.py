@@ -107,6 +107,13 @@ def _consumer_loop() -> None:
                 delay,
                 exc_info=True,
             )
+            if delay >= max_delay:
+                logger.critical(
+                    "RabbitMQ consumer has failed %d consecutive times and is at max backoff (%ds). "
+                    "Manual intervention may be required.",
+                    attempt,
+                    max_delay,
+                )
             time.sleep(delay)
 
 

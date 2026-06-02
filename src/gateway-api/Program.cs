@@ -222,9 +222,10 @@ using (var scope = app.Services.CreateScope())
 // Unlike ASP.NET's built-in http.server.active_requests, this one is scoped
 // to our ActivitySource so it lands in our custom meter and we control its name.
 // /healthz is excluded — kubelet probe traffic shouldn't inflate the gauge.
+const string HealthPath = "/healthz";
 app.Use(async (ctx, next) =>
 {
-    if (ctx.Request.Path != "/healthz")
+    if (ctx.Request.Path != HealthPath)
         DiagnosticsConfig.InflightRequests.Add(1);
     try
     {
@@ -232,7 +233,7 @@ app.Use(async (ctx, next) =>
     }
     finally
     {
-        if (ctx.Request.Path != "/healthz")
+        if (ctx.Request.Path != HealthPath)
             DiagnosticsConfig.InflightRequests.Add(-1);
     }
 });

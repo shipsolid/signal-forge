@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import fakeredis
 import pytest
+from fastapi.testclient import TestClient
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 
@@ -45,12 +46,9 @@ def mock_instruments():
 def client(fake_redis):
     with (
         patch("app.main._consumer_loop"),
-        patch("app.redis_client.get_redis", return_value=fake_redis),
+        patch("app.main.get_redis", return_value=fake_redis),
     ):
         from app.main import app
 
         with TestClient(app) as c:
             yield c
-
-
-from fastapi.testclient import TestClient
