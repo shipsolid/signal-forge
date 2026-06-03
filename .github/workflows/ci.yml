@@ -1,14 +1,15 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'd-services/11-signal-forge/**'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'd-services/11-signal-forge/**'
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - 'd-services/11-signal-forge/**'
+  # pull_request:
+  #   branches: [main]
+  #   paths:
+  #     - 'd-services/11-signal-forge/**'
 
 defaults:
   run:
