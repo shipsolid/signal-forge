@@ -39,7 +39,7 @@ gateway-api  ──OTLP───────────────────
 order-api    ──OTLP──────────────────────────────►│    ├─ filter (drop /healthz)             │
 notif-svc    ──OTLP──────────────────────────────►│    ├─ spanmetrics connector ─────────────┼──► metrics
 Angular Faro ──HTTP (Faro) ─ (via alloy-receiver) │    ├─ tail_sampling                      │
-                                                  │    └─ batch                               │
+                                                  │    └─ batch                              │
                                                   ├──────────────────────────────────────────┤
                                                   │  alloy-logs (DaemonSet)                  │
                                                   │    loki.source.kubernetes                │
