@@ -4,6 +4,23 @@
 
 **What it validates:** traces (5-hop cross-language), span metrics, exemplars, async trace propagation via RabbitMQ, frontend RUM with Faro, log-to-trace correlation via Loki, and tail-based sampling.
 
+Work outside-in, purpose → design → implementation:
+
+| Step | File                           | Why                                                                                  |
+| ---- | ------------------------------ | ------------------------------------------------------------------------------------ |
+| 1    | docs/spec.md                   | The "what" — all services, patterns to validate, the validation checklist at §11     |
+| 2    | docs/architecture/overview.md  | Topology diagram, signal flow per type, port map                                     |
+| 3    | docs/architecture/decisions.md | 10 ADRs that explain the non-obvious "why" (most important before touching anything) |
+| 4    | conf.yml                       | The single control file — every knob deploy-local.sh reads                           |
+| 5    | docs/observability/pipeline.md | Alloy River config stage-by-stage; the heart of the lab                              |
+| 6    | src/order-api/                 | Richest service: gRPC, Outbox, RabbitMQ publish with W3C traceparent injection       |
+| 7    | src/notification-svc/          | Python consumer, SpanLink, cross-language async propagation                          |
+| 8    | src/gateway-api/               | .NET BFF, exemplars, UpDownCounter, fan-out pattern                                  |
+| 9    | src/frontend/                  | Angular + Faro RUM — browser-to-backend trace propagation                            |
+| 10   | k8s/                           | Manifests: infra/ → datastores/ → app/ → monitoring/                                 |
+
+For ops understanding: deploy-local.sh → scripts/debug.sh → .github/workflows/ci.yml.
+
 ---
 
 ## Purpose

@@ -2,7 +2,7 @@
 
 ## System topology
 
-```
+```text
 ┌────────────────────────────────────────────────────────────────────────────────┐
 │  Namespace: otel-lab                                                           │
 │                                                                                │
@@ -79,7 +79,7 @@
 
 A single "Create Order" click produces a trace spanning five hops and three runtimes:
 
-```
+```text
 Browser span (Faro)
   │  traceparent in HTTP header
   ▼
@@ -110,7 +110,7 @@ The RabbitMQ hop uses a **SpanLink** (not parent-child) because message processi
 
 ### Traces
 
-```
+```text
 App SDK ──OTLP gRPC──▶ alloy-receiver
   → k8sattributes (enrich with pod/namespace/node)
   → transform (stamp deployment.environment)
@@ -123,7 +123,7 @@ App SDK ──OTLP gRPC──▶ alloy-receiver
 
 ### Metrics
 
-```
+```text
 App SDK ──OTLP gRPC──▶ alloy-receiver
   → k8sattributes + transform
   → batch
@@ -137,7 +137,7 @@ alloy-metrics (StatefulSet)
 
 ### Logs
 
-```
+```text
 Pod stdout (JSON) ──▶ alloy-logs (node-level tailing)
   → loki.source.kubernetes
   → loki.process: stage.json (extract TraceId/SpanId)
@@ -149,7 +149,7 @@ Note: `OTEL_LOGS_EXPORTER=none` is set on all services. Logs travel via node-lev
 
 ### Browser RUM
 
-```
+```text
 Angular SPA ──HTTP──▶ alloy-receiver faro.receiver :12347
   → traces → k8sattributes pipeline (same as above)
   → logs   → loki.write (directly, bypassing OTel pipeline)
@@ -157,19 +157,19 @@ Angular SPA ──HTTP──▶ alloy-receiver faro.receiver :12347
 
 ## Deployment modes
 
-| Mode            | Command                                        | Backends                                     | Use case                                  |
-| --------------- | ---------------------------------------------- | -------------------------------------------- | ----------------------------------------- |
-| Local (default) | `make full-helm`                               | Jaeger, Prometheus, Loki, Grafana in-cluster | Default — no cloud credentials needed     |
-| Cloud (opt-in)  | `make secrets-fetch-akv` then `make full-helm` | Grafana Cloud Tempo/Mimir/Loki               | End-to-end validation with remote storage |
+| Mode            | Command                                                                    | Backends                                     | Use case                                  |
+| --------------- | -------------------------------------------------------------------------- | -------------------------------------------- | ----------------------------------------- |
+| Local (default) | `./deploy-local.sh`                                                        | Jaeger, Prometheus, Loki, Grafana in-cluster | Default — no cloud credentials needed     |
+| Cloud (opt-in)  | `./scripts/fetch-grafana-cloud-conf-from-akv.sh` then `./deploy-local.sh`  | Grafana Cloud Tempo/Mimir/Loki               | End-to-end validation with remote storage |
 
-The Alloy collector configmap is separate per mode:
+The Alloy collector configuration is separate per mode:
 
-- Cloud: `k8s/monitoring/grafana/grafana-cloud/configmap.yaml`
-- Local: `k8s/monitoring/grafana/local/configmap.yaml`
+- Cloud: `k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl` (Helm values rendered by `deploy-local.sh`)
+- Local: `k8s/monitoring/grafana/local/configmap.yaml` (hand-rolled DaemonSet — reference artifact)
 
-`make deploy` is an alias for `make deploy-cloud`.
+See [CLAUDE.md](../../CLAUDE.md) for the full command reference and safety checks built into `deploy-local.sh`.
 
-## Port map (after `make full-helm`)
+## Port map (after `./deploy-local.sh`)
 
 | URL                                                                                                  | Service                                 |
 | ---------------------------------------------------------------------------------------------------- | --------------------------------------- |

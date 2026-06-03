@@ -2,18 +2,10 @@ name: CI
 
 on:
   workflow_dispatch:
-  # push:
-  #   branches: [main]
-  #   paths:
-  #     - 'd-services/11-signal-forge/**'
-  # pull_request:
-  #   branches: [main]
-  #   paths:
-  #     - 'd-services/11-signal-forge/**'
-
-defaults:
-  run:
-    working-directory: d-services/11-signal-forge
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
   # ── .NET services ────────────────────────────────────────────────────────────
@@ -44,7 +36,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dotnet-test-results
-          path: d-services/11-signal-forge/src/**/*.trx
+          path: src/**/*.trx
 
   # ── Python service ───────────────────────────────────────────────────────────
   test-python:
@@ -57,15 +49,13 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: d-services/11-signal-forge/src/notification-svc/requirements-test.txt
+          cache-dependency-path: src/notification-svc/requirements-test.txt
 
       - name: Install dependencies
         run: pip install -r src/notification-svc/requirements-test.txt
-        working-directory: d-services/11-signal-forge
 
       - name: Test — notification-svc
         run: python -m pytest src/notification-svc/tests/ -v --tb=short
-        working-directory: d-services/11-signal-forge
 
   # ── Angular frontend ─────────────────────────────────────────────────────────
   test-frontend:
@@ -78,11 +68,11 @@ jobs:
         with:
           node-version: '20'
           cache: npm
-          cache-dependency-path: d-services/11-signal-forge/src/frontend/package-lock.json
+          cache-dependency-path: src/frontend/package-lock.json
 
       - name: Install app dependencies
         run: npm ci
-        working-directory: d-services/11-signal-forge/src/frontend
+        working-directory: src/frontend
 
       - name: Install Jest + preset
         run: |
@@ -94,7 +84,42 @@ jobs:
         run: |
           NODE_PATH=/tmp/ng-test-deps/node_modules \
             /tmp/ng-test-deps/node_modules/.bin/jest --config jest.config.js --ci
-        working-directory: d-services/11-signal-forge/src/frontend
+        working-directory: src/frontend
+
+  # ── Proto sync ───────────────────────────────────────────────────────────────
+  # orders.proto lives in three places: src/proto/ (canonical), and is copied
+  # into each service's Protos/ directory at build time. Comments and field
+  # alignment may differ between copies; field types, numbers, and names must not.
+  proto-sync:
+    name: Proto sync check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check orders.proto copies are structurally identical
+        run: |
+          # Strip comment-only lines, collapse horizontal whitespace, drop blank lines.
+          strip_proto() {
+            sed 's|//[^"]*||g' "$1" | tr -s ' \t' ' ' | \
+              sed 's/^ //; s/ $//' | grep -v '^$'
+          }
+          ok=true
+          if ! diff <(strip_proto src/proto/orders.proto) \
+                    <(strip_proto src/gateway-api/Protos/orders.proto) > /dev/null; then
+            echo "::error::src/gateway-api/Protos/orders.proto has drifted from src/proto/orders.proto"
+            diff <(strip_proto src/proto/orders.proto) \
+                 <(strip_proto src/gateway-api/Protos/orders.proto)
+            ok=false
+          fi
+          if ! diff <(strip_proto src/proto/orders.proto) \
+                    <(strip_proto src/order-api/Protos/orders.proto) > /dev/null; then
+            echo "::error::src/order-api/Protos/orders.proto has drifted from src/proto/orders.proto"
+            diff <(strip_proto src/proto/orders.proto) \
+                 <(strip_proto src/order-api/Protos/orders.proto)
+            ok=false
+          fi
+          $ok && echo "All proto copies are structurally in sync."
+          $ok
 
   # ── Vulnerability scanning ───────────────────────────────────────────────────
   vuln-scan:
@@ -144,8 +169,8 @@ jobs:
         with:
           name: vulnerability-reports
           path: |
-            d-services/11-signal-forge/vuln-dotnet.txt
-            d-services/11-signal-forge/vuln-python.json
+            vuln-dotnet.txt
+            vuln-python.json
 
   # ── Docker builds + supply-chain ─────────────────────────────────────────
   # Every image is built, scanned (Trivy), SBOM'd (Syft), and signed (cosign).
@@ -180,7 +205,7 @@ jobs:
         id: build
         uses: docker/build-push-action@v5
         with:
-          context: d-services/11-signal-forge/${{ matrix.service.context }}
+          context: ${{ matrix.service.context }}
           push: false
           load: true
           tags: ${{ matrix.service.name }}:ci
@@ -205,7 +230,7 @@ jobs:
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: d-services/11-signal-forge/trivy-${{ matrix.service.name }}.sarif
+          sarif_file: trivy-${{ matrix.service.name }}.sarif
           category: trivy-${{ matrix.service.name }}
 
       # ── SBOM generation (Syft) ─────────────────────────────────────────
@@ -267,4 +292,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sbom-${{ matrix.service.name }}
-          path: d-services/11-signal-forge/sbom-${{ matrix.service.name }}.cdx.json
+          path: sbom-${{ matrix.service.name }}.cdx.json

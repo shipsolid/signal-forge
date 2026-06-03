@@ -46,7 +46,7 @@ Key design choices, their rationale, and the alternatives considered.
 
 **Pipeline order**:
 
-```
+```text
 filter(healthz) → spanmetrics (ALL spans)
                 ↘
                   tail_sampling (25% + errors + slow)
@@ -84,12 +84,12 @@ filter(healthz) → spanmetrics (ALL spans)
 
 ## ADR-005: Separate collector configmaps per deployment mode
 
-**Decision**: The Alloy collector configmap is split into two files:
+**Decision**: The Alloy collector configuration is split by mode:
 
-- `k8s/monitoring/grafana/grafana-cloud/configmap.yaml` — cloud exporters only
-- `k8s/monitoring/grafana/local/configmap.yaml` — local exporters only
+- Cloud: `k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl` — Helm values rendered by `deploy-local.sh` when `monitoring.mode: cloud`; destinations are Grafana Cloud Tempo/Mimir/Loki.
+- Local: `k8s/monitoring/grafana/local/configmap.yaml` — hand-rolled Alloy configmap applied when `monitoring.mode: local`; destinations are in-cluster Jaeger, Prometheus, and Loki.
 
-`make deploy` (= `make deploy-cloud`) applies the cloud configmap. `make deploy-local` applies the local configmap and also deploys Jaeger, Prometheus, Loki, and Grafana.
+`./deploy-local.sh` selects the correct values file / configmap based on `monitoring.mode` in `conf.yml`.
 
 **Rationale**:
 
