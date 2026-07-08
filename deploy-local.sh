@@ -638,7 +638,13 @@ PY
 # Deployment via a generated ConfigMap + rule_files:. Single source of truth —
 # see that file's header comment for the full consumption story.
 apply_local_slo_rules() {
-  [[ "${MONITORING_MODE:-local}" == "local" ]] || return
+  # `return 0`, not bare `return`: under `set -e`, a bare `return` here would
+  # propagate the exit status of the failed `[[ ]]` test (1) in cloud mode,
+  # and since this function is called as a bare top-level statement, that
+  # silently kills the whole script right after the datastore wait — every
+  # cloud-mode deploy (the default mode) previously exited here without ever
+  # reaching apply_monitoring/apply_stage app/apply_stage post/install_helm.
+  [[ "${MONITORING_MODE:-local}" == "local" ]] || return 0
   local enabled rel path
   enabled="$(yq observability.slo_rules.enabled)"
   if [[ "$enabled" != "True" && "$enabled" != "true" ]]; then

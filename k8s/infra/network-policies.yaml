@@ -110,6 +110,11 @@ spec:
         - protocol: TCP
           port: 5001
         - protocol: TCP
+          # order-api's dedicated gRPC (HTTP/2-only) port — gateway-api's
+          # actual traffic to order-api. 5001 above is order-api's separate
+          # HTTP/1.1 port for kubelet's own /healthz probe, not app traffic.
+          port: 5002
+        - protocol: TCP
           port: 8000
         - protocol: TCP
           port: 8080

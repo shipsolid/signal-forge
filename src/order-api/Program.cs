@@ -71,13 +71,29 @@ builder.Services.AddDbContext<AppDbContext>(opts =>
 // serialisation, deadline propagation).  The actual service class is
 // registered below with MapGrpcService<OrderGrpcService>().
 //
-// Important: gRPC requires HTTP/2.  ASP.NET Core enables HTTP/2 by default
-// on non-TLS listeners when ASPNETCORE_URLS uses "http://" without a port
-// configured for HTTPS.  In the K8s Deployment we set:
-//   ASPNETCORE_URLS=http://+:5001
-// which configures HTTP/1.1 + HTTP/2 cleartext (h2c) on port 5001.
-// gateway-api calls this with http:// so Grpc.Net.Client uses h2c automatically.
+// Two dedicated ports, not one shared port:
+//   5001 — HTTP/1.1 only. Serves /healthz for kubelet's liveness/readiness
+//          probes, which speak plain HTTP/1.1 with no ALPN and no upgrade —
+//          they cannot negotiate HTTP/2 no matter how the endpoint is configured.
+//   5002 — HTTP/2 only (h2c, cleartext prior-knowledge). Serves gRPC exclusively.
+//
+// This used to be one port with Kestrel's default mixed Http1AndHttp2 protocol
+// selection, on the assumption (stated in this comment previously) that ASP.NET
+// Core enables working h2c automatically for that combination without TLS.
+// That assumption was wrong: confirmed empirically (both via a live k3d
+// cluster and a bare `dotnet run`, no Docker/k8s involved) that a non-TLS
+// Http1AndHttp2 endpoint logs "HTTP/2 requires TLS application protocol
+// negotiation" and silently downgrades every connection to HTTP/1.1 —
+// including gRPC clients sending the HTTP/2 prior-knowledge preface, which
+// then fail with an HTTP_1_1_REQUIRED error. Splitting gRPC onto its own
+// HTTP/2-only port is the standard fix for gRPC+REST coexisting on cleartext
+// Kestrel without TLS. gateway-api's OrderApi:Address now points at 5002.
 builder.Services.AddGrpc();
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenAnyIP(5001, lo => lo.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1);
+    options.ListenAnyIP(5002, lo => lo.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http2);
+});
 
 // ── Messaging ─────────────────────────────────────────────────────────────────
 // OrderPublisher is a singleton (one shared RabbitMQ connection / channel).

@@ -22,8 +22,10 @@ FROM mcr.microsoft.com/dotnet/aspnet:8.0@sha256:f88c77644f4c480a62d3b46dc74db8d5
 WORKDIR /app
 COPY --from=build --chown=1654:1654 /app/publish .
 USER 1654:1654
-# 0.0.0.0, not + — see k8s/app/order/deployment.yaml's ASPNETCORE_URLS
-# comment for why "+" isn't safe to rely on for IPv4 connectivity.
-ENV ASPNETCORE_URLS=http://0.0.0.0:5001
-EXPOSE 5001
+# No ASPNETCORE_URLS — Program.cs's ConfigureKestrel binds both ports
+# explicitly (5001 HTTP/1.1 for /healthz, 5002 HTTP/2-only for gRPC; see that
+# file's "gRPC server" comment for why they're split). Setting ASPNETCORE_URLS
+# here too would make Kestrel additionally try the URLs-based binding path,
+# double-binding port 5001 and crashing at startup.
+EXPOSE 5001 5002
 ENTRYPOINT ["dotnet", "order-api.dll"]

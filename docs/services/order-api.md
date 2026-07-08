@@ -3,8 +3,14 @@
 **Role**: gRPC Order Service. Handles order CRUD, persists to PostgreSQL, publishes `order.created`
 events to RabbitMQ.
 
-**Runtime**: .NET 8 gRPC server (+ minimal API for `/healthz`) **Port**: 5001 (gRPC,
-cluster-internal) **Replicas**: 2
+**Runtime**: .NET 8 gRPC server (+ minimal API for `/healthz`) **Ports**: 5001 (HTTP/1.1,
+`/healthz` only — kubelet's probes can't negotiate HTTP/2), 5002 (gRPC, HTTP/2-only, cluster-internal)
+**Replicas**: 2
+
+Two separate Kestrel endpoints, not one shared port — a single cleartext port configured for mixed
+HTTP/1.1+HTTP/2 silently downgrades every connection to HTTP/1.1 without TLS (confirmed empirically;
+Kestrel logs "HTTP/2 requires TLS application protocol negotiation" and rejects gRPC's prior-knowledge
+h2c preface with an HTTP_1_1_REQUIRED error). See `Program.cs`'s "gRPC server" comment for the detail.
 
 ---
 

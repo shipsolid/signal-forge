@@ -166,8 +166,8 @@ secrets-fetch-akv:
 	MIMIR_USER=$$(az keyvault secret show --vault-name "$$KV" --name grafana-example-org-cloud-mimir-username  --query value -o tsv) && \
 	LOKI_BASE=$$(az keyvault secret show  --vault-name "$$KV" --name grafana-example-org-cloud-loki-endpoint   --query value -o tsv) && \
 	LOKI_USER=$$(az keyvault secret show  --vault-name "$$KV" --name grafana-example-org-cloud-loki-username   --query value -o tsv) && \
-	FARO_URL=$$(az keyvault secret show   --vault-name "$$KV" --name grafana-example-org-faro-signal-forge-collection-url    --query value -o tsv) && \
-	FARO_KEY=$$(az keyvault secret show   --vault-name "$$KV" --name grafana-example-org-faro-signal-forge-sourcemap-token    --query value -o tsv) && \
+	FARO_URL=$$(az keyvault secret show   --vault-name "$$KV" --name grafana-example-org-faro-api-endpoint    --query value -o tsv) && \
+	FARO_KEY=$$(az keyvault secret show   --vault-name "$$KV" --name grafana-example-org-faro-sourcemap-token    --query value -o tsv) && \
 	kubectl create secret generic grafana-cloud-secrets \
 	  --namespace $(NAMESPACE) \
 	  --from-literal=GRAFANA_CLOUD_API_KEY="$$API_KEY" \

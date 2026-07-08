@@ -71,7 +71,7 @@ builder.Services.AddDbContext<AppDbContext>(opts =>
 // The OTel gRPC client instrumentation adds rpc.system, rpc.service,
 // rpc.method attributes and propagates the W3C traceparent via gRPC metadata
 // automatically when AddGrpcClientInstrumentation() is called below.
-var orderApiAddress = builder.Configuration["OrderApi:Address"] ?? "http://order-api:5001";
+var orderApiAddress = builder.Configuration["OrderApi:Address"] ?? "http://order-api:5002";
 if (!Uri.TryCreate(orderApiAddress, UriKind.Absolute, out var orderApiUri) ||
     (orderApiUri.Scheme != "http" && orderApiUri.Scheme != "https"))
     throw new InvalidOperationException($"OrderApi:Address is not a valid absolute URI: '{orderApiAddress}'");

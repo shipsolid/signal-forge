@@ -1,6 +1,6 @@
 # Testing
 
-This project has 127 automated tests across all four services. Most run locally without a running
+This project has 140 automated tests across all four services. Most run locally without a running
 cluster, database, or message broker — the one exception is `OutboxRelayWorkerTests`, which needs a
 real PostgreSQL via Testcontainers (Docker required), not a cluster or broker.
 
@@ -32,7 +32,7 @@ npx jest --config jest.config.js
 
 ## Test suites
 
-### order-api.Tests (27 tests)
+### order-api.Tests (30 tests)
 
 **Framework:** xUnit 2.9, Moq 4.20, EF Core InMemory 8.0 (`OrderGrpcServiceTests`) + a real
 PostgreSQL via Testcontainers (`OutboxRelayWorkerTests` — see why below)
@@ -48,7 +48,8 @@ PostgreSQL via Testcontainers (`OutboxRelayWorkerTests` — see why below)
 | `CreateOrder` — idempotency key | 3     | Repeated key replays the original order (no duplicate row), different keys create separate orders, no key allows multiple orders (`OrderGrpcServiceTests.cs`)                                                                                                                    |
 | `GetOrder`                      | 2     | Found (returns all fields), not found (StatusCode.NotFound)                                                                                                                                                                                                                      |
 | `GetOrdersByProject`            | 4     | Returns matching rows only, returns empty stream when no rows exist, zero/negative `ProjectId` → `InvalidArgument` (2 cases)                                                                                                                                                     |
-| `OutboxRelayWorkerTests`        | 7     | Publishes + marks processed, payload contains order ID, no-op when queue empty, publisher failure leaves message unprocessed, already-processed message skipped, traceparent forwarded, **two concurrent replicas only publish each message once** (`OutboxRelayWorkerTests.cs`) |
+| `OutboxRelayWorkerTests`        | 8     | Publishes + marks processed, payload contains order ID, no-op when queue empty, publisher failure leaves message unprocessed, already-processed message skipped, traceparent forwarded, **two concurrent replicas only publish each message once**, `outbox.relay` shares the original request's trace ID (`OutboxRelayWorkerTests.cs`) |
+| `OrderPublisherTests`           | 2     | Real broker (Testcontainers RabbitMQ): message arrives with `traceparent` header intact when present, publishes without the header when absent (`OrderPublisherTests.cs`)                                                                                                       |
 
 **Key test utilities:**
 
@@ -67,12 +68,12 @@ Docker.
 
 ```bash
 dotnet test src/order-api.Tests/order-api.Tests.csproj
-# Passed: 27, Failed: 0
+# Passed: 30, Failed: 0
 ```
 
 ---
 
-### gateway-api.Tests (24 tests)
+### gateway-api.Tests (27 test methods, 29 executions)
 
 **Framework:** xUnit 2.9, Moq 4.20, EF Core InMemory 8.0, `Microsoft.AspNetCore.Mvc.Testing` 8.0
 
@@ -80,18 +81,18 @@ dotnet test src/order-api.Tests/order-api.Tests.csproj
 
 **What it covers:**
 
-| Test group                      | Count | Description                                                                                          |
-| ------------------------------- | ----- | ---------------------------------------------------------------------------------------------------- |
-| `GET /api/projects`             | 2     | Empty list, list with data                                                                           |
-| `GET /api/projects/:id`         | 2     | Found (200), not found (404)                                                                         |
-| `POST /api/projects`            | 2     | Creates project, persists to DB                                                                      |
-| `DELETE /api/projects/:id`      | 2     | Found (204), not found (404)                                                                         |
-| `GET /api/projects/:id/orders`  | 2     | gRPC streaming proxy success, gRPC 502 on failure                                                    |
-| `POST /api/orders` — validation | 7     | Zero/negative `projectId`, invalid amounts (3 cases), empty/long description                         |
-| `POST /api/orders` — happy path | 2     | 201 with `{id, status}`, 502 on gRPC failure                                                         |
-| `GET /api/orders/:id`           | 2     | Found (200), not found (404) — completes the passthrough `CreateOrder`'s `Location` header points at |
-| `GET /api/notifications`        | 2     | Downstream 200 (proxies body), downstream 502                                                        |
-| `GET /healthz`                  | 1     | Returns `{"status":"healthy"}`                                                                       |
+| Test group                      | Count | Description                                                                                                            |
+| -------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/projects`             | 2     | Empty list, list with data                                                                                             |
+| `GET /api/projects/:id`         | 2     | Found (200), not found (404)                                                                                           |
+| `POST /api/projects`            | 2     | Creates project, persists to DB                                                                                        |
+| `DELETE /api/projects/:id`      | 2     | Found (204), not found (404)                                                                                           |
+| `GET /api/projects/:id/orders`  | 4     | gRPC streaming proxy success, and status mapping for Unavailable→503, InvalidArgument→400, Internal→502                |
+| `POST /api/orders` — validation | 7     | Zero/negative `projectId`, invalid amounts (3 cases, one `[Theory]`), empty/long description                           |
+| `POST /api/orders` — happy path | 3     | 201 with `{id, status}`, 502 on generic gRPC failure, 400 on gRPC InvalidArgument                                      |
+| `GET /api/orders/:id`           | 3     | Found (200), not found (404), 503 on gRPC Unavailable — completes the passthrough `CreateOrder`'s `Location` header points at |
+| `GET /api/notifications`        | 3     | Downstream 200 (proxies body), downstream 502, downstream 4xx passed through as-is                                     |
+| `GET /healthz`                  | 1     | Returns `{"status":"healthy"}`                                                                                          |
 
 **Key test infrastructure — `CustomWebApplicationFactory`:**
 
@@ -105,12 +106,12 @@ dotnet test src/order-api.Tests/order-api.Tests.csproj
 
 ```bash
 dotnet test src/gateway-api.Tests/gateway-api.Tests.csproj
-# Passed: 24, Failed: 0
+# Passed: 29, Failed: 0
 ```
 
 ---
 
-### notification-svc tests (26 tests)
+### notification-svc tests (27 tests)
 
 **Framework:** pytest 8.3, fakeredis 2.23, httpx 0.27
 
@@ -138,6 +139,7 @@ python -m venv .venv
 | `test_consumer.py` — happy path      | 6     | ACKs message, stores hash, pushes to list, sets dedup TTL, sets notification TTL, increments counter                                                                                     |
 | `test_consumer.py` — deduplication   | 3     | Skips duplicate, sets `notification.duplicate` span attribute, increments duplicate counter                                                                                              |
 | `test_consumer.py` — dedup atomicity | 2     | Dedup uses a single atomic `SET ... NX` (not `exists()`+`set()`), second of two rapid deliveries is deduped                                                                              |
+| `test_consumer.py` — reprocessing    | 1     | Reprocessing the same order (after TTL drift) doesn't push a duplicate `notification_ids` list entry (`LREM` before `LPUSH`)                                                             |
 | `test_consumer.py` — error handling  | 5     | Invalid JSON → NACK to DLQ, increments failed counter, Redis error → NACK **with requeue** (transient, not DLQ'd), increments `failed_transient` counter, unexpected error → NACK to DLQ |
 | `test_consumer.py` — list capping    | 1     | List trimmed to 1000 entries                                                                                                                                                             |
 
@@ -153,12 +155,12 @@ python -m venv .venv
 
 ```bash
 .venv/bin/python -m pytest tests/ -v
-# 26 passed
+# 27 passed
 ```
 
 ---
 
-### Frontend tests (50 tests)
+### Frontend tests (54 tests)
 
 **Framework:** Jest 29.7, jest-preset-angular 14.6, jsdom
 
@@ -204,13 +206,62 @@ container), `npm ci` fails loudly with `EACCES` rather than silently misbehaving
 | `create-order.component.spec.ts`   | 8     | Order creation form validation and submission                                                                                                            |
 | `project-detail.component.spec.ts` | 8     | Project detail view, order list for a project                                                                                                            |
 | `notifications.component.spec.ts`  | 8     | Notifications list rendering and polling                                                                                                                 |
+| `faro.spec.ts`                     | 4     | `scrubTelemetryItem` — redacts emails from string fields, leaves non-string fields untouched, ignores non-matching items                                 |
 
 **Infrastructure isolation:** `HttpClientTestingModule` + `HttpTestingController` intercept all HTTP
 calls; `ApiService` is mocked via `jest.Mocked<ApiService>` in component tests.
 
 ```bash
 npx jest --config jest.config.js
-# 50 passed
+# 54 passed
+```
+
+---
+
+### integration-tests (1 test, opt-in)
+
+**Framework:** xUnit 2.9, Testcontainers 4.13 (base + `.PostgreSql` + `.RabbitMq`)
+
+**Location:** `src/integration-tests/`
+
+**Not part of the fast default suite** — needs Docker to build order-api and notification-svc from
+their real Dockerfiles (not project references) and run six containers (Postgres, RabbitMQ, Redis,
+Jaeger, order-api, notification-svc). Expect ~1.5-2 minutes: mostly the two image builds, since
+Testcontainers can't reuse `deploy-local.sh`'s image cache. Marked
+`[Trait("Category", "Integration")]`; there's no `.sln` in this repo so it's never picked up by the
+four project-scoped `dotnet test` commands above — it only runs when invoked directly:
+
+```bash
+dotnet test src/integration-tests/integration-tests.csproj
+```
+
+**What it covers:** the full cross-language 5-hop trace, for real — a genuine gRPC `CreateOrder`
+call against a real order-api (real Postgres) publishes to a real RabbitMQ, a real Python
+notification-svc consumes it (real Redis), and the resulting Jaeger trace is queried via its HTTP
+API to assert `order.create`, `outbox.relay`, `order.publish`, and `notification.process` all share
+one trace ID. This test is what surfaced three real bugs during this session, none of which were
+visible from the mocked unit suites above:
+
+- **order-api's gRPC port never actually worked over plain HTTP.** A single Kestrel endpoint
+  configured for mixed HTTP/1.1+HTTP/2 without TLS silently downgrades every connection to HTTP/1.1
+  (Kestrel logs "HTTP/2 requires TLS application protocol negotiation"), so gRPC's HTTP/2
+  prior-knowledge preface got rejected with `HTTP_1_1_REQUIRED`. Fixed by splitting order-api onto
+  two dedicated ports — 5001 HTTP/1.1-only for kubelet's `/healthz`, 5002 HTTP/2-only for gRPC (see
+  `Program.cs`'s "gRPC server" comment). Confirmed via a from-scratch, no-Docker, no-k8s repro before
+  touching any production code.
+- **`OutboxRelayWorker`'s explicit transaction was incompatible with `EnableRetryOnFailure()`.**
+  A bare `Database.BeginTransactionAsync()` under a registered retrying execution strategy throws
+  `InvalidOperationException` on every call — meaning every outbox poll cycle failed silently (caught
+  by the worker's own retry-logging catch block) since `EnableRetryOnFailure()` was added earlier in
+  the same review-remediation pass. Fixed by wrapping the transaction in
+  `Database.CreateExecutionStrategy().ExecuteAsync(...)`.
+- The `outbox.relay`/`order.publish` disconnected-trace gap this test was originally written to
+  verify — see `OutboxRelayWorker.PublishAndMarkAsync`'s `ActivityLink` fix and
+  `OrderPublisher.cs`'s updated header-comment trace diagram.
+
+```bash
+dotnet test src/integration-tests/integration-tests.csproj
+# Passed: 1, Failed: 0
 ```
 
 ---
@@ -219,11 +270,11 @@ npx jest --config jest.config.js
 
 | Service          | Tests   | Frameworks                        | DB/IO isolation                              |
 | ---------------- | ------- | --------------------------------- | -------------------------------------------- |
-| order-api        | 27      | xUnit, Moq                        | EF InMemory + Testcontainers (real Postgres) |
-| gateway-api      | 24      | xUnit, Moq, WebApplicationFactory | EF InMemory, Moq gRPC/HTTP                   |
-| notification-svc | 26      | pytest, fakeredis                 | fakeredis, patched consumer                  |
-| frontend         | 50      | Jest, jest-preset-angular         | HttpTestingController, jest mocks            |
-| **Total**        | **127** |                                   |                                              |
+| order-api        | 30      | xUnit, Moq                        | EF InMemory + Testcontainers (real Postgres, RabbitMQ) |
+| gateway-api      | 29      | xUnit, Moq, WebApplicationFactory | EF InMemory, Moq gRPC/HTTP                   |
+| notification-svc | 27      | pytest, fakeredis                 | fakeredis, patched consumer                  |
+| frontend         | 54      | Jest, jest-preset-angular         | HttpTestingController, jest mocks            |
+| **Total**        | **140** |                                   |                                              |
 
 ## What is not covered
 
@@ -232,5 +283,5 @@ npx jest --config jest.config.js
 | Proto schema contract tests     | No schema registry in the lab; drift between gateway-api and order-api would only surface at runtime                                                                                                       |
 | RabbitMQ consumer backpressure  | Requires a real broker; out of scope for unit tests                                                                                                                                                        |
 | Concurrent idempotency-key race | The `CreateOrder` idempotency fast-path (`OrderGrpcService.cs`) is unit-tested for sequential retries; genuinely concurrent duplicate submissions rely on the DB unique index as an untested-here backstop |
-| End-to-end trace propagation    | Validated manually via Jaeger UI (see `docs/spec.md` validation checklist)                                                                                                                                 |
+| End-to-end trace propagation    | Automated by `src/integration-tests` (opt-in, needs Docker — see above); also validated manually via Jaeger UI (`docs/spec.md` checklist) for exploratory checks                                          |
 | Load / performance              | `kubectl apply -f k8s/loadtest/` for cluster-level load generation                                                                                                                                         |

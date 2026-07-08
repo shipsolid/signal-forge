@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -5,6 +6,7 @@ using Moq;
 using OrderApi.Data;
 using OrderApi.Messaging;
 using OrderApi.Models;
+using OrderApi.Telemetry;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -225,6 +227,55 @@ public class OutboxRelayWorkerTests : IClassFixture<PostgresFixture>, IAsyncLife
         await worker.DrainOutboxAsync(CancellationToken.None);
 
         Assert.Equal(expectedTraceParent, capturedTraceParent);
+    }
+
+    // ── outbox.relay shares the original request's trace ID ──────────────────
+    // Regression test for the fix described in OutboxRelayWorker.PublishAndMarkAsync
+    // and OrderPublisher.cs's header comment: outbox.relay (and therefore its
+    // child order.publish) must land in the SAME trace as the original request,
+    // not a new, disconnected one, so a single Jaeger trace query surfaces
+    // order.create -> outbox.relay -> order.publish -> notification.process.
+    [Fact]
+    public async Task DrainOutboxAsync_OutboxRelaySpan_SharesTraceIdWithOriginalRequest()
+    {
+        var factory = BuildScopeFactory();
+        await using var db = OpenDb();
+
+        var order = new Order { ProjectId = 1, Description = "Trace linkage test", Amount = 5m };
+        db.Orders.Add(order);
+        await db.SaveChangesAsync();
+
+        const string traceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+        const string traceParent = $"00-{traceId}-00f067aa0ba902b7-01";
+        db.OutboxMessages.Add(new OutboxMessage
+        {
+            Order = order,
+            TraceParent = traceParent,
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var publisher = new Mock<IOrderPublisher>();
+        publisher.Setup(p => p.PublishAsync(It.IsAny<string>(), It.IsAny<string?>()))
+                 .Returns(Task.CompletedTask);
+
+        string? observedTraceId = null;
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == DiagnosticsConfig.ServiceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStarted = a =>
+            {
+                if (a.OperationName == "outbox.relay")
+                    observedTraceId = a.TraceId.ToString();
+            },
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var worker = BuildWorker(factory, publisher.Object);
+        await worker.DrainOutboxAsync(CancellationToken.None);
+
+        Assert.Equal(traceId, observedTraceId);
     }
 
     // ── Multi-replica race: two workers polling concurrently must not both ───

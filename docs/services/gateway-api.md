@@ -60,7 +60,7 @@ All configuration is via environment variables injected from Kubernetes secrets 
 | Variable                               | Source                                        | Required | Purpose                                               |
 | -------------------------------------- | --------------------------------------------- | -------- | ----------------------------------------------------- |
 | `ConnectionStrings__DefaultConnection` | `db-secrets` Secret (`GATEWAY_DB_CONNECTION`) | **Yes**  | MySQL connection string                               |
-| `Services__OrderApi`                   | Deployment env                                | Yes      | gRPC endpoint for order-api (`http://order-api:5001`) |
+| `OrderApi__Address`                    | Deployment env                                | Yes      | gRPC endpoint for order-api (`http://order-api:5002`) |
 | `Services__NotificationSvc`            | Deployment env                                | Yes      | HTTP endpoint for notification-svc                    |
 | `Cors__AllowedOrigins`                 | Deployment env                                | No       | CORS origins (default: `http://localhost:4200`)       |
 | `OTEL_SERVICE_NAME`                    | Deployment env                                | Yes      | `gateway-api`                                         |

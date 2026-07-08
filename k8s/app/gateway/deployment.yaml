@@ -71,8 +71,12 @@ spec:
                 secretKeyRef:
                   name: db-secrets
                   key: GATEWAY_DB_CONNECTION
+            # Port 5002, not 5001 — order-api splits HTTP/1.1 (/healthz, 5001)
+            # from HTTP/2-only gRPC (5002) onto separate Kestrel endpoints; see
+            # order-api's Program.cs "gRPC server" comment for why they can't
+            # share one cleartext port.
             - name: OrderApi__Address
-              value: "http://order-api:5001"
+              value: "http://order-api:5002"
             - name: NotificationSvc__Address
               value: "http://notification-svc:8000"
             # Must match DiagnosticsConfig.ServiceName in src/gateway-api/Telemetry/DiagnosticsConfig.cs

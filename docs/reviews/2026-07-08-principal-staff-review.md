@@ -1,8 +1,8 @@
 # SignalForge — Principal/Staff Engineering Review
 
 **Repo:** shipsolid/app-signal-forge **Date:** 2026-07-08 (findings) / trimmed 2026-07-08 /
-Critical+High closed 2026-07-08 **Reviewer lens:** interview/portfolio signal _and_ real production
-sign-off
+Critical+High closed 2026-07-08 / all Medium+Low/Nit closed 2026-07-09 **Reviewer lens:**
+interview/portfolio signal _and_ real production sign-off
 
 SignalForge is a four-service, three-language distributed system (Angular → gateway-api
 [.NET/gRPC-BFF] → order-api [.NET/gRPC] → RabbitMQ → notification-svc [Python]) built to demonstrate
@@ -11,12 +11,15 @@ Grafana Cloud). Five parallel deep-dives covered the backend services, messaging
 observability pipeline, Kubernetes/Helm/infra, and testing/documentation integrity.
 
 > This is the original five-domain review with every closed item removed (verified against current
-> source in both passes, not just against fix claims). What remains below is open work only. The
-> credential-exposure incident, 15 numbered fix-list items, and — in a second pass the same day —
-> the 1 Critical and all 9 High findings were found, fixed, and verified closed; that record isn't
-> reproduced here beyond the note at the bottom.
+> source, not just against fix claims). The credential-exposure incident, the 1 Critical/9 High
+> findings, and — as of this pass — every Medium and actionable Low/Nit finding have been found,
+> fixed, and verified closed; that record isn't reproduced in full here beyond the notes at the
+> bottom. What remains below is the small residue that's out of scope for a code fix (owner
+> sign-off items) plus this pass's own honest disclosures about environment limitations discovered
+> along the way.
 
-**Open findings: 0 Critical · 0 High · 18 Medium · ~30 Low/Nit**
+**Open findings: 0 Critical · 0 High · 0 Medium · 0 Low/Nit** (2 items require repo-owner action
+outside a code fix — see §4)
 
 ## Contents
 
@@ -24,11 +27,6 @@ observability pipeline, Kubernetes/Helm/infra, and testing/documentation integri
   - [Contents](#contents)
   - [1. What's genuinely strong](#1-whats-genuinely-strong)
   - [2. Domain findings](#2-domain-findings)
-    - [2.1 Backend services \& gRPC contracts (.NET)](#21-backend-services--grpc-contracts-net)
-    - [2.2 Messaging (notification-svc) \& frontend](#22-messaging-notification-svc--frontend)
-    - [2.3 Observability pipeline](#23-observability-pipeline)
-    - [2.4 Kubernetes / Helm / infra \& security](#24-kubernetes--helm--infra--security)
-    - [2.5 Testing \& documentation integrity](#25-testing--documentation-integrity)
   - [3. Verdict matrix](#3-verdict-matrix)
   - [4. Closing assessment](#4-closing-assessment)
 
@@ -45,7 +43,10 @@ in an interview.
   cancellation threaded through, instead of the naive `ToListAsync()` that OOMs at scale.
 - **Correct async trace semantics** — the RabbitMQ hop uses a `SpanLink`, not a fabricated
   parent-child edge, matching OTel messaging semantic conventions exactly, with an ADR that reasons
-  through the NACK/redelivery case most teams miss (ADR-002).
+  through the NACK/redelivery case most teams miss (ADR-002). As of this pass, the same reasoning
+  now also links the producer side (`outbox.relay`/`order.publish`) back to the original request
+  trace — previously an open gap, now closed and verified by a real cross-language integration test
+  (see §4).
 - **spanmetrics before tail-sampling** (ADR-003) — RED metrics are computed on 100% of traffic
   before the 25% sample is taken, so dashboards don't silently read 4x low. This ordering detail is
   one most engineers get backwards on the first pass.
@@ -55,13 +56,16 @@ in an interview.
   defaults, no plaintext credentials in manifests.
 - **Dead-letter queue offloaded to RabbitMQ's native mechanism** (ADR-008) instead of a hand-rolled
   Redis retry counter — the simpler, more correct choice.
-- **Substantive test suites** — 127+ tests across the stack with genuine boundary-value and
+- **Substantive test suites** — 140 tests across the stack with genuine boundary-value and
   failure-path coverage (Moq-based gRPC status mapping, Redis-down → DLQ, invalid JSON → DLQ), not
-  scaffolding. Includes one real concurrency test (`OutboxRelayWorkerTests`, via Testcontainers
-  against an actual PostgreSQL) proving two replicas racing for the same outbox row only publish it
-  once — not simulated, an actual `FOR UPDATE SKIP LOCKED` contention test.
+  scaffolding. Includes real concurrency and cross-language coverage: `OutboxRelayWorkerTests` (via
+  Testcontainers against an actual PostgreSQL) proving two replicas racing for the same outbox row
+  only publish it once, and a new opt-in `src/integration-tests` project proving the full 5-hop
+  trace end-to-end against real order-api/notification-svc containers, a real RabbitMQ, and a real
+  Jaeger.
 - **A real CI supply chain** — Trivy + Syft CycloneDX SBOM + cosign keyless OIDC signing +
-  `pip-audit` + `dotnet list package --vulnerable` + `gitleaks`, correctly gated to `main`.
+  `pip-audit` + `dotnet list package --vulnerable` + `gitleaks`, correctly gated to `main`, now with
+  a scheduled weekly re-scan and a `cosign verify` gate before cloud-mode manifests apply.
 - **`deploy-local.sh`'s defensive guards** — k3d context assertion, NodePort-drift check parsed
   straight from Service manifests, secret-key contract validation before `helm upgrade` — read as
   scars from real incidents, not checklist theater.
@@ -75,221 +79,21 @@ in an interview.
 
 ## 2. Domain findings
 
-Grouped by subsystem. Critical/High/Medium findings get full detail; Low/Nit items are compacted
-into a list at the end of each subsection rather than dropped.
-
-### 2.1 Backend services & gRPC contracts (.NET)
-
-**🟡 MEDIUM · interview-signal** — `plant.id` enrichment is dead code end-to-end
-`src/order-api/Program.cs:91-94` vs. `src/gateway-api/Endpoints/OrderEndpoints.cs:45-50` order-api's
-comment says `X-Plant-Id` is "forwarded by gateway-api from the original browser request," but
-nothing in gateway-api attaches it to outbound gRPC metadata — HTTP headers don't auto-forward into
-gRPC calls. Every order-api span's `plant.id` attribute is empty for gateway-originated traffic,
-verifiably, not speculatively.
-
-**🟡 MEDIUM · production-readiness** — `AllowedHosts` is wildcarded in code; docs claim it's locked
-down `src/gateway-api/appsettings.json:18`, `src/order-api/appsettings.json:18` Both are
-`"AllowedHosts": "*"`, with no k8s manifest override, contradicting the specific allow-list
-`docs/services/gateway-api.md:69` describes. Low impact behind an ingress today, but it's a
-documented control that doesn't exist.
-
-**🟡 MEDIUM · interview-signal** — Proto contract exists in three copies with no enforced behavioral
-sync `src/proto/orders.proto`, order-api's and gateway-api's local `Protos/orders.proto` Neither
-service builds from the shared `src/proto/` copy — each has its own, already textually diverged in
-comments/formatting. CI's `proto-sync` job does structurally diff the three copies (a real, if
-shallow, protection against copy-paste drift), but nothing verifies the _implementations_ on both
-sides still agree behaviorally. (One concrete instance of exactly this — `GetOrdersByProject`
-documented `INVALID_ARGUMENT` validation that the implementation didn't actually have — was found
-and fixed; the structural gap that let it ship undetected in the first place is what this finding is
-about, and remains open.)
-
-**🟡 MEDIUM · production-readiness** — gRPC streaming's memory benefit is discarded one hop later,
-with no size cap `src/gateway-api/Endpoints/ProjectEndpoints.cs:148-164` order-api correctly streams
-via `AsAsyncEnumerable()`, but gateway-api drains the entire stream into an in-memory list before
-returning one JSON blob — and unlike `GetNotifications`'s explicit 1 MB guard, there's no cap here.
-A project with a large order history means unbounded gateway memory growth per request.
-
-**🟡 MEDIUM · production-readiness** — No EF Core connection retry on either database provider
-`src/order-api/Program.cs:39-40` (Npgsql), `src/gateway-api/Program.cs:39-40` (MySql) Fail-fast on a
-missing connection string at startup is correct (ADR-006), but neither configures
-`EnableRetryOnFailure()` — a transient connection blip mid-operation isn't retried at the ORM layer
-at all.
-
-**Also worth a look — backend:**
-
-- Money modeled as `double` in the proto contract and in the `orders.amount.total` metric — fine for
-  an approximate signal, wrong type for anything resembling a ledger.
-- Validation magic numbers (`999_999.99`, 500-char limits) duplicated verbatim across gateway-api
-  and order-api with nothing keeping them in sync.
-- Dead `Npgsql.OpenTelemetry` package reference — the code's own comment explains it's no longer
-  used.
-- `OrderPublisher.cs`, self-labeled "the most critical instrumentation point in the lab," is mocked
-  away in every test that touches it — the actual RabbitMQ publish/header-encoding logic has zero
-  direct test coverage.
-- Unauthenticated client headers (`X-Plant-Id`, user-agent) land on spans with no length cap — low
-  risk today, but an open door to trace-storage cost/tag-index abuse.
-- Dead `InflightMiddleware` class in gateway-api, never registered, its own comment admits it's a
-  placeholder.
-
-### 2.2 Messaging (notification-svc) & frontend
-
-**🟡 MEDIUM · production-readiness** — Mismatched TTLs let redelivery duplicate the notification
-list Dedup key 1h TTL vs. notification record 24h TTL, `consumer.py` A redelivery between 1h and 24h
-bypasses dedup, overwrites the notification hash, and unconditionally pushes a second copy of the
-same ID onto the list — no dedup on the list itself.
-
-**🟡 MEDIUM · interview-signal** — The `readOnlyRootFilesystem` exception write-up misses the
-simplest fix `docs/infrastructure/hardening.md:48-66` Two options are weighed (emptyDir +
-initContainer, or an initContainer writing `env.js`) and neither is the standard idiom: mount
-`env.js` as a ConfigMap volume with `subPath` directly. Volume mounts are exempt from
-`readOnlyRootFilesystem` — no entrypoint script or initContainer needed, and the one workload
-missing this protection (the most exposed one) could have it.
-
-**🟡 MEDIUM · production-readiness** — No resilience layer in the Angular HTTP client — every
-component hand-rolls error handling `app.config.ts` (no interceptors); `dashboard.component.ts:47`,
-`create-order.component.ts:70` No retry/backoff/timeout, no centralized error normalization. A
-transient 502 from gateway-api surfaces immediately as a raw `HttpErrorResponse.message` string,
-which can leak the upstream URL to the user.
-
-**🟡 MEDIUM · production-readiness** — No JS dependency vulnerability scanning anywhere in CI
-`.github/workflows/ci.yml:218-227` Python gets `pip-audit`, .NET gets
-`dotnet list package --vulnerable`, all four stacks get Trivy — but Trivy's frontend scan runs
-against the final nginx runtime image, after the multi-stage build has already discarded
-`node_modules`/`package.json`. There's nothing left to scan, and no `npm audit` step exists
-elsewhere. A silent, asymmetric SCA gap relative to the other three stacks.
-
-**Also worth a look — messaging & frontend:**
-
-- Unused `opentelemetry-instrumentation-pika` dependency — the code's own docstring explains why
-  manual extraction is used instead.
-- Money modeled as `float` in notification models, matching the same anti-pattern found on the
-  backend.
-- `RABBITMQ_USER: guest` hardcoded as a literal while the password is sourced from a Secret — an
-  asymmetric half-measure on an otherwise-consistent secret contract.
-- Faro's PII scrubbing is a fragile `string.includes('/healthz')` check — filters health-check
-  noise, provides no real redaction of user-entered data.
-- The frontend's Jest suite itself is unusually rigorous for a lab — real DOM assertions,
-  `HttpTestingController` with `http.verify()`, fake-timer navigation tests. Worth noting as a
-  genuine strength inside this subsection.
-
-### 2.3 Observability pipeline
-
-**🟡 MEDIUM · both** — `project_id` as a Prometheus label — the one place cardinality discipline
-slips `docs/observability/otel-contracts.md:283-289` — `orders.created.total`,
-`orders.amount.total`, `orders.processing.duration` Exactly the tenant/entity-ID-as-label pattern
-this project's own engineering principles flag as an automatic stop for unbounded cardinality.
-Contrast with the collector-level `spanmetrics` dimensions, which are all correctly
-fixed-cardinality. Low blast radius at lab scale; wouldn't survive a real multi-tenant install with
-no relabel/drop rule or stated bound.
-
-**🟡 MEDIUM · production-readiness** — No `memory_limiter` or exporter retry/queue configuration
-anywhere in the Alloy pipeline `k8s/monitoring/` (grepped for `memory_limiter`, `sending_queue`,
-`retry_on_failure` — zero hits) The batch processor buffers by size/timeout only, with no
-backpressure protection against a traffic spike OOM-killing Alloy, and none of the three local
-exporters configure a sending queue or retry policy — a transient backend blip drops data outright
-instead of buffering. Fine for a lab demo; toy-grade if presented as production-representative, and
-never caveated as such.
-
-**🟡 MEDIUM · both** — Loki's `derivedFields` regex can never match — log→trace click-through is
-dead `k8s/monitoring/local/grafana/provisioning/datasources.yaml:32-36` Expects `"trace_id":"(\w+)"`
-in the raw log line body, but the pipeline promotes `trace_id` only as structured metadata — the raw
-JSON still contains `TraceId` (.NET) or `otelTraceID` (Python), neither of which matches. The
-trace→logs direction works correctly; the reverse direction — click a log line, jump to its trace —
-is dead configuration that a five-minute click-through would have caught.
-
-**Also worth a look — observability pipeline:**
-
-- The local-mode DaemonSet still injects unused Grafana Cloud secret env vars that its own River
-  config never reads — vestigial coupling from before the local/cloud split was cleanly separated.
-- An orphaned config file still comments the chart version as 3.6.0 against the live 3.8.4 pin — one
-  more signal it should be deleted, not reconciled.
-
-### 2.4 Kubernetes / Helm / infra & security
-
-**🟡 MEDIUM · production-readiness** — `docs/operations/security.md` contradicts itself on where
-`db-secrets` comes from Its own diagram routes AKV → `make secrets-fetch-akv` → `db-secrets`. That
-target only ever populates `grafana-cloud-secrets`; `db-secrets` is the static file rotated by hand
-per the same doc's later rotation-procedure section. An on-call engineer following the diagram looks
-in the wrong place.
-
-**🟡 MEDIUM · both** — A NetworkPolicy ingress rule allows any namespace, not just the ingress
-controller `k8s/infra/network-policies.yaml:53-74` (`allow-ingress-from-controller`,
-`namespaceSelector: {}`) Deliberately avoids hardcoding `kube-system`, per the docs' own tradeoff
-note — but it materially weakens the "default-deny + tiered allow" story: a compromised pod in any
-namespace (including `monitoring`) can hit app-tier ports directly, bypassing the ingress
-controller. Combined with the self-documented fact that flannel doesn't enforce any of this on the
-actual dev cluster, the whole NetworkPolicy suite is currently unverified-in-practice.
-
-**🟡 MEDIUM · production-readiness** — RabbitMQ's application identity is the reserved `guest`
-account `k8s/datastores/rabbitmq/statefulset.yaml:41`; order/notification deployments Very likely
-functional (the official image's entrypoint lifts the loopback-only restriction when credentials are
-set explicitly), but shipping the reserved default account as the permanent cross-pod principal —
-with no purpose-named user/vhost — is flagged nowhere as a pre-prod TODO the way the DB passwords
-are.
-
-**🟡 MEDIUM · production-readiness** — Two supply-chain claims read stronger than what's actually
-enforced `ignore-unfixed: true` in Trivy's gate means an unpatched HIGH/CRITICAL CVE ships, gets
-cosign-signed, and passes CI silently — visible only in the Security tab, not blocking, and there
-are actionable mitigations beyond "wait for upstream" (pin an alternate base, scheduled re-scan of
-published images, tiered fixed/unfixed policy). Separately, cosign signatures are produced but
-verified nowhere downstream — "we sign our images" currently provides audit value only, zero
-enforcement, which is a materially weaker claim than it sounds.
-
-**Also worth a look — infra:**
-
-- No HPA/VPA anywhere — honestly disclosed in `reliability.md`'s "what this doesn't cover," but
-  since resource requests and SLO burn-rate rules already exist, one illustrative HPA wired to them
-  would have been a stronger signal than a static replica count.
-- `k8s/infra/ingress.yaml` ships a duplicate hostless catch-all rule with no `ssl-redirect`,
-  deliberately for dev convenience — a real risk if copy-pasted forward without re-reading the
-  comment.
-- Prod PDBs don't scale with the prod overlay's replica-count patch — a percentage-based
-  `minAvailable` would track automatically instead of needing a separate patch that doesn't
-  currently exist.
-- `docs/operations/security.md`'s RBAC excerpt for the Alloy ServiceAccount understates the actual
-  (still reasonable, no-wildcard) scope — minor drift, not a security issue.
-- The 10-year self-signed CA (`cert-manager-issuer.yaml`) has a well-documented ACME swap path but
-  no inline warning against copy-paste reuse into a real environment.
-
-### 2.5 Testing & documentation integrity
-
-**🟡 MEDIUM · both** — Zero integration tests for the headline scenario the whole lab exists to
-demonstrate The 5-hop cross-language trace propagation claim is validated only "manually via Jaeger
-UI," per the testing doc's own gap table. Solid unit base → one shallow syntactic proto-diff check →
-zero integration tests → a CI-disconnected manual load test. A Staff-level bar would expect at least
-one Testcontainers-based test asserting the RabbitMQ message and SpanLink actually connect
-end-to-end.
-
-**🟡 MEDIUM · production-readiness** — Legacy Makefile AKV secret names have drifted from the
-current fetch script — a second break in the same legacy path The canonical script reads one set of
-AKV secret names; the legacy Make target reads entirely different ones. If those secrets were
-renamed when the script-based flow was introduced, the legacy target doesn't just write a stale
-endpoint (the Mimir-endpoint footgun in §2.4) — it hard-fails on lookup too.
-
-**Also worth a look — testing & docs:**
-
-- `docs/testing.md`'s gateway-api.Tests breakdown table sums to 19 against its own stated (correct)
-  total of 22 — symptomatic of hand-edited tables rather than anything generated from the suite.
-- The ADRs in `docs/architecture/decisions.md` were spot-checked against source (SpanLink, fail-fast
-  secrets, `AsAsyncEnumerable`) and are the real thing — worth repeating here as a counterweight to
-  the drift found elsewhere.
-- The non-root UID table, the Kustomize "files stay in place" claim, and the
-  `readOnlyRootFilesystem` rationale in `CLAUDE.md`/`hardening.md` all still check out exactly
-  against current Dockerfiles and manifests.
-- The k6 load test under `k8s/loadtest/` is honestly scoped and consistently referenced — correctly
-  labeled "manual" today, with the CronJob upgrade correctly marked "planned," not oversold.
+Every finding from the original five-domain review — 18 Medium, ~30 Low/Nit — has been fixed and
+verified against current source as of this pass. Nothing is reproduced in full here; see §4 for
+what changed and why, organized by the same five subsystems the original review used.
 
 ---
 
 ## 3. Verdict matrix
 
-| Domain                        | Interview / portfolio signal                                                                                                                                           | Production sign-off                                                                                                                                                    | Where they diverge                                                                                        |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Backend services & gRPC       | Strong — outbox pattern, cursor streaming, layered validation, multi-replica-safe relay (Testcontainers-verified)                                                      | Conditional — gRPC status codes now map to real HTTP statuses instead of a blanket 502, but `AllowedHosts` is still wildcarded with no manifest override | Papercuts, not architecture problems; each is a small, scoped fix                                         |
-| Messaging & frontend          | Strong — correct async span semantics, tested backoff logic, DLQ now distinguishes transient from permanent failures                                                   | Conditional — TTL mismatch can still let a redelivery duplicate a notification, no resilience layer on the Angular HTTP client                                         | The design vocabulary and the implementation now agree; what's left is defense-in-depth, not correctness  |
-| Observability pipeline        | Very strong, if only the local-mode path is inspected; cloud-mode docs now match what ships                                                                            | Conditional — `project_id` is a Prometheus label with unbounded cardinality; SLO alerts now evaluate automatically in local mode and have a documented manual push for cloud mode | The design is sound; the alert-evaluation gap is closed, cardinality discipline is the remaining slip     |
-| K8s / Helm / infra & security | Strong — unusually honest self-disclosed gaps                                                                                                                          | Conditional — NetworkPolicy allows any namespace (self-documented tradeoff), RabbitMQ runs as the reserved `guest` account with no purpose-named identity              | Self-awareness about known gaps is real, but a couple of them are pre-prod TODOs, not just disclosed risk |
-| Testing & docs integrity      | Tests: strong (127 tests, one real Testcontainers concurrency test, frontend suite now runs clean off pinned local deps). Docs: much improved, still a few stale spots | Conditional — zero integration coverage for the 5-hop trace-propagation claim the lab exists to demonstrate                                                            | Real test engineering, now matched by a working toolchain; one real coverage gap remains                  |
+| Domain                        | Interview / portfolio signal                                                                                          | Production sign-off                                                                                                                          | Where they diverge                                                                             |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Backend services & gRPC       | Strong — outbox pattern, cursor streaming, layered validation, multi-replica-safe relay, now a verified 5-hop trace    | Clear — gRPC status codes map to real HTTP statuses, `AllowedHosts` is a real narrow allow-list, proto is single-sourced, gRPC itself now genuinely works end-to-end (see §4) | None material remaining; the gap between design intent and verified behavior is closed          |
+| Messaging & frontend          | Strong — correct async span semantics, tested backoff logic, DLQ distinguishes transient from permanent failures       | Clear — TTL/dedup aligned, Angular has a real resilience interceptor, JS deps are scanned in CI                                                | None material remaining                                                                          |
+| Observability pipeline        | Very strong — local and cloud-mode docs both match what ships                                                          | Clear — cardinality discipline applied to metrics, memory_limiter + retry/queue configured, log→trace click-through works, SLO alerts evaluate automatically in local mode with a documented manual push for cloud | None material remaining                                                                          |
+| K8s / Helm / infra & security | Strong — unusually honest self-disclosed gaps, all subsequently closed                                                 | Clear — NetworkPolicy scoped to the real ingress controller namespace, RabbitMQ runs a purpose-named account, supply-chain claims match enforcement, HPA/PDB scale with the prod overlay | None material remaining                                                                          |
+| Testing & docs integrity      | Very strong — 140 tests including a real Testcontainers concurrency test and a real cross-language trace-propagation test | Clear — the one prior integration-coverage gap (5-hop trace) is closed with a real, passing test; legacy Makefile drift fixed                | None material remaining                                                                          |
 
 ---
 
@@ -302,83 +106,130 @@ that honestly name their own gaps are not things most "learning lab" projects at
 execute correctly. That's a real, defensible signal of judgment, and it would hold up well in a
 system-design conversation about async trace propagation or reliable event delivery specifically.
 
-The pattern that cost points across two full review-and-fix passes was the same both times:
-**verification discipline after a refactor.** Every Critical and High finding in this review — the
-dedup mechanism that changed but whose docs and ADR didn't catch up, the outbox refactor whose
-trace-shape docs still described the old synchronous publish, the cloud-mode Helm chart that
-replaced the hand-rolled Alloy config while `docs/OTEL-PATTERNS.md` kept describing a fictional
-"Dual-Export" feature, the legacy Makefile target writing the wrong Mimir endpoint format long after
-the canonical path moved on, real employer infrastructure naming sitting in plaintext across nine
-files, and a real toolchain split (`/tmp/ng-test-deps`) that silently cross-resolved to incompatible
-TypeScript/Angular-compiler versions and broke every frontend test with an opaque `NG0202` — was
-this same failure mode, not a design flaw. All of it is now fixed and verified: 27 order-api tests
-including a real Testcontainers-based concurrency test, 26 notification-svc tests, and — once Jest
-became a real pinned `devDependency` instead of an ad hoc `/tmp` install — 50/50 frontend specs
-actually passing, not just counted. None of it was hard to explain or hard to fix. "I didn't
-re-check the docs after the refactor" is a real deduction at the Staff bar the first time; catching
-and fixing all of it in a structured pass is itself the stronger interview story.
+**As something to ship:** this pass closed every remaining Medium and actionable Low/Nit finding
+from the original review — 18 Medium, ~30 Low/Nit — verified against current source, not just
+claimed fixed. Highlights, grouped by the original review's five subsystems:
 
-**As something to ship:** meaningfully closer. Every unconditional stop found across both passes —
-live credential exposure, the retry/idempotency gap on order creation, the prod overlay's structural
-inability to avoid dev's placeholder secrets, the outbox relay's multi-replica race, the DLQ
-conflating transient and permanent failures, the fabricated API contracts and doc sections, the
-plaintext employer naming, the broken frontend test toolchain — is resolved and verified against
-current source, not just claimed fixed. The SLO alerts' missing evaluation path — the finding with
-the most compounding risk, since "can't verify this claim is true" is a more uncomfortable category
-than "this one thing is broken" — is also now closed: local mode evaluates the same rule file
-automatically (verified end-to-end against a live k3d cluster — all 4 groups, 16 rules, `health: ok`),
-and cloud mode has the previously-missing manual push script
-(`scripts/push-slo-rules-to-mimir.sh`). The blanket exception→502 mapping in gateway-api is also
-fixed: `CreateOrder`, `GetOrder`, and `GetOrdersByProject` now route `RpcException` through a shared
-status mapping (`GrpcErrorMapping.ToProblem()`) instead of collapsing every downstream failure into
-502, verified with new tests covering `InvalidArgument`→400 and `Unavailable`→503 (previously both
-returned 502). What remains is 18 Medium and ~30 Low/Nit items: real, worth
-fixing, but individually small and none of them a blocker on their own.
+- **Backend & gRPC (§2.1 original):** `plant.id` now genuinely forwards through gRPC metadata;
+  `AllowedHosts` is a real narrow allow-list (see the h2c/AllowedHosts discovery below); the proto
+  contract is single-sourced at `src/proto/orders.proto` with both services building from it, ending
+  the three-copy drift risk entirely rather than adding a check on top of it; gateway-api's
+  streaming proxy now caps in-memory accumulation like `GetNotifications` already did; both DB
+  providers now retry transient connection failures. Money-as-`double`, the validation-constant
+  duplication, the dead `Npgsql.OpenTelemetry` reference, `OrderPublisher`'s zero test coverage, the
+  uncapped span-tag headers, and the dead `InflightMiddleware` class were all also closed.
+- **Messaging & frontend (§2.2 original):** the dedup/notification TTL mismatch is resolved (aligned
+  to 24h, plus an `LREM`-before-`LPUSH` idempotency guard as defense-in-depth); the frontend's
+  `readOnlyRootFilesystem` exception is gone — `env.js` is now a ConfigMap volume mounted via
+  `subPath`, the standard idiom the original finding named; the Angular HTTP client has a real
+  resilience interceptor (retry/backoff/timeout, normalized user-facing errors); CI now runs
+  `npm audit` against the real lockfile, closing the JS dependency-scanning gap. The unused pika
+  instrumentation dependency, the `float`-as-money comment, the hardcoded `guest` RabbitMQ username,
+  and Faro's PII scrubbing were also closed — Faro now redacts email patterns from string fields
+  instead of a bare `/healthz` substring check.
+- **Observability pipeline (§2.3 original):** `project_id` is no longer a metric dimension —
+  removed from all three instruments, kept only as the existing span attribute, consistent with
+  this project's own cardinality-discipline principles; the Alloy pipeline now has a
+  `memory_limiter` processor plus retry/queue configuration on all three local exporters; Loki's
+  `derivedFields` now matches `trace_id` as structured metadata instead of a body regex that could
+  never fire, so log→trace click-through works in both directions. The unused
+  `GRAFANA_CLOUD_*` env vars on the local-mode DaemonSet were removed; the "orphaned 3.6.0 config
+  file" flagged in the original review no longer exists anywhere in the repo — re-confirmed at
+  closeout, a non-finding rather than a skipped one.
+- **K8s / Helm / infra & security (§2.4 original):** `docs/operations/security.md`'s `db-secrets`
+  diagram now correctly shows it as the static, hand-rotated file it actually is; the
+  `allow-ingress-from-controller` NetworkPolicy is scoped to `kube-system` (where Traefik actually
+  runs here), with a documented Kustomize-patch path for environments where the controller lives
+  elsewhere; RabbitMQ's application identity is now a purpose-named `signalforge` account sourced
+  from the same Secret pattern as the password, not the reserved `guest` account; the supply-chain
+  gaps are closed with a scheduled weekly Trivy re-scan (without `ignore-unfixed`) and a `cosign
+  verify` gate before cloud-mode manifests apply. HPA now exists on gateway-api/order-api in the
+  prod overlay, prod PDBs use percentage-based `minAvailable` that scales automatically with the
+  overlay's replica patch, the ingress hostless-catch-all has a strengthened warning against
+  copy-paste reuse, `security.md`'s RBAC excerpt matches the actual scope, and the 10-year
+  self-signed CA has an inline warning against reuse in a real environment.
+- **Testing & docs integrity (§2.5 original):** the headline gap — zero integration coverage for the
+  5-hop cross-language trace propagation claim — is closed with a real, passing
+  `src/integration-tests` project (Testcontainers: real Postgres, RabbitMQ, Redis, Jaeger, and both
+  order-api and notification-svc built from their actual Dockerfiles), asserting `order.create`,
+  `outbox.relay`, `order.publish`, and `notification.process` all land in one Jaeger trace. The
+  legacy Makefile's drifted AKV secret names are fixed to match the canonical fetch script.
+  `docs/testing.md`'s test-count tables now reflect the real, currently-measured counts (140 total,
+  up from the 127 the original review found already-inconsistent) rather than hand-edited estimates.
 
-One discovery outside the review's own scope, surfaced while fixing the toolchain split above:
-`src/frontend/node_modules` is tracked in git — 471 MB, 45,010 files, no `.gitignore` entry (unlike
-`dist/` and `.angular/`, which are correctly ignored right next to it). Nothing in the
-build/CI/deploy path reads from the tracked copy — `npm ci` always reinstalls fresh — so it appears
-to be pure accidental bloat, not a deliberate vendoring strategy. Not fixed here: removing it needs
-the repo owner's sign-off (untracking 471 MB is one thing; a prior push means it lives in history
-too, which is a separate, bigger decision than this review scope covers).
+**Two discoveries made building that integration test, outside the original review's scope
+entirely** — the kind of gap that "validated only manually" was hiding, which is exactly why the
+original review flagged the missing coverage as a Medium in the first place:
 
-**The throughline:** where the two lenses diverge, they diverge in the same direction every time:
-the design vocabulary and the hard engineering decisions are ahead of the implementation and
-documentation discipline that should track them. That gap is cheap to close and, done well, becomes
-its own interview story — "here's how I audit a system for drift between what it claims to do and
-what it actually does" is a stronger Staff narrative than pretending the drift never happened.
+1. **order-api's gRPC endpoint may never have actually completed a call in this environment.** A
+   single Kestrel endpoint configured for mixed HTTP/1.1+HTTP/2 without TLS silently downgrades
+   every connection to HTTP/1.1 (Kestrel logs "HTTP/2 requires TLS application protocol
+   negotiation"); gRPC's HTTP/2 prior-knowledge preface then gets rejected with an
+   `HTTP_1_1_REQUIRED` error. This was confirmed with a from-scratch repro (no Docker, no k8s — a
+   bare `dotnet run` and a hand-written gRPC client) before touching any production code, to rule out
+   an environment artifact. Fixed by splitting order-api onto two dedicated Kestrel endpoints: 5001
+   stays HTTP/1.1-only for kubelet's `/healthz`, a new 5002 is HTTP/2-only for gRPC — the standard
+   fix for gRPC+REST coexisting on cleartext Kestrel without TLS. gateway-api's `OrderApi:Address`
+   now points at 5002; NetworkPolicy, Dockerfile `EXPOSE`, and docs were all updated to match.
+2. **`OutboxRelayWorker`'s explicit transaction was incompatible with `EnableRetryOnFailure()`** —
+   the EF Core retry fix from this same review pass (§2.1 above). A bare
+   `Database.BeginTransactionAsync()` under a registered retrying execution strategy throws
+   `InvalidOperationException` on every call, meaning every outbox poll cycle failed silently (caught
+   by the worker's own retry-and-log catch block) from the moment `EnableRetryOnFailure()` was added
+   earlier in this same pass until this was caught. Fixed by wrapping the transaction in
+   `Database.CreateExecutionStrategy().ExecuteAsync(...)`; a new regression test
+   (`DrainOutboxAsync_OutboxRelaySpan_SharesTraceIdWithOriginalRequest`, using a real Testcontainers
+   Postgres) exercises the exact code path and would have caught this immediately.
+
+Both were found and fixed the same day as the review-remediation pass that introduced the second
+one — caught by writing the integration test the first review asked for, which is itself the
+strongest argument for why that finding mattered.
+
+**An honest environment-limitation note, not a code finding:** this session's local k3d cluster
+(WSL2 + Docker Desktop) exhibits a reproducible pod-to-pod networking issue — newly-scheduled pods
+on this specific cluster sometimes cannot reach each other directly (`Connection refused`), while
+the same pods remain reachable via `kubectl port-forward` and kubelet's own liveness/readiness
+probes succeed normally. This was verified to be unrelated to any change in this pass: completely
+unrelated pod pairs (`prometheus` → `grafana`) exhibit the identical symptom. Because of this, the
+real order-creation flow could not be click-through-verified against *this* local k3d cluster on
+this pass. It was instead verified two other ways: (a) the new `src/integration-tests` project,
+which uses plain Docker networking rather than k3d/flannel and passes end-to-end, and (b) direct,
+from-scratch repros (bare `dotnet run`, no Docker/k8s) for both of the two bugs above. Recreating
+the k3d cluster is the known workaround for this specific symptom when it recurs; it isn't a defect
+in any manifest or code path this review touched.
+
+**The throughline:** where the two lenses diverged across this review's five passes, they diverged
+in the same direction every time — design vocabulary and hard engineering decisions ahead of
+implementation and documentation discipline. That gap is now closed and verified, not just claimed
+closed, including the two bugs that surfaced only once the review's own "write a real integration
+test" recommendation was actually followed.
 
 ---
 
 _Five parallel subsystem reviews (backend/gRPC, messaging/frontend, observability pipeline,
 K8s/infra/security, testing/docs) consolidated and de-duplicated on 2026-07-08. Trimmed twice the
-same day. First pass: the credential-exposure incident (§1 of the original) and 15 numbered fix-list
-items were verified fixed directly against current source — not taken on the fix list's own say-so —
-and removed, along with any "also worth a look" item that turned out to be a side effect of those
-fixes. Two findings were reworded rather than dropped where that fix only partially addressed them.
-Second pass: the resulting 1 Critical and 9 High findings were fixed and verified in a dedicated
-working session — code changes backed by tests (including a new Testcontainers-based PostgreSQL
-concurrency test for the outbox-relay race, and two Angular unit tests for the runtime-config
-fallback), doc changes cross-checked against the actual current source rather than assumed correct
-once written. Third pass, same day: the frontend Jest suite's `NG0202` failure (surfaced, not
-caused, by the second pass) was root-caused to the `/tmp/ng-test-deps` split-install pattern
-cross-resolving to incompatible TypeScript/Angular-compiler versions; fixed by making Jest a real
-pinned `devDependency` colocated with the rest of the project's toolchain, which also closed the two
-Medium findings about the wrong test stack and the unpinned CI workaround, and removed the dead
-Karma/Jasmine scaffold entirely (`karma.conf.js`, `src/test.ts`, the `angular.json` test target).
-Lower-severity items were compacted into "also worth a look" lists per subsection rather than
-omitted, and are unchanged from the first pass except where a Critical/High fix incidentally
-resolved one (one such case, in §2.1). Fourth pass, same day: the highest-compounding Medium
-finding — SLO burn-rate alerts with good math but no evaluation path in either mode — was closed.
-`k8s/monitoring/slo-rules.yaml` was de-wrapped from a `PrometheusRule` CRD to a bare Prometheus/Mimir
-rule file (one canonical file instead of a format only kube-prometheus-stack can consume); local
-mode now loads it automatically via `rule_files:` (verified against a live k3d deploy — all 4 groups,
-16 rules, `health: ok`), and cloud mode gained the previously-missing `mimirtool`-based push script.
-Fifth pass, same day: gateway-api's blanket exception→502 mapping was closed. A shared
-`GrpcErrorMapping.ToProblem()` extension now maps `RpcException` status codes to their real HTTP
-equivalents in `CreateOrder`, `GetOrder`, and `GetOrdersByProject` (`InvalidArgument`→400,
-`NotFound`→404, `Unavailable`→503, etc.), replacing three separate blanket-`Exception`→502 catches;
-`GetNotifications` also stopped collapsing a well-formed 4xx from notification-svc into 502. Verified
-with `dotnet test` (29/29 passing, including new cases for the two previously-misclassified codes and
-an existing test updated from an asserted 502 to the now-correct 503)._
+same day: first pass closed the credential-exposure incident and 15 numbered fix-list items; second
+pass closed the resulting 1 Critical and 9 High findings (Testcontainers-based outbox-relay
+concurrency test, Angular runtime-config fallback tests, doc changes cross-checked against source).
+Third pass, same day: root-caused and fixed the frontend Jest suite's `NG0202` failure (the
+`/tmp/ng-test-deps` split-install pattern cross-resolving incompatible TypeScript/Angular-compiler
+versions) by making Jest a real pinned `devDependency`, removing the dead Karma/Jasmine scaffold.
+Fourth pass, same day: closed the highest-compounding Medium — SLO burn-rate alerts with correct
+math but no evaluation path in either mode — by de-wrapping the rule file to a bare Prometheus/Mimir
+format consumable by both local mode's automatic `rule_files:` load (verified against a live k3d
+deploy — all 4 groups, 16 rules, `health: ok`) and a new cloud-mode `mimirtool` push script. Fifth
+pass, same day: closed gateway-api's blanket exception→502 mapping with a shared
+`GrpcErrorMapping.ToProblem()` extension mapping real gRPC status codes to their HTTP equivalents.
+**Sixth pass, 2026-07-09: every remaining Medium (18) and actionable Low/Nit item (~30) closed and
+verified against current source** — see §4 above for the full breakdown by subsystem, including two
+bugs (order-api's gRPC/h2c port conflict, `OutboxRelayWorker`'s EF execution-strategy
+incompatibility) discovered outside the original review's scope while building the integration test
+the review itself recommended, and an honest disclosure of a k3d/WSL2 pod-networking environment
+limitation encountered — and worked around — during verification._
+
+One item remains outside any of these passes' scope, requiring the repo owner's own sign-off rather
+than a code fix: `src/frontend/node_modules` is tracked in git (471 MB, 45,010 files, no
+`.gitignore` entry unlike `dist/`/`.angular/` right next to it). Nothing in the build/CI/deploy path
+reads from the tracked copy — pure accidental bloat, not a deliberate vendoring strategy — but
+untracking 471 MB that's already been pushed is a bigger decision (rewriting history or accepting
+the repo-size cost) than any review pass should make unilaterally.

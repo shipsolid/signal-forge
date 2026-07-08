@@ -1,9 +1,11 @@
 # gRPC API Reference
 
-**Service**: `orders.OrderService` **Server**: order-api **Port**: 5001 (cluster-internal)
+**Service**: `orders.OrderService` **Server**: order-api **Port**: 5002 (HTTP/2-only,
+cluster-internal — order-api's separate 5001 is HTTP/1.1-only, `/healthz` alone)
 **Protocol**: HTTP/2 with protobuf encoding **Client**: gateway-api (uses `Grpc.Net.Client`)
 
-Proto definition: `src/order-api/Protos/orders.proto` (also copied to `src/gateway-api/Protos/`)
+Proto definition: `src/proto/orders.proto` (single source of truth; both order-api and gateway-api
+reference it via a relative `<Protobuf Include>` rather than each keeping their own copy)
 
 ---
 

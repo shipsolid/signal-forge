@@ -44,7 +44,10 @@ spec:
             capabilities:
               drop: ["ALL"]
           ports:
-            - containerPort: 5001
+            - name: http
+              containerPort: 5001
+            - name: grpc
+              containerPort: 5002
           volumeMounts:
             - name: tmp
               mountPath: /tmp
@@ -55,14 +58,13 @@ spec:
           env:
             - name: ASPNETCORE_ENVIRONMENT
               value: Production
-            # 0.0.0.0, not +: confirmed empirically against a live k3d cluster
-            # that Kestrel's "+" wildcard bound IPv6-only ([::]:5001, no IPv4
-            # socket at all — verified via /proc/net/tcp showing nothing on
-            # this port while /proc/net/tcp6 showed a LISTEN entry) in this
-            # environment, refusing every IPv4 connection including kubelet's
-            # own probes and the flannel pod network (IPv4-only, no v6 CIDR).
-            - name: ASPNETCORE_URLS
-              value: http://0.0.0.0:5001
+            # No ASPNETCORE_URLS: Program.cs's ConfigureKestrel binds 5001
+            # (HTTP/1.1, /healthz) and 5002 (HTTP/2-only, gRPC) explicitly via
+            # ListenAnyIP — dual-stack IPv4+IPv6 by construction, sidestepping
+            # the earlier "+"-wildcard IPv6-only binding bug that affected the
+            # old single-port ASPNETCORE_URLS-based setup. Setting
+            # ASPNETCORE_URLS here too would double-bind port 5001 and crash
+            # at startup — see Dockerfile's comment.
             - name: ConnectionStrings__DefaultConnection
               valueFrom:
                 secretKeyRef:

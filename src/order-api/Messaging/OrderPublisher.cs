@@ -27,41 +27,41 @@
 //      linked to it (same traceId, different spanId, linked via
 //      the SpanLink mechanism to preserve the async relationship).
 //
-// What you see in Jaeger — TWO separate traces, not one:
+// What you see in Jaeger — ONE trace, start to finish:
 //
-//   Trace A (the original request):
 //   gateway-api: HTTP POST /api/orders
 //     └─ gateway-api: gateway.fanout
 //          └─ order-api: orders.OrderService/CreateOrder (gRPC server)
-//               └─ order-api: order.create   ← ends here; no publish child
+//               └─ order-api: order.create   ← Activity.Current?.Id captured
+//                                                here into OutboxMessage.TraceParent
+//                    └─ order-api: outbox.relay   ← started later, by
+//                    │                              OutboxRelayWorker's poll,
+//                    │                              parented to the traceparent
+//                    │                              above (see that class) —
+//                    │                              same trace ID, not a new one
+//                    └─ order-api: order.publish  ← PRODUCER span, THIS method;
+//                         │                          child of outbox.relay, so
+//                         │                          also same trace ID
+//                         ┄┄┄(async via RabbitMQ)┄┄┄
+//                         notification-svc: notification.process  ← CONSUMER
+//                              │                                      span
+//                              ├─ notification-svc: redis GET (dedup check)
+//                              ├─ notification-svc: redis HSET (store)
+//                              └─ notification-svc: notification.send_email
 //
-//   Trace B (started later, by OutboxRelayWorker's poll — this method runs
-//   inside it, so PublishAsync's caller determines the trace this lands in):
-//   order-api: outbox.relay
-//     └─ order-api: order.publish  ← PRODUCER span, THIS method
-//          ┄┄┄(async via RabbitMQ)┄┄┄
-//          notification-svc: notification.process  ← CONSUMER span, back in
-//                                                      Trace A (see below)
-//               ├─ notification-svc: redis GET (dedup check)
-//               ├─ notification-svc: redis HSET (store)
-//               └─ notification-svc: notification.send_email
-//
-// notification-svc's CONSUMER span links back into Trace A, not Trace B —
-// because the traceparent written into the RabbitMQ headers below is
-// Trace A's (captured from OutboxMessage.TraceParent, itself captured from
-// Activity.Current?.Id when the order was written — see OrderGrpcService.cs),
-// not this method's own Activity.Current (which is Trace B's order.publish).
-// Net effect: notification-svc correctly shows up linked to the original
-// request trace; order-api's own publish step does not, and lives in its
-// own orphaned trace instead. Tracing "did this order's event actually get
-// published" forward from Trace A isn't possible today — only backward,
-// from notification-svc's link.
+// Both async hops (order.create → outbox.relay, and RabbitMQ → notification.process)
+// carry an explicit ActivityLink/SpanLink back to the span whose traceparent they
+// were built from, in addition to sharing that span's trace ID — the link makes the
+// async boundary visually distinct in Jaeger (dashed reference), while the shared
+// trace ID means a single trace query surfaces the whole chain. See
+// OutboxRelayWorker.PublishAndMarkAsync for the parent-context parsing and its
+// comment for why this mirrors, rather than replaces, ADR-002's link-not-parent
+// reasoning for the RabbitMQ→notification-svc hop specifically.
 //
 // Validation target: spec checklist item "Async propagation (critical)":
 //   order-api PRODUCER span → RabbitMQ → notification-svc CONSUMER span
-//   share the same trace, linked via message headers. This holds for the
-//   RabbitMQ→notification-svc hop; it does NOT hold for CreateOrder→publish,
-//   which is the open gap described above.
+//   share the same trace, linked via message headers. This now holds for both
+//   the CreateOrder→publish hop and the RabbitMQ→notification-svc hop.
 // ============================================================
 
 using System.Diagnostics;

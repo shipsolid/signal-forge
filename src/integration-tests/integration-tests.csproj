@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <!-- Not part of the fast default suite — needs Docker to build+run two
+         real service images plus Postgres/RabbitMQ/Redis/Jaeger containers.
+         See docs/testing.md for how to invoke this project explicitly. -->
+    <RunAnalyzersDuringBuild>false</RunAnalyzersDuringBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Baked into runtimeconfig.json so it's set before any SocketsHttpHandler
+         static state is touched — setting it via AppContext.SetSwitch() at the
+         top of the test method is too late (Testcontainers' own Docker API
+         client, or xUnit's runner, may already have triggered that static init
+         earlier in the process). Required for a bare GrpcChannel.ForAddress()
+         to speak h2c; gateway-api's own AddGrpcClient<T>()-based client never
+         needs this because Grpc.Net.ClientFactory sets it internally. -->
+    <RuntimeHostConfigurationOption Include="System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport" Value="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" />
+    <PackageReference Include="Testcontainers" Version="4.13.0" />
+    <PackageReference Include="Testcontainers.PostgreSql" Version="4.13.0" />
+    <PackageReference Include="Testcontainers.RabbitMq" Version="4.13.0" />
+    <PackageReference Include="xunit" Version="2.9.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Grpc.Net.Client" Version="2.62.0" />
+    <PackageReference Include="Google.Protobuf" Version="3.27.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.62.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Same relative-path idiom as gateway-api/order-api (see src/proto/ header
+         comment) — this project isn't Docker-built itself so no context-scoping
+         workaround is needed here, unlike the two Dockerfiles this test builds. -->
+    <Protobuf Include="..\proto\orders.proto" GrpcServices="Client" />
+  </ItemGroup>
+
+</Project>
