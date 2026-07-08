@@ -29,6 +29,26 @@ using OpenTelemetry.Trace;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// kubelet's HTTP probes connect using the pod's own IP as the Host header —
+// AllowedHosts (appsettings.json) can't list that ahead of time since pod IPs
+// are ephemeral and only known once scheduled. MY_POD_IP is injected via the
+// K8s Downward API (fieldRef: status.podIP); append it here so probes pass
+// without widening AllowedHosts to "*". Must happen before Build() — the host
+// filtering middleware's options are bound from configuration at that point.
+// Both the bare IP and IP:port form are required — confirmed empirically
+// against a live k3d cluster (HostFilteringMiddleware debug log) that the
+// probe's Host header includes the port ("10.42.0.45:5000") and a bare-IP
+// allow-list entry does NOT match it despite ASP.NET Core's docs describing
+// bare entries as port-agnostic; that appears to hold for hostnames but not
+// for IP-literal entries.
+var podIp = Environment.GetEnvironmentVariable("MY_POD_IP");
+if (!string.IsNullOrEmpty(podIp))
+{
+    var allowedHosts = builder.Configuration["AllowedHosts"];
+    var podEntries = $"{podIp},{podIp}:5000";
+    builder.Configuration["AllowedHosts"] = string.IsNullOrEmpty(allowedHosts) ? podEntries : $"{allowedHosts},{podEntries}";
+}
+
 // ── Database ─────────────────────────────────────────────────────────────────
 // EF Core + Pomelo MySQL driver.
 // Connection string sourced from appsettings.json or env override:

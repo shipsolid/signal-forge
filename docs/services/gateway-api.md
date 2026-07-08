@@ -71,11 +71,14 @@ All configuration is via environment variables injected from Kubernetes secrets 
 wildcard. That list covers every legitimate caller: the two Service DNS forms (pod-to-pod), the TLS
 ingress hostname, and `localhost`/`127.0.0.1` for the hostless dev ingress rule and direct
 `curl`/port-forward access. kubelet's liveness/readiness probes would otherwise fail this check —
-they default to sending the pod's (ephemeral) IP as the `Host` header — so both probes in
-`k8s/app/gateway/deployment.yaml` pin `httpHeaders: [{name: Host, value: gateway-api}]` explicitly.
-order-api has no external exposure at all, so its `AllowedHosts` is narrower:
-`order-api,order-api.otel-lab.svc.cluster.local` (plus the same `httpHeaders` pin on its own
-probes).
+they connect using the pod's own (ephemeral) IP as the `Host` header, which can't be listed ahead
+of time. Pinning the probe's own `httpHeaders: [{name: Host, value: gateway-api}]` was tried first
+and doesn't work — confirmed empirically against a live k3d cluster, kubelet's Host override never
+reached ASP.NET Core's host filtering and every probe still 400'd. The fix that actually works:
+`MY_POD_IP` is injected via the Downward API (`fieldRef: status.podIP`), and `Program.cs` appends
+it to the configured `AllowedHosts` before `Build()` runs, every pod allow-listing exactly its own
+IP at startup. order-api has no external exposure at all, so its `AllowedHosts` is narrower:
+`order-api,order-api.otel-lab.svc.cluster.local` (plus the same `MY_POD_IP` mechanism).
 
 Fail-fast: if `ConnectionStrings__DefaultConnection` is empty at startup, the process throws `InvalidOperationException` immediately. The pod enters `CrashLoopBackOff` and the error is visible in `kubectl describe pod`.
 

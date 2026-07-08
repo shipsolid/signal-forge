@@ -55,8 +55,14 @@ spec:
           env:
             - name: ASPNETCORE_ENVIRONMENT
               value: Production
+            # 0.0.0.0, not +: confirmed empirically against a live k3d cluster
+            # that Kestrel's "+" wildcard bound IPv6-only ([::]:5001, no IPv4
+            # socket at all — verified via /proc/net/tcp showing nothing on
+            # this port while /proc/net/tcp6 showed a LISTEN entry) in this
+            # environment, refusing every IPv4 connection including kubelet's
+            # own probes and the flannel pod network (IPv4-only, no v6 CIDR).
             - name: ASPNETCORE_URLS
-              value: http://+:5001
+              value: http://0.0.0.0:5001
             - name: ConnectionStrings__DefaultConnection
               valueFrom:
                 secretKeyRef:
@@ -80,6 +86,18 @@ spec:
             # (env var takes precedence over AddService() in ResourceBuilder — keep in sync)
             - name: OTEL_SERVICE_NAME
               value: order-api
+            # kubelet's HTTP probe connects using the pod's own IP as the Host
+            # header — AllowedHosts (appsettings.json) can't list that ahead of
+            # time since pod IPs are ephemeral and only known once scheduled.
+            # Injected via the Downward API; Program.cs appends it to the
+            # configured AllowedHosts at startup. (An httpHeaders Host override
+            # on the probes themselves was tried first and doesn't reach
+            # ASP.NET Core's host filtering — confirmed empirically against a
+            # live k3d cluster, still gave a 400.)
+            - name: MY_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
           resources:
             requests:
               cpu: 150m
@@ -91,21 +109,12 @@ spec:
             httpGet:
               path: /healthz
               port: 5001
-              # kubelet's default probe Host header is the pod IP, which
-              # AllowedHosts (appsettings.json) doesn't — and can't, since pod
-              # IPs are ephemeral — list. Pin it to an allow-listed name instead.
-              httpHeaders:
-                - name: Host
-                  value: order-api
             initialDelaySeconds: 20
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /healthz
               port: 5001
-              httpHeaders:
-                - name: Host
-                  value: order-api
             initialDelaySeconds: 30
             periodSeconds: 15
             timeoutSeconds: 5

@@ -22,6 +22,8 @@ FROM mcr.microsoft.com/dotnet/aspnet:8.0@sha256:f88c77644f4c480a62d3b46dc74db8d5
 WORKDIR /app
 COPY --from=build --chown=1654:1654 /app/publish .
 USER 1654:1654
-ENV ASPNETCORE_URLS=http://+:5001
+# 0.0.0.0, not + — see k8s/app/order/deployment.yaml's ASPNETCORE_URLS
+# comment for why "+" isn't safe to rely on for IPv4 connectivity.
+ENV ASPNETCORE_URLS=http://0.0.0.0:5001
 EXPOSE 5001
 ENTRYPOINT ["dotnet", "order-api.dll"]
