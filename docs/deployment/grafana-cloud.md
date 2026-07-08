@@ -95,7 +95,12 @@ The script updates **only** the nine leaf fields in `monitoring.grafana_cloud.{a
 ./deploy-local.sh --skip-cluster --skip-build
 ```
 
-`deploy-local.sh` reads `monitoring.grafana_cloud.*` from conf.yml and writes the `grafana-cloud-secrets` K8s Secret into both `otel-lab` (apps/FARO consumers) and `monitoring` (Helm chart's Alloy). Before `helm upgrade`, a contract validator asserts every key referenced by the rendered values file is present in the Secret — rename on either side fails fast.
+`deploy-local.sh` writes the `grafana-cloud-secrets` K8s Secret into both `otel-lab` (apps/FARO consumers) and `monitoring` (Helm chart's Alloy). Before `helm upgrade`, a contract validator asserts every key referenced by the rendered values file is present in the Secret — rename on either side fails fast.
+
+Where the nine leaf values come from is gated by `monitoring.grafana_cloud.use_env`:
+
+- `false` (default) — read straight from `monitoring.grafana_cloud.{api_key, tempo.*, mimir.*, loki.*, faro.*}` in conf.yml, i.e. whatever step 2 last wrote.
+- `true` — `deploy-local.sh` sources `.env` (repo root) instead and ignores the conf.yml fields above, reading `GRAFANA_CLOUD_API_KEY` / `GRAFANA_CLOUD_TEMPO_ENDPOINT` / `GRAFANA_CLOUD_TEMPO_USER` / `GRAFANA_CLOUD_MIMIR_ENDPOINT` / `GRAFANA_CLOUD_MIMIR_USER` / `GRAFANA_CLOUD_LOKI_ENDPOINT` / `GRAFANA_CLOUD_LOKI_USER` / `FARO_COLLECTOR_URL` / `FARO_API_KEY` — the same keys the legacy Makefile flow uses. Useful if you already keep `.env` current and want to skip step 2 entirely.
 
 ### 4. Deploy with cloud configmap
 

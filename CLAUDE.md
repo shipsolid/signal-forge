@@ -13,10 +13,10 @@ The modes are mutually exclusive. There is **no dual-export** — any doc or cod
 
 ## Two parallel deployment tools — don't mix them
 
-| Tool                              | Source of truth             | Credentials flow                                                                                                         |
-| --------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| **`./deploy-local.sh`** (primary) | [conf.yml](conf.yml)        | [scripts/fetch-grafana-cloud-conf-from-akv.sh](scripts/fetch-grafana-cloud-conf-from-akv.sh) → updates conf.yml in place |
-| `Makefile` (legacy)               | `.env` + hand-edited values | `make secrets-fetch-akv` → writes Secret directly                                                                        |
+| Tool                               | Source of truth              | Credentials flow                                                                                                                                                                                                                                                        |
+| ---------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **`./deploy-local.sh`** (primary)  | [conf.yml](conf.yml)          | `monitoring.grafana_cloud.use_env` picks the source: `true` → sources `.env` (repo root); `false` → [scripts/fetch-grafana-cloud-conf-from-akv.sh](scripts/fetch-grafana-cloud-conf-from-akv.sh) updates conf.yml in place, which deploy-local.sh then reads directly |
+| `Makefile` (legacy)                | `.env` + hand-edited values   | `make secrets-fetch-akv` → writes Secret directly                                                                                                                                                                                                                      |
 
 **`make secrets-fetch-akv` is a live footgun.** It writes `GRAFANA_CLOUD_MIMIR_ENDPOINT=.../api/v1/otlp` into the Secret. The current cloud destination ([values-cloud.yaml.tmpl](k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl)) uses Prometheus remote_write and expects `.../api/prom/push`. Running the make target after the script-based refactor will silently break cloud-mode metrics. Prefer the script.
 

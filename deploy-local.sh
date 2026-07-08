@@ -106,6 +106,45 @@ if [[ -n "$CA_PATH" && "$CA_PATH" != /* ]]; then
   CA_PATH="${CONF_DIR}/${CA_PATH}"
 fi
 
+# ── Grafana Cloud credential source ─────────────────────────────────────────
+# monitoring.grafana_cloud.use_env picks where the nine leaf credential
+# values come from:
+#   true  → source .env (repo root) — GRAFANA_CLOUD_*/FARO_* keys, the same
+#           ones the legacy Makefile flow (`make secrets-fetch-akv`) uses
+#   false → read monitoring.grafana_cloud.{api_key,tempo,mimir,loki,faro}
+#           straight from conf.yml (today's default; populated in place by
+#           scripts/fetch-grafana-cloud-conf-from-akv.sh)
+USE_ENV="$(yq monitoring.grafana_cloud.use_env)"
+# yq prints Python's str(bool) for YAML booleans ("True"/"False") — normalize.
+[[ "$USE_ENV" == "True" ]] && USE_ENV="true"
+if [[ "$USE_ENV" == "true" ]]; then
+  ENV_FILE="${CONF_DIR}/.env"
+  [[ -f "$ENV_FILE" ]] || die "monitoring.grafana_cloud.use_env=true but ${ENV_FILE} not found"
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+  GC_API_KEY="${GRAFANA_CLOUD_API_KEY:-}"
+  GC_TEMPO_ENDPOINT="${GRAFANA_CLOUD_TEMPO_ENDPOINT:-}"
+  GC_TEMPO_USER="${GRAFANA_CLOUD_TEMPO_USER:-}"
+  GC_MIMIR_ENDPOINT="${GRAFANA_CLOUD_MIMIR_ENDPOINT:-}"
+  GC_MIMIR_USER="${GRAFANA_CLOUD_MIMIR_USER:-}"
+  GC_LOKI_ENDPOINT="${GRAFANA_CLOUD_LOKI_ENDPOINT:-}"
+  GC_LOKI_USER="${GRAFANA_CLOUD_LOKI_USER:-}"
+  GC_FARO_ENDPOINT="${FARO_COLLECTOR_URL:-}"
+  GC_FARO_API_KEY="${FARO_API_KEY:-}"
+else
+  GC_API_KEY="$(yq monitoring.grafana_cloud.api_key)"
+  GC_TEMPO_ENDPOINT="$(yq monitoring.grafana_cloud.tempo.endpoint)"
+  GC_TEMPO_USER="$(yq monitoring.grafana_cloud.tempo.user)"
+  GC_MIMIR_ENDPOINT="$(yq monitoring.grafana_cloud.mimir.endpoint)"
+  GC_MIMIR_USER="$(yq monitoring.grafana_cloud.mimir.user)"
+  GC_LOKI_ENDPOINT="$(yq monitoring.grafana_cloud.loki.endpoint)"
+  GC_LOKI_USER="$(yq monitoring.grafana_cloud.loki.user)"
+  GC_FARO_ENDPOINT="$(yq monitoring.grafana_cloud.faro.endpoint)"
+  GC_FARO_API_KEY="$(yq monitoring.grafana_cloud.faro.api_key)"
+fi
+
 # ── Context guard ────────────────────────────────────────────────────────────
 # Refuse to touch any cluster other than the k3d cluster named in cluster.name.
 # This exists because kubectl contexts are global per-user state: a background
@@ -388,23 +427,16 @@ PY
 apply_grafana_cloud_secret() {
   if [[ "${MONITORING_MODE:-local}" == "cloud" ]]; then
     local missing=0
-    local key
-    for key in \
-      "monitoring.grafana_cloud.api_key" \
-      "monitoring.grafana_cloud.tempo.endpoint" \
-      "monitoring.grafana_cloud.tempo.user" \
-      "monitoring.grafana_cloud.mimir.endpoint" \
-      "monitoring.grafana_cloud.mimir.user" \
-      "monitoring.grafana_cloud.loki.endpoint" \
-      "monitoring.grafana_cloud.loki.user"
-    do
-      if [[ -z "$(yq "$key")" ]]; then
-        warn "monitoring.mode=cloud but $key is empty in conf.yml"
+    local name value
+    for name in GC_API_KEY GC_TEMPO_ENDPOINT GC_TEMPO_USER GC_MIMIR_ENDPOINT GC_MIMIR_USER GC_LOKI_ENDPOINT GC_LOKI_USER; do
+      value="${!name}"
+      if [[ -z "$value" ]]; then
+        warn "monitoring.mode=cloud but $name is empty (source: $([[ "$USE_ENV" == "true" ]] && echo ".env" || echo "conf.yml"))"
         missing=1
       fi
     done
     if [[ "$missing" -eq 1 ]]; then
-      warn "Grafana Cloud exporters will stay unauthenticated until the missing conf.yml values are filled in"
+      warn "Grafana Cloud exporters will stay unauthenticated until the missing values are filled in"
     fi
   fi
 
@@ -423,19 +455,16 @@ apply_grafana_cloud_secret() {
 
   local ns
   for ns in "${targets[@]}"; do
-    log "kubectl apply — ${SECRET_NAME} → ns/$ns"
-    python3 - "$CONF" "$ns" "$SECRET_NAME" <<'PY' | kubectl apply -f -
+    log "kubectl apply — ${SECRET_NAME} → ns/$ns (source: $([[ "$USE_ENV" == "true" ]] && echo ".env" || echo "conf.yml"))"
+    python3 - "$ns" "$SECRET_NAME" \
+      "$GC_API_KEY" "$GC_TEMPO_ENDPOINT" "$GC_TEMPO_USER" \
+      "$GC_MIMIR_ENDPOINT" "$GC_MIMIR_USER" "$GC_LOKI_ENDPOINT" "$GC_LOKI_USER" \
+      "$GC_FARO_ENDPOINT" "$GC_FARO_API_KEY" <<'PY' | kubectl apply -f -
 import sys, yaml
 
-conf_path, namespace, secret_name = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(conf_path) as f:
-    doc = yaml.safe_load(f) or {}
-
-gc = (doc.get("monitoring") or {}).get("grafana_cloud") or {}
-tempo = gc.get("tempo") or {}
-mimir = gc.get("mimir") or {}
-loki = gc.get("loki") or {}
-faro = gc.get("faro") or {}
+(namespace, secret_name, api_key, tempo_endpoint, tempo_user,
+ mimir_endpoint, mimir_user, loki_endpoint, loki_user,
+ faro_endpoint, faro_api_key) = sys.argv[1:12]
 
 secret = {
     "apiVersion": "v1",
@@ -446,15 +475,15 @@ secret = {
     },
     "type": "Opaque",
     "stringData": {
-        "GRAFANA_CLOUD_API_KEY": gc.get("api_key", "") or "",
-        "GRAFANA_CLOUD_TEMPO_ENDPOINT": tempo.get("endpoint", "") or "",
-        "GRAFANA_CLOUD_TEMPO_USER": str(tempo.get("user", "") or ""),
-        "GRAFANA_CLOUD_MIMIR_ENDPOINT": mimir.get("endpoint", "") or "",
-        "GRAFANA_CLOUD_MIMIR_USER": str(mimir.get("user", "") or ""),
-        "GRAFANA_CLOUD_LOKI_ENDPOINT": loki.get("endpoint", "") or "",
-        "GRAFANA_CLOUD_LOKI_USER": str(loki.get("user", "") or ""),
-        "FARO_COLLECTOR_URL": faro.get("endpoint", "") or "",
-        "FARO_API_KEY": faro.get("api_key", "") or "",
+        "GRAFANA_CLOUD_API_KEY": api_key,
+        "GRAFANA_CLOUD_TEMPO_ENDPOINT": tempo_endpoint,
+        "GRAFANA_CLOUD_TEMPO_USER": tempo_user,
+        "GRAFANA_CLOUD_MIMIR_ENDPOINT": mimir_endpoint,
+        "GRAFANA_CLOUD_MIMIR_USER": mimir_user,
+        "GRAFANA_CLOUD_LOKI_ENDPOINT": loki_endpoint,
+        "GRAFANA_CLOUD_LOKI_USER": loki_user,
+        "FARO_COLLECTOR_URL": faro_endpoint,
+        "FARO_API_KEY": faro_api_key,
     },
 }
 
@@ -473,19 +502,21 @@ wait_datastores() {
 
 # ── 4. Helm release: grafana/k8s-monitoring ──────────────────────────────────
 # Render a values.yaml template (${...} placeholders) → tmp file, then pass to
-# helm. Substitution values come from conf.yml (single source of truth).
+# helm. Non-credential substitutions come from conf.yml; the three endpoint
+# values come from the resolved GC_* vars (conf.yml or .env, per use_env).
 render_helm_values() {
   local tmpl="$1"   # abs path to .tmpl
   local out="$2"    # abs path for rendered output
-  python3 - "$CONF" "$tmpl" "$out" "$CLUSTER" "$NAMESPACE" "$SECRET_NAME" "$DEPLOYMENT_ENV" <<'PY'
+  python3 - "$CONF" "$tmpl" "$out" "$CLUSTER" "$NAMESPACE" "$SECRET_NAME" "$DEPLOYMENT_ENV" \
+    "$GC_MIMIR_ENDPOINT" "$GC_LOKI_ENDPOINT" "$GC_TEMPO_ENDPOINT" <<'PY'
 import sys, yaml
 from string import Template
 
-conf_path, tmpl_path, out_path, cluster_name, ns, secret_name, deploy_env = sys.argv[1:8]
+(conf_path, tmpl_path, out_path, cluster_name, ns, secret_name, deploy_env,
+ mimir_url, loki_url, tempo_endpoint) = sys.argv[1:11]
 with open(conf_path) as f:
     doc = yaml.safe_load(f) or {}
 
-gc = (doc.get("monitoring") or {}).get("grafana_cloud") or {}
 helm = (doc.get("monitoring") or {}).get("helm") or {}
 
 subs = {
@@ -493,9 +524,9 @@ subs = {
     "DEPLOYMENT_ENVIRONMENT": deploy_env,
     "SECRET_NAME":            secret_name,
     "SECRET_NAMESPACE":       helm.get("namespace") or ns,
-    "MIMIR_URL":              (gc.get("mimir") or {}).get("endpoint", "") or "",
-    "LOKI_URL":               (gc.get("loki") or {}).get("endpoint", "") or "",
-    "TEMPO_ENDPOINT":         (gc.get("tempo") or {}).get("endpoint", "") or "",
+    "MIMIR_URL":              mimir_url,
+    "LOKI_URL":               loki_url,
+    "TEMPO_ENDPOINT":         tempo_endpoint,
 }
 
 with open(tmpl_path) as f:
