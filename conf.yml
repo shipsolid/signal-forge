@@ -200,13 +200,13 @@ monitoring:
     # into the fields below (api_key, tempo.*, mimir.*, loki.*, faro.*) in place.
     # Safe to track in git — these are IDs / names, not credentials.
     akv:
-      tenant_id: "59fa7797-abec-4505-81e6-8ce092642190"
-      subscription_id: "f2402ef5-a794-4d6e-ad6b-0de0de7c36a5"
-      resource_group: "mf-cc-dt-azrsrp-foundation-prd-rg"
-      vault_name: "mf-cc-dt-azrsrp-prd-kv"
+      tenant_id: ""
+      subscription_id: ""
+      resource_group: ""
+      vault_name: ""
 
     # Shared Access Policy token for data-plane writes (metrics/logs/traces).
-    api_key: "***REMOVED***"
+    api_key: ""
 
     # Tempo — OTLP gRPC. Endpoint format: <host>:443 (no scheme).
     tempo:

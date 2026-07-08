@@ -28,3 +28,4 @@ src/**/.venv/
 *.bak
 
 zcert.crt
+.env
