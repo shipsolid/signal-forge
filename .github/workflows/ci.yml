@@ -8,6 +8,24 @@ on:
     branches: [main]
 
 jobs:
+  # ── Secret scanning ──────────────────────────────────────────────────────────
+  # Catches committed secrets before they land in history — the exact class of
+  # exposure (a live Grafana Cloud token + an Azure SP client secret, both in
+  # conf.yml.bak/.env) that required a one-time git-history rewrite to fix. See
+  # docs/reviews/2026-07-08-principal-staff-review.md §1. .gitleaks.toml
+  # allowlists k8s/infra/secrets.yaml's known dev-only placeholder credentials.
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history, not just the current ref
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # ── .NET services ────────────────────────────────────────────────────────────
   test-dotnet:
     name: .NET tests
