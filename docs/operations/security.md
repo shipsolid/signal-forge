@@ -26,7 +26,7 @@ have their own page are linked out:
 | Poison message amplification       | Dead Letter Queue isolates unprocessable messages                                                                                                  | this page                                                  |
 | Unauthorised cross-tier traffic    | `NetworkPolicy` default-deny + tiered allows (apps ↔ datastores, apps → alloy-receiver)                                                            | [networking.md](networking.md)                             |
 | MITM on Ingress                    | TLS via cert-manager (self-signed CA → leaf cert on each host)                                                                                     | [networking.md](networking.md)                             |
-| Tampered image in production       | cosign keyless signing at build time; admission-time verification gate _not yet wired_ — see supply-chain §Admission enforcement                   | [supply-chain.md](supply-chain.md)                         |
+| Tampered image in production       | cosign keyless signing + CI-side verification on every push; admission-time verification gate at deploy time _not yet wired_ — see supply-chain §Admission enforcement | [supply-chain.md](supply-chain.md)                         |
 
 ---
 
@@ -34,19 +34,34 @@ have their own page are linked out:
 
 ### Where secrets live
 
+Two independent paths — neither populates the other's Secret:
+
 ```
 Azure Key Vault (example-org-prd-kv)
   └─ grafana-example-org-* (7 secrets)
         │
-        │  make secrets-fetch-akv
+        │  make secrets-fetch-akv  (or scripts/fetch-grafana-cloud-conf-from-akv.sh,
+        │                            the primary flow — see CLAUDE.md)
         ▼
-Kubernetes Secret (db-secrets, otel-lab namespace)
-  └─ All credentials as base64-encoded data keys
+Kubernetes Secret (grafana-cloud-secrets)
         │
         │  secretKeyRef in Deployment specs
         ▼
 Container environment variables (runtime only, not in manifests)
+
+k8s/infra/secrets.yaml (static, hand-rotated base64 values)
+        │
+        │  kubectl apply -f k8s/infra/secrets.yaml
+        ▼
+Kubernetes Secret (db-secrets, otel-lab namespace)
+        │
+        │  secretKeyRef in Deployment/StatefulSet specs
+        ▼
+Container environment variables (runtime only, not in manifests)
 ```
+
+`db-secrets` is never AKV-sourced — see §Credential rotation procedure below for how it's actually
+rotated by hand.
 
 No plaintext credentials appear in:
 
@@ -189,10 +204,10 @@ The Alloy ServiceAccount has minimum required permissions:
 ```yaml
 rules:
   - apiGroups: [""]
-    resources: ["pods", "nodes", "namespaces"]
+    resources: ["pods", "nodes", "namespaces", "endpoints", "services"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
-    resources: ["replicasets"]
+    resources: ["replicasets", "deployments", "statefulsets", "daemonsets"]
     verbs: ["get", "list", "watch"]
 ```
 

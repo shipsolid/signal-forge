@@ -7,6 +7,13 @@ RUN update-ca-certificates
 COPY order-api.csproj .
 RUN dotnet restore
 COPY . .
+# order-api.csproj references ../proto (src/proto/ at the repo root — see that
+# directory's OrderValidation.cs for why) via a relative <Protobuf Include>/
+# <Compile Include>. The build context here is scoped to src/order-api/, so
+# that path is normally invisible to Docker; deploy-local.sh's build_images()
+# (stage_shared_proto) and the CI workflow both stage a copy at ./proto
+# specifically so this COPY can put it where /src/../proto resolves to.
+COPY proto/ /proto/
 RUN dotnet publish -c Release -o /app/publish
 
 # Runtime — use the aspnet:8.0 image's built-in non-root `app` user (UID 1654).

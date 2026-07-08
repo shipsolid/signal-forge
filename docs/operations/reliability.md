@@ -124,6 +124,7 @@ It usually is — most requests finish in <100ms and kube-proxy propagates faste
 
 ## What this doesn't cover
 
-- **HorizontalPodAutoscaler / VerticalPodAutoscaler.** Fixed replica counts per env. Add when you have metrics to trigger on (use the SLO latency rules as HPA inputs with a custom-metrics adapter).
+- **VerticalPodAutoscaler.** Fixed resource requests/limits per env. Add if right-sizing becomes a concern.
+- **SLO-burn-rate-driven HorizontalPodAutoscaler.** The prod overlay ([hpa.yaml](../../k8s/overlays/prod/hpa.yaml)) has an illustrative CPU-utilization HPA on gateway-api/order-api, but a real SLO-driven one (scaling on the burn-rate recording rules in [slo-rules.yaml](../../k8s/monitoring/slo-rules.yaml) instead of raw CPU) needs a custom-metrics adapter (e.g. `prometheus-adapter`) — not wired up. Requires metrics-server in the target cluster either way; not installed by `deploy-local.sh` since local dev has no autoscaling need.
 - **Topology spread constraints.** Pod anti-affinity handles the common "don't co-schedule" case. For AZ-level spread (prod on multi-AZ), add `topologySpreadConstraints` with `topologyKey: topology.kubernetes.io/zone`.
 - **Disruption budget for datastores' PVCs.** If you migrate to the operator-backed HA story, the operator handles its own PDBs. Delete the `datastores` PDB when you do.

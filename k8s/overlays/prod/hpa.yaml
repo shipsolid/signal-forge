@@ -1,0 +1,51 @@
+# Illustrative HPAs for the two services with the most direct exposure to
+# traffic bursts (gateway-api fronts every request; order-api is its
+# highest-volume downstream). CPU utilization only — a real SLO-burn-rate-
+# driven HPA needs a custom-metrics adapter (e.g. prometheus-adapter) reading
+# the burn-rate recording rules in k8s/monitoring/slo-rules.yaml, which isn't
+# wired up here (see docs/operations/reliability.md's "what this doesn't
+# cover"). Requires metrics-server in the target cluster — not installed by
+# deploy-local.sh, since k3d/local dev has no need for autoscaling.
+#
+# minReplicas matches this overlay's static replica patch in
+# kustomization.yaml (6) so a first apply behaves identically to before this
+# was added; the HPA takes over scaling decisions from there.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gateway-api
+  namespace: otel-lab
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: gateway-api
+  minReplicas: 6
+  maxReplicas: 12
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: order-api
+  namespace: otel-lab
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: order-api
+  minReplicas: 6
+  maxReplicas: 12
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

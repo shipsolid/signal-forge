@@ -209,7 +209,11 @@ def handle_order_created(ch, method, properties, body: bytes) -> None:
             # pass the check before either set the key.
             r = get_redis()
             dedup_key = f"dedup:{event.order_id}"
-            if not r.set(dedup_key, "1", nx=True, ex=3600):  # 1h dedup window
+            # TTL matches the notification record's own TTL below (86400s) —
+            # they used to differ (1h vs 24h), leaving a window where a
+            # redelivery between 1h and 24h would bypass dedup entirely and
+            # overwrite the notification hash / double-push the ID list.
+            if not r.set(dedup_key, "1", nx=True, ex=86400):  # 24h dedup window
                 span.set_attribute("notification.duplicate", True)
                 logger.info("Duplicate notification skipped for order %d", event.order_id)
                 counter.add(1, {"status": "duplicate"})
@@ -241,8 +245,12 @@ def handle_order_created(ch, method, properties, body: bytes) -> None:
             r.expire(f"notifications:{notification_id}", 86400)  # 24h TTL
 
             # Maintain a capped list of recent notification IDs.
+            # LREM before LPUSH makes the push idempotent — defense in depth
+            # on top of the dedup TTL above, so even if dedup and this ever
+            # drift again, the same ID can't appear twice in the list.
             # LPUSH + LTRIM = O(1) insert + O(N) trim, but with N=1000 and
             # access only at read time this is acceptable for a lab.
+            r.lrem("notification_ids", 0, notification_id)
             r.lpush("notification_ids", notification_id)
             r.ltrim("notification_ids", 0, 999)  # keep last 1000
 

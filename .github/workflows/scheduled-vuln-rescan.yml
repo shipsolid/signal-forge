@@ -1,0 +1,49 @@
+name: Scheduled vulnerability re-scan
+
+# The main CI Trivy gate (build-images job in ci.yml) uses ignore-unfixed:
+# true — an unpatched HIGH/CRITICAL CVE ships, gets cosign-signed, and passes
+# silently, visible only in the Security tab, never blocking. That's the
+# correct call at build time (there's nothing actionable yet), but it means
+# nothing ever re-checks whether a fix has since shown up upstream for an
+# image that's already been pushed. This workflow closes that gap: same
+# images, same Trivy scan, but WITHOUT ignore-unfixed, on a schedule, so a
+# vulnerability that had no fix in it does surface once one exists.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"   # weekly, Monday 06:00 UTC
+
+jobs:
+  rescan:
+    name: Re-scan published images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [otel-frontend, gateway-api, order-api, notification-svc]
+    steps:
+      - name: Pull latest published image
+        run: docker pull "ghcr.io/${{ github.repository_owner }}/signal-forge/${{ matrix.service }}:latest"
+
+      # No ignore-unfixed here, deliberately — the whole point of this
+      # workflow is to catch a fix that's appeared since the image was built.
+      - name: Trivy re-scan — ${{ matrix.service }}
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: "ghcr.io/${{ github.repository_owner }}/signal-forge/${{ matrix.service }}:latest"
+          format: sarif
+          output: trivy-rescan-${{ matrix.service }}.sarif
+          severity: HIGH,CRITICAL
+          exit-code: "0"   # report-only — this is a scheduled audit, not a merge gate
+          vuln-type: os,library
+
+      - name: Upload Trivy SARIF to GitHub code-scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-rescan-${{ matrix.service }}.sarif
+          category: trivy-rescan-${{ matrix.service }}

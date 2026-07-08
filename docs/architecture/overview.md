@@ -177,5 +177,5 @@ See [CLAUDE.md](../../CLAUDE.md) for the full command reference and safety check
 | `http://localhost:16686`                                                                             | Jaeger UI                               |
 | `http://localhost:3000`                                                                              | Grafana (admin/admin)                   |
 | `http://localhost:9090`                                                                              | Prometheus                              |
-| `http://localhost:15672`                                                                             | RabbitMQ Management (guest/guest)       |
+| `http://localhost:15672`                                                                             | RabbitMQ Management (signalforge/guest) |
 | `kubectl port-forward svc/grafana-k8s-alloy-receiver 12345 -n monitoring` → `http://localhost:12345` | Alloy pipeline debug UI                 |

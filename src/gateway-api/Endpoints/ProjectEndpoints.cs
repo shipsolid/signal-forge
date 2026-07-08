@@ -133,6 +133,7 @@ public static class ProjectEndpoints
     static async Task<IResult> GetOrdersByProject(
         int id,
         OrderApi.Protos.OrderService.OrderServiceClient orderClient,
+        HttpContext httpContext,
         ILogger<Program> logger)
     {
         // ActivityKind.Internal: this span groups the downstream work. The gRPC stub below
@@ -147,11 +148,21 @@ public static class ProjectEndpoints
             var request = new OrderApi.Protos.GetOrdersByProjectRequest { ProjectId = id };
             var orders = new List<object>();
 
+            // order-api streams via AsAsyncEnumerable() for O(1) memory on its side (ADR-010),
+            // but gateway-api still buffers the whole result into one JSON response — that
+            // benefit is undone one hop later without a cap, unlike GetNotifications' explicit
+            // 1 MB guard. Bound it the same way.
+            const int MaxOrders = 10_000;
+
             // ReadAllAsync() streams responses one-by-one.
             // The gRPC client span remains open for the full stream duration.
-            using var call = orderClient.GetOrdersByProject(request);
+            using var call = orderClient.GetOrdersByProject(request, httpContext.PlantIdMetadata());
             await foreach (var order in call.ResponseStream.ReadAllAsync())
             {
+                if (orders.Count >= MaxOrders)
+                    throw new InvalidOperationException(
+                        $"Project {id} has more than {MaxOrders} orders — refusing to buffer the full result in memory");
+
                 orders.Add(new
                 {
                     order.Id,

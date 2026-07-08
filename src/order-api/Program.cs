@@ -36,8 +36,11 @@ var builder = WebApplication.CreateBuilder(args);
 var connStr = builder.Configuration.GetConnectionString("DefaultConnection");
 if (string.IsNullOrWhiteSpace(connStr))
     throw new InvalidOperationException("ConnectionStrings:DefaultConnection is required but not configured.");
+// EnableRetryOnFailure covers a transient connection blip mid-operation at the
+// ORM layer — fail-fast at startup (above) already handles a missing connection
+// string; this handles a connection that drops after the app is already running.
 builder.Services.AddDbContext<AppDbContext>(opts =>
-    opts.UseNpgsql(connStr));
+    opts.UseNpgsql(connStr, npgsqlOpts => npgsqlOpts.EnableRetryOnFailure()));
 
 // ── gRPC server ───────────────────────────────────────────────────────────────
 // AddGrpc() registers the gRPC middleware stack (HTTP/2 framing, Protobuf
@@ -86,12 +89,16 @@ builder.Services.AddOpenTelemetry()
                 activity.SetTag("net.peer.ip",
                     request.HttpContext.Connection.RemoteIpAddress?.ToString());
                 activity.SetTag("http.user_agent",
-                    request.Headers.UserAgent.ToString());
+                    TruncateForSpanTag(request.Headers.UserAgent.ToString()));
 
-                // Plant ID — forwarded by gateway-api from the original browser request.
+                // Plant ID — forwarded by gateway-api from the original browser request
+                // (see GrpcCallContextExtensions.PlantIdMetadata in gateway-api). Both this
+                // header and User-Agent above are fully client-controlled and unauthenticated
+                // — truncated before landing on a span to bound trace-storage cost / tag-index
+                // abuse from an arbitrarily long value.
                 var plantId = request.Headers["X-Plant-Id"].FirstOrDefault();
                 if (!string.IsNullOrEmpty(plantId))
-                    activity.SetTag("plant.id", plantId);
+                    activity.SetTag("plant.id", TruncateForSpanTag(plantId));
             };
         })
         // EF Core auto-instrumentation captures every SQL command sent to PostgreSQL.
@@ -132,6 +139,10 @@ builder.Logging.AddOpenTelemetry(logging =>
 // JSON-structured console output consumed by Alloy's log-tailing pipeline.
 // Fields written: Timestamp, Level, MessageTemplate, TraceId, SpanId, etc.
 builder.Logging.AddJsonConsole();
+
+// Caps a client-controlled header value before it lands on a span attribute.
+static string? TruncateForSpanTag(string? value, int maxLength = 256) =>
+    value is null || value.Length <= maxLength ? value : value[..maxLength];
 
 var app = builder.Build();
 

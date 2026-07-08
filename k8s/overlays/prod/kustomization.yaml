@@ -7,6 +7,7 @@ kind: Kustomization
 
 resources:
   - ../../base
+  - hpa.yaml
 
 labels:
   - pairs:
@@ -97,3 +98,25 @@ patches:
               labelSelector:
                 matchLabels:
                   app: order-api
+
+  # Base PDBs are minAvailable: 1 against 2 base-replica Deployments — correct
+  # there, but far weaker than intended once the replica patches above bump
+  # gateway-api/order-api to 6 and notification-svc to 4. Percentage-based
+  # minAvailable tracks the replica count automatically instead of needing a
+  # separate absolute-number patch that drifts every time the replica count
+  # changes.
+  - target: { kind: PodDisruptionBudget, name: gateway-api }
+    patch: |
+      - op: replace
+        path: /spec/minAvailable
+        value: 50%
+  - target: { kind: PodDisruptionBudget, name: order-api }
+    patch: |
+      - op: replace
+        path: /spec/minAvailable
+        value: 50%
+  - target: { kind: PodDisruptionBudget, name: notification-svc }
+    patch: |
+      - op: replace
+        path: /spec/minAvailable
+        value: 50%

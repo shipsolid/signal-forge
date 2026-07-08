@@ -179,7 +179,7 @@ security:
 #                (the Helm release is MANDATORY and auto-installed;
 #                 the bespoke Alloy DaemonSet is NOT applied)
 monitoring:
-  mode: cloud
+  mode: local
 
   # Name of the Kubernetes Secret that stores Grafana Cloud credentials.
   # Applied by deploy-local.sh to both cluster.namespace and helm.namespace.

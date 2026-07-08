@@ -35,6 +35,14 @@ spec:
     # Keep a hostless rule so http://localhost:8080 still works on k3d for dev,
     # even though the cert is only issued for signal-forge.local. TLS routing
     # only applies on the host-scoped rule above.
+    #
+    # WARNING — dev-only, deliberately: this rule matches ANY Host header
+    # (no TLS, no redirect) and duplicates the paths above verbatim. Do not
+    # copy-paste this rule forward into a staging/prod overlay — a
+    # production ingress should not have a plaintext catch-all sitting next
+    # to its TLS-enforced host rule. If you're promoting this manifest to a
+    # real environment, delete this second rule entirely rather than "fixing"
+    # it with an ssl-redirect annotation.
     - http:
         paths:
           - path: /api

@@ -114,6 +114,30 @@ def test_happy_path_pushes_to_notification_ids_list(fr, mock_instruments):
     assert "notif-42" in fr.lrange("notification_ids", 0, -1)
 
 
+def test_reprocessing_same_order_does_not_duplicate_list_entry(fr, mock_instruments):
+    """
+    Defense-in-depth regression guard: even if dedup didn't catch a redelivery
+    (e.g. the dedup key expired between deliveries — the exact TTL-mismatch bug
+    this was written to guard against), the same notification_id must not
+    appear twice in notification_ids. LREM-before-LPUSH makes the push
+    idempotent regardless of whether dedup already caught it.
+    """
+    # Simulate a notification_id that's already in the list from a prior
+    # delivery, with no dedup key present (as if it had already expired).
+    fr.lpush("notification_ids", "notif-42")
+
+    ch, method, props = _pika_args()
+    with (
+        patch("app.consumer.get_redis", return_value=fr),
+        patch("app.consumer._instruments", return_value=mock_instruments),
+        patch("app.consumer._mock_email_send"),
+    ):
+        handle_order_created(ch, method, props, _body(order_id=42))
+
+    ids = fr.lrange("notification_ids", 0, -1)
+    assert ids.count("notif-42") == 1
+
+
 def test_happy_path_sets_dedup_key_with_ttl(fr, mock_instruments):
     ch, method, props = _pika_args()
 
@@ -125,7 +149,7 @@ def test_happy_path_sets_dedup_key_with_ttl(fr, mock_instruments):
         handle_order_created(ch, method, props, _body(order_id=5))
 
     assert fr.exists("dedup:5")
-    assert 0 < fr.ttl("dedup:5") <= 3600
+    assert 0 < fr.ttl("dedup:5") <= 86400
 
 
 def test_happy_path_sets_notification_ttl(fr, mock_instruments):
@@ -159,7 +183,7 @@ def test_happy_path_increments_success_counter(fr, mock_instruments):
 
 
 def test_duplicate_message_skips_storage_and_acks(fr, mock_instruments):
-    fr.set("dedup:42", "1", ex=3600)
+    fr.set("dedup:42", "1", ex=86400)
     ch, method, props = _pika_args(delivery_tag=3)
 
     with (
@@ -174,7 +198,7 @@ def test_duplicate_message_skips_storage_and_acks(fr, mock_instruments):
 
 
 def test_duplicate_message_sets_span_attribute(fr, mock_instruments, captured_spans):
-    fr.set("dedup:42", "1", ex=3600)
+    fr.set("dedup:42", "1", ex=86400)
     ch, method, props = _pika_args()
 
     with (
@@ -190,7 +214,7 @@ def test_duplicate_message_sets_span_attribute(fr, mock_instruments, captured_sp
 
 def test_duplicate_message_increments_duplicate_counter(fr, mock_instruments):
     counter, _, _ = mock_instruments
-    fr.set("dedup:42", "1", ex=3600)
+    fr.set("dedup:42", "1", ex=86400)
     ch, method, props = _pika_args()
 
     with (
@@ -222,7 +246,7 @@ def test_dedup_uses_atomic_set_nx_not_exists(mock_instruments):
         handle_order_created(ch, method, props, _body(order_id=77))
 
     mock_redis.exists.assert_not_called()
-    mock_redis.set.assert_any_call("dedup:77", "1", nx=True, ex=3600)
+    mock_redis.set.assert_any_call("dedup:77", "1", nx=True, ex=86400)
 
 
 def test_second_of_two_rapid_deliveries_is_deduped(fr, mock_instruments):

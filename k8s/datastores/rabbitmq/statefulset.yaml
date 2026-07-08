@@ -37,8 +37,13 @@ spec:
             capabilities:
               drop: ["ALL"]
           env:
+            # Purpose-named application user, not the reserved `guest`
+            # account — sourced from db-secrets like the password already was.
             - name: RABBITMQ_DEFAULT_USER
-              value: guest
+              valueFrom:
+                secretKeyRef:
+                  name: db-secrets
+                  key: RABBITMQ_USER
             - name: RABBITMQ_DEFAULT_PASS
               valueFrom:
                 secretKeyRef:

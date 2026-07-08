@@ -32,14 +32,29 @@ For real clusters (EKS with the VPC CNI + NetworkPolicy, GKE with Dataplane V2, 
 | `allow-app-to-alloy-receiver`   | `tier=app`          | Egress         | ns=monitoring, app=alloy-receiver → 4317/4318 |
 | `allow-frontend-egress-https`   | `app=otel-frontend` | Egress         | 0.0.0.0/0:443 (minus cluster CIDRs)           |
 
-### Why `allow-ingress-from-controller` uses `namespaceSelector: {}`
+### Why `allow-ingress-from-controller` targets `kube-system`
 
-The ingress controller on k3d is Traefik in `kube-system`. On EKS it's the ALB controller in `ingress-nginx` or elsewhere. Rather than hardcode the namespace, the policy allows ingress from any namespace — relying on the `namespaceSelector` label filtering the caller side (only one cluster-level ingress controller exists in practice). If you need tighter control, replace the empty selector with:
+The ingress controller on k3d is Traefik in `kube-system`, and this repo's k3d setup never installs
+an alternative (confirmed: no `ingress-nginx`/ALB chart anywhere) — so the policy matches
+`namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}` directly, the same
+idiom `allow-dns-egress` already uses just above it in `network-policies.yaml`.
+
+This used to be an empty selector (`{}` — any namespace), reasoned as "portable" since only one
+cluster-level ingress controller exists in practice. That reasoning doesn't hold up: an empty
+selector means a compromised pod in *any* namespace — including `monitoring` — can hit app-tier
+ports directly, bypassing the ingress controller entirely. Portability across environments (e.g.
+EKS, where the ALB controller lives in `ingress-nginx` instead) belongs in an environment-specific
+overlay patch, not in a permanently-open base default. If you're deploying to a cluster whose
+controller lives elsewhere, add a patch in that overlay's `kustomization.yaml`
+(`k8s/overlays/prod/` already patches other environment-specific values the same way):
 
 ```yaml
-namespaceSelector:
-  matchLabels:
-    kubernetes.io/metadata.name: kube-system
+patches:
+  - target: { kind: NetworkPolicy, name: allow-ingress-from-controller }
+    patch: |
+      - op: replace
+        path: /spec/ingress/0/from/0/namespaceSelector/matchLabels/kubernetes.io~1metadata.name
+        value: ingress-nginx
 ```
 
 ### Egress to Grafana Cloud

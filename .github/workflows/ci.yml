@@ -96,6 +96,18 @@ jobs:
         run: npx jest --config jest.config.js --ci
         working-directory: src/frontend
 
+      # Trivy's frontend scan (build-images job) only ever sees the final
+      # nginx runtime image, after the multi-stage build has already
+      # discarded node_modules/package.json — there was no JS dependency
+      # scanning anywhere in CI. This runs against the real lockfile.
+      # Gated on critical only, not high (matching Trivy's own
+      # ignore-unfixed reasoning below): the 8 current high-severity
+      # findings all require a Angular v17→v20+ major-version migration to
+      # fix — a real, tracked gap, but disproportionate to force here.
+      - name: Scan frontend dependencies for known vulnerabilities
+        run: npm audit --omit=dev --audit-level=critical
+        working-directory: src/frontend
+
   # ── Proto sync ───────────────────────────────────────────────────────────────
   # orders.proto lives in three places: src/proto/ (canonical), and is copied
   # into each service's Protos/ directory at build time. Comments and field
@@ -210,6 +222,18 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      # order-api/gateway-api's .csproj reference ../proto (src/proto/, single
+      # source of truth for orders.proto + OrderValidation.cs) via a relative
+      # path outside their own build context — invisible to docker/build-push-
+      # action's context scoping otherwise. Same staging deploy-local.sh's
+      # build_images() does locally (stage_shared_proto); see either
+      # Dockerfile's COPY proto/ /proto/ comment for the full explanation.
+      - name: Stage shared proto
+        if: matrix.service.name == 'order-api' || matrix.service.name == 'gateway-api'
+        run: |
+          mkdir -p "${{ matrix.service.context }}/proto"
+          cp src/proto/orders.proto src/proto/OrderValidation.cs "${{ matrix.service.context }}/proto/"
+
       # Build once, load locally so Trivy/Syft can scan the same artifact.
       - name: Build ${{ matrix.service.name }}
         id: build
@@ -295,6 +319,23 @@ jobs:
         run: |
           cosign attest --yes --predicate sbom-${{ matrix.service.name }}.cdx.json \
             --type cyclonedx \
+            "${{ steps.push.outputs.image }}@${{ steps.push.outputs.digest }}"
+
+      # Signatures were produced but never verified anywhere downstream —
+      # "we sign our images" provided audit value only, zero enforcement.
+      # This doesn't add admission-time enforcement (still a cluster-scoped
+      # decision — see docs/operations/security.md and supply-chain.md) but
+      # it does mean the sign→verify round-trip is actually exercised on
+      # every push to main, catching config drift in the signing step itself
+      # instead of only ever being checked manually, if at all.
+      - name: Verify signature — ${{ matrix.service.name }}
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign verify \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/ci.yml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "${{ steps.push.outputs.image }}@${{ steps.push.outputs.digest }}"
 
       - name: Upload SBOM artifact

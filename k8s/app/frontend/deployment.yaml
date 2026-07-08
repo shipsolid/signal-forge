@@ -29,26 +29,18 @@ spec:
           image: otel-frontend:local
           imagePullPolicy: Never
           securityContext:
-            # readOnlyRootFilesystem intentionally OMITTED: docker-entrypoint.sh
-            # writes /usr/share/nginx/html/assets/env.js at container start.
+            # readOnlyRootFilesystem is safe now that env.js — the one thing
+            # this container used to write to its own root fs at startup —
+            # comes from a mounted ConfigMap (frontend-env-js, see the volume
+            # below) instead of an entrypoint script. nginx's own writable
+            # paths (cache, pid, client-body temp files) are covered by the
+            # three emptyDir mounts below.
+            readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
           ports:
             - containerPort: 8080
-          env:
-            # Faro collector URL — comes from grafana-cloud-secrets so that cloud vs
-            # local k3d is controlled entirely by make secrets-fetch-akv.
-            # optional: true → if the secret key is absent/empty the env var is unset
-            # and docker-entrypoint.sh falls back to the in-cluster Alloy Faro receiver.
-            - name: FARO_URL
-              valueFrom:
-                secretKeyRef:
-                  name: grafana-cloud-secrets
-                  key: FARO_COLLECTOR_URL
-                  optional: true
-            - name: API_BASE_URL
-              value: "/api"
           resources:
             requests:
               cpu: 20m
@@ -74,4 +66,30 @@ spec:
             preStop:
               exec:
                 command: ["sh", "-c", "sleep 5"]
+          volumeMounts:
+            # Shadows the image's baked-in default env.js with the real
+            # FARO_URL/API_BASE_URL, rendered by deploy-local.sh's
+            # apply_frontend_env_configmap() from the same Grafana Cloud
+            # credentials already resolved for grafana-cloud-secrets. A
+            # pod restart with a changed ConfigMap picks up the new value
+            # immediately — nginx.conf disables caching on this path.
+            - name: frontend-env-js
+              mountPath: /usr/share/nginx/html/assets/env.js
+              subPath: env.js
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: frontend-env-js
+          configMap:
+            name: frontend-env-js
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
       terminationGracePeriodSeconds: 30

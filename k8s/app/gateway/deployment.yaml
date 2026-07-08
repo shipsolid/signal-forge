@@ -84,12 +84,21 @@ spec:
             httpGet:
               path: /healthz
               port: 5000
+              # kubelet's default probe Host header is the pod IP, which
+              # AllowedHosts (appsettings.json) doesn't — and can't, since pod
+              # IPs are ephemeral — list. Pin it to an allow-listed name instead.
+              httpHeaders:
+                - name: Host
+                  value: gateway-api
             initialDelaySeconds: 20
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /healthz
               port: 5000
+              httpHeaders:
+                - name: Host
+                  value: gateway-api
             initialDelaySeconds: 30
             periodSeconds: 15
           lifecycle:

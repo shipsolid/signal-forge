@@ -1,14 +1,15 @@
 import { ApplicationConfig, APP_INITIALIZER, ErrorHandler } from '@angular/core';
 import { provideRouter } from '@angular/router';
-import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { routes } from './app.routes';
 import { initFaro } from './telemetry/faro';
 import { FaroErrorHandler } from './telemetry/faro-error-handler';
+import { resilienceInterceptor } from './services/resilience.interceptor';
 
 export const appConfig: ApplicationConfig = {
   providers: [
     provideRouter(routes),
-    provideHttpClient(),
+    provideHttpClient(withInterceptors([resilienceInterceptor])),
 
     // Initialise Faro RUM before the first component renders.
     // APP_INITIALIZER runs synchronously before bootstrap, so all Angular

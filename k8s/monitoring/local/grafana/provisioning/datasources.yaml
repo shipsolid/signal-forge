@@ -30,7 +30,17 @@ datasources:
     access: proxy
     jsonData:
       derivedFields:
+        # matcherType: label reads the trace_id value directly from Loki
+        # structured metadata (see the Alloy config's loki.process
+        # stage.structured_metadata block) instead of regexing the raw log
+        # line body. The previous matcherRegex ('"trace_id":"(\w+)"') could
+        # never match either source format — .NET's JSON logs use "TraceId",
+        # Python's use "otelTraceID", and neither is literally "trace_id" in
+        # the raw body; that name only exists after Alloy's structured-metadata
+        # promotion. Label-based matching is immune to that raw-format
+        # divergence entirely.
         - name: TraceID
-          matcherRegex: '"trace_id":"(\w+)"'
+          matcherType: label
+          field: trace_id
           url: "$${__value.raw}"
           datasourceUid: jaeger

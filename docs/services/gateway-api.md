@@ -66,7 +66,16 @@ All configuration is via environment variables injected from Kubernetes secrets 
 | `OTEL_SERVICE_NAME`                    | Deployment env                                | Yes      | `gateway-api`                                         |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`          | Deployment env                                | Yes      | `http://grafana-k8s-alloy-receiver.monitoring:4317`   |
 
-`AllowedHosts` in `appsettings.json` is set to `gateway-api,gateway-api.otel-lab,localhost,127.0.0.1` — not wildcard.
+`AllowedHosts` in `appsettings.json` is set to
+`gateway-api,gateway-api.otel-lab.svc.cluster.local,signal-forge.local,localhost,127.0.0.1` — not
+wildcard. That list covers every legitimate caller: the two Service DNS forms (pod-to-pod), the TLS
+ingress hostname, and `localhost`/`127.0.0.1` for the hostless dev ingress rule and direct
+`curl`/port-forward access. kubelet's liveness/readiness probes would otherwise fail this check —
+they default to sending the pod's (ephemeral) IP as the `Host` header — so both probes in
+`k8s/app/gateway/deployment.yaml` pin `httpHeaders: [{name: Host, value: gateway-api}]` explicitly.
+order-api has no external exposure at all, so its `AllowedHosts` is narrower:
+`order-api,order-api.otel-lab.svc.cluster.local` (plus the same `httpHeaders` pin on its own
+probes).
 
 Fail-fast: if `ConnectionStrings__DefaultConnection` is empty at startup, the process throws `InvalidOperationException` immediately. The pod enters `CrashLoopBackOff` and the error is visible in `kubectl describe pod`.
 

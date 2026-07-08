@@ -29,7 +29,13 @@ spec:
   isCA: true
   commonName: signal-forge-ca
   secretName: signal-forge-ca-key-pair
-  duration: 87600h    # 10 years — lab CA root
+  # 10 years — deliberately long-lived so the lab CA never needs manual
+  # rotation. DO NOT copy-paste this duration into a real environment: a
+  # production CA root should rotate on a much shorter cycle (1-3 years is
+  # typical) so a compromised private key has a bounded blast-radius window.
+  # The ACME swap path above (LetsEncrypt / enterprise CA) sidesteps this
+  # entirely by not self-signing at all.
+  duration: 87600h
   renewBefore: 720h   # 30 days
   privateKey:
     algorithm: ECDSA

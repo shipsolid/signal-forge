@@ -47,9 +47,9 @@ data:
         endpoint = "0.0.0.0:4318"
       }
       output {
-        traces  = [otelcol.processor.k8sattributes.default.input]
-        metrics = [otelcol.processor.k8sattributes.default.input]
-        logs    = [otelcol.processor.k8sattributes.default.input]
+        traces  = [otelcol.processor.memory_limiter.default.input]
+        metrics = [otelcol.processor.memory_limiter.default.input]
+        logs    = [otelcol.processor.memory_limiter.default.input]
       }
     }
 
@@ -61,8 +61,25 @@ data:
         cors_allowed_origins = ["*"]
       }
       output {
-        traces = [otelcol.processor.k8sattributes.default.input]
+        traces = [otelcol.processor.memory_limiter.default.input]
         logs   = [loki.write.local.receiver]
+      }
+    }
+
+    // memory_limiter: first stage in the pipeline (per OTel Collector's own
+    // recommendation) — refuses/drops data before an unbounded traffic spike
+    // OOM-kills the pod, instead of the container's memory limit doing it for
+    // us mid-batch. `limit` is set below the container's 512Mi hard limit
+    // (see daemonset.yaml resources.limits.memory) to leave headroom for the
+    // process's own baseline (non-pipeline) memory use.
+    otelcol.processor.memory_limiter "default" {
+      check_interval = "1s"
+      limit          = "400MiB"
+      spike_limit    = "100MiB"
+      output {
+        traces  = [otelcol.processor.k8sattributes.default.input]
+        metrics = [otelcol.processor.k8sattributes.default.input]
+        logs    = [otelcol.processor.k8sattributes.default.input]
       }
     }
 
@@ -231,6 +248,15 @@ data:
         endpoint = "jaeger.otel-lab.svc.cluster.local:4317"
         tls { insecure = true }
       }
+      // Without these, a transient Jaeger blip drops data outright instead of
+      // buffering — sending_queue holds batches in memory across retries;
+      // retry_on_failure backs off and retries before giving up.
+      retry_on_failure {
+        enabled = true
+      }
+      sending_queue {
+        enabled = true
+      }
     }
 
     // Metrics → local Prometheus via remote-write.
@@ -241,15 +267,21 @@ data:
     // env_label transform handles the key service.* and k8s.* attributes
     // explicitly; this block catches anything else (e.g. telemetry.sdk.*).
     otelcol.exporter.prometheus "local" {
-      resource_to_telemetry_conversion {
-        enabled = true
-      }
+      resource_to_telemetry_conversion = true
       forward_to = [prometheus.remote_write.local.receiver]
     }
 
     prometheus.remote_write "local" {
       endpoint {
         url = "http://prometheus.otel-lab.svc.cluster.local:9090/api/v1/write"
+        // WAL-backed queue with explicit backoff — a transient Prometheus
+        // blip retries instead of dropping the write outright.
+        queue_config {
+          capacity    = 2500
+          max_shards  = 10
+          min_backoff = "30ms"
+          max_backoff = "5s"
+        }
       }
     }
 
@@ -339,6 +371,14 @@ data:
     loki.write "local" {
       endpoint {
         url = "http://loki.otel-lab.svc.cluster.local:3100/loki/api/v1/push"
+        // Same reasoning as the other two exporters — explicit backoff +
+        // in-memory queue instead of dropping on a transient Loki blip.
+        min_backoff_period  = "30ms"
+        max_backoff_period  = "5s"
+        max_backoff_retries = 10
+        queue_config {
+          capacity = "10MiB"
+        }
       }
       external_labels = {
         deployment_environment = "signal-forge-dev",

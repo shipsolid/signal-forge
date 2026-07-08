@@ -36,8 +36,11 @@ var builder = WebApplication.CreateBuilder(args);
 var connStr = builder.Configuration.GetConnectionString("DefaultConnection");
 if (string.IsNullOrWhiteSpace(connStr))
     throw new InvalidOperationException("ConnectionStrings:DefaultConnection is required but not configured.");
+// EnableRetryOnFailure covers transient connection blips mid-operation at the ORM
+// layer. It does NOT cover ServerVersion.AutoDetect's own startup connection above —
+// that still throws immediately if MySQL isn't reachable yet at boot.
 builder.Services.AddDbContext<AppDbContext>(opts =>
-    opts.UseMySql(connStr, ServerVersion.AutoDetect(connStr)));
+    opts.UseMySql(connStr, ServerVersion.AutoDetect(connStr), mySqlOpts => mySqlOpts.EnableRetryOnFailure()));
 
 // ── gRPC client → order-api ──────────────────────────────────────────────────
 // Grpc.Net.Client wraps the generated stub with DI-managed channel lifecycle.
@@ -121,7 +124,7 @@ builder.Services.AddOpenTelemetry()
             {
                 // Client identity
                 activity.SetTag("http.user_agent",
-                    request.Headers.UserAgent.ToString());
+                    TruncateForSpanTag(request.Headers.UserAgent.ToString()));
                 activity.SetTag("net.peer.ip",
                     request.HttpContext.Connection.RemoteIpAddress?.ToString());
 
@@ -132,9 +135,12 @@ builder.Services.AddOpenTelemetry()
 
                 // Plant ID — read from custom header injected by the API gateway / WAF.
                 // Leave empty in the lab; real services set this from X-Plant-Id or JWT.
+                // Both this header and User-Agent above are fully client-controlled and
+                // unauthenticated — truncated before landing on a span to bound
+                // trace-storage cost / tag-index abuse from an arbitrarily long value.
                 var plantId = request.Headers["X-Plant-Id"].FirstOrDefault();
                 if (!string.IsNullOrEmpty(plantId))
-                    activity.SetTag("plant.id", plantId);
+                    activity.SetTag("plant.id", TruncateForSpanTag(plantId));
             };
         })
 
@@ -204,6 +210,10 @@ builder.Logging.AddOpenTelemetry(logging =>
 // JSON console output so Alloy can parse TraceId/SpanId from the log lines.
 builder.Logging.AddJsonConsole();
 
+// Caps a client-controlled header value before it lands on a span attribute.
+static string? TruncateForSpanTag(string? value, int maxLength = 256) =>
+    value is null || value.Length <= maxLength ? value : value[..maxLength];
+
 var app = builder.Build();
 
 app.UseCors();
@@ -245,11 +255,3 @@ app.Run();
 
 // Required for WebApplicationFactory<Program> in integration tests.
 public partial class Program { }
-
-// Placeholder required to register AddTransient<InflightMiddleware>.
-// The in-flight tracking is done inline above; this class only satisfies
-// the DI registration used if the middleware were used in UseMiddleware<>.
-public class InflightMiddleware : IMiddleware
-{
-    public Task InvokeAsync(HttpContext context, RequestDelegate next) => next(context);
-}

@@ -12,8 +12,11 @@ What CI verifies before an image can land in production: vulnerability scanning,
 4. **Push** to GHCR (main branch only).
 5. **Sign** with cosign keyless OIDC (main branch only).
 6. **Attest** the SBOM via `cosign attest --type cyclonedx` — binds the SBOM to the image digest.
+7. **Verify** the signature just produced, on the same digest, in the same job (main branch only) — see §Signing below.
 
-PRs run steps 1–3 only; push/sign require `id-token: write` + GHCR auth, which we restrict to `main`.
+PRs run steps 1–3 only; push/sign/verify require `id-token: write` + GHCR auth, which we restrict to `main`.
+
+A separate scheduled workflow, [`scheduled-vuln-rescan.yml`](../../.github/workflows/scheduled-vuln-rescan.yml), re-scans the last-published `:latest` image for each service weekly — same Trivy severities, but *without* `ignore-unfixed`, so a CVE that had no fix at build time still gets caught once one appears upstream. Report-only (`exit-code: "0"`), visible in the Security tab; it doesn't block anything since there's no PR to fail.
 
 ## Trivy policy
 
@@ -42,7 +45,13 @@ Every image gets a cosign signature using the GitHub Actions OIDC identity — n
 - The ref that produced the signature (`refs/heads/main`)
 - The commit SHA
 
-Verify downstream:
+**Verified automatically**: the `build-images` job runs `cosign verify` against the exact digest it
+just signed, in the same job, before the workflow completes — the sign→verify round-trip is
+exercised on every push to `main`, not just documented as something you could do. That catches
+config drift in the signing step itself (wrong identity, wrong issuer, etc.) immediately instead of
+only ever being noticed the first time someone tries to verify manually.
+
+Verify downstream yourself, any time:
 
 ```bash
 cosign verify ghcr.io/OWNER/signal-forge/gateway-api@sha256:... \
@@ -50,7 +59,12 @@ cosign verify ghcr.io/OWNER/signal-forge/gateway-api@sha256:... \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-Admission-time enforcement (refuse to schedule unsigned images) is **not** wired up in this repo — it's a cluster-scoped decision. See §"Admission enforcement" below.
+**Admission-time enforcement** (refuse to *schedule* an unsigned image at deploy time) is still
+**not** wired up in this repo — that's a cluster-scoped decision, and a materially bigger lift than
+verifying in CI (it needs an admission controller installed in the target cluster). See
+§"Admission enforcement" below. What changed here is narrower but real: "we sign our images" used
+to mean the signature was produced and never checked again by anything; now it's checked, by CI,
+on every push.
 
 ## Digest pinning in base images
 
@@ -94,10 +108,10 @@ To reject unsigned images at deploy time, install one of:
 [connaisseur]: https://github.com/sse-secure-systems/connaisseur
 [kyverno]: https://kyverno.io/docs/writing-policies/verify-images/
 
-None of these are installed in the lab. The CI signing side ships signatures so they're _available_ for verification; we just don't gate on them yet.
+None of these are installed in the lab. The CI signing side ships signatures and now verifies them
+itself (see §Signing above); no cluster gates on them at deploy time yet.
 
 ## What this doesn't cover
 
-- **Dependency pinning in app code**: `dotnet restore`, `npm ci`, `pip install -r requirements.txt` respect lockfiles but we don't run `npm audit fix` / Dependabot proactively. PRs pass dependency-vulnerability scans (`dotnet list package --vulnerable`, `pip-audit`); update cadence is ad-hoc.
+- **Dependency pinning in app code**: `dotnet restore`, `npm ci`, `pip install -r requirements.txt` respect lockfiles but we don't run `npm audit fix` / Dependabot proactively. PRs pass dependency-vulnerability scans (`dotnet list package --vulnerable`, `pip-audit`, `npm audit --audit-level=critical` in the `test-frontend` job); update cadence is ad-hoc.
 - **Container image provenance (SLSA)**: our signing stops at "this image was built by this workflow"; it doesn't assert SLSA L3 hermeticity. For that, use `slsa-framework/slsa-github-generator` to produce a SLSA provenance attestation alongside the SBOM.
-- **Secrets scanning in source.** No `trufflehog` / `gitleaks` in CI. Add if you find yourself committing real tokens.

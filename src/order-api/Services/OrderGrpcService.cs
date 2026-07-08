@@ -42,6 +42,7 @@ using OrderApi.Data;
 using OrderApi.Models;
 using OrderApi.Protos;
 using OrderApi.Telemetry;
+using OrderContracts;
 
 namespace OrderApi.Services;
 
@@ -74,10 +75,10 @@ public class OrderGrpcService : Protos.OrderService.OrderServiceBase
     {
         if (request.ProjectId <= 0)
             throw new RpcException(new Status(StatusCode.InvalidArgument, "ProjectId must be a positive integer."));
-        if (request.Amount <= 0 || request.Amount > 999_999.99)
-            throw new RpcException(new Status(StatusCode.InvalidArgument, "Amount must be between 0.01 and 999999.99."));
-        if (string.IsNullOrWhiteSpace(request.Description) || request.Description.Length > 500)
-            throw new RpcException(new Status(StatusCode.InvalidArgument, "Description is required and must be 500 characters or fewer."));
+        if (request.Amount <= 0 || request.Amount > OrderLimits.MaxAmount)
+            throw new RpcException(new Status(StatusCode.InvalidArgument, $"Amount must be between 0.01 and {OrderLimits.MaxAmount}."));
+        if (string.IsNullOrWhiteSpace(request.Description) || request.Description.Length > OrderLimits.MaxDescriptionLength)
+            throw new RpcException(new Status(StatusCode.InvalidArgument, $"Description is required and must be {OrderLimits.MaxDescriptionLength} characters or fewer."));
 
         var sw = Stopwatch.StartNew();
 
@@ -162,17 +163,14 @@ public class OrderGrpcService : Protos.OrderService.OrderServiceBase
         sw.Stop();
 
         // Record the processing duration as a histogram observation.
-        // project_id is a dimension so you can analyse per-project latency.
-        DiagnosticsConfig.ProcessingDuration.Record(sw.Elapsed.TotalMilliseconds,
-            new KeyValuePair<string, object?>("project_id", request.ProjectId));
+        // No project_id dimension — see DiagnosticsConfig.cs for why. Per-project
+        // drill-down goes through the order.project_id span attribute (set above)
+        // and its trace-based exemplar on this histogram instead.
+        DiagnosticsConfig.ProcessingDuration.Record(sw.Elapsed.TotalMilliseconds);
 
         // Increment the orders counter and running total.
-        // These counters are additive — calling rate() on them in PromQL
-        // gives you orders per second per project.
-        DiagnosticsConfig.OrdersCreated.Add(1,
-            new KeyValuePair<string, object?>("project_id", request.ProjectId));
-        DiagnosticsConfig.OrdersAmount.Add(request.Amount,
-            new KeyValuePair<string, object?>("project_id", request.ProjectId));
+        DiagnosticsConfig.OrdersCreated.Add(1);
+        DiagnosticsConfig.OrdersAmount.Add(request.Amount);
 
         _logger.LogInformation(
             "Created order {OrderId} for project {ProjectId}, amount {Amount}. TraceId: {TraceId}",

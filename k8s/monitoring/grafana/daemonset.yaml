@@ -23,52 +23,13 @@ spec:
             - run
             - /etc/alloy/config.river
             - --storage.path=/var/lib/alloy/data
-          env:
-            # Grafana Cloud credentials sourced from grafana-cloud-secrets.
-            # Populated via: make secrets-fetch-akv (pulls from Azure Key Vault).
-            # Each signal has its own numeric instance ID (username); API key is shared.
-            - name: GRAFANA_CLOUD_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: grafana-cloud-secrets
-                  key: GRAFANA_CLOUD_API_KEY
-                  optional: true
-            - name: GRAFANA_CLOUD_TEMPO_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: grafana-cloud-secrets
-                  key: GRAFANA_CLOUD_TEMPO_ENDPOINT
-                  optional: true
-            - name: GRAFANA_CLOUD_TEMPO_USER
-              valueFrom:
-                secretKeyRef:
-                  name: grafana-cloud-secrets
-                  key: GRAFANA_CLOUD_TEMPO_USER
-                  optional: true
-            - name: GRAFANA_CLOUD_MIMIR_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: grafana-cloud-secrets
-                  key: GRAFANA_CLOUD_MIMIR_ENDPOINT
-                  optional: true
-            - name: GRAFANA_CLOUD_MIMIR_USER
-              valueFrom:
-                secretKeyRef:
-                  name: grafana-cloud-secrets
-                  key: GRAFANA_CLOUD_MIMIR_USER
-                  optional: true
-            - name: GRAFANA_CLOUD_LOKI_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: grafana-cloud-secrets
-                  key: GRAFANA_CLOUD_LOKI_ENDPOINT
-                  optional: true
-            - name: GRAFANA_CLOUD_LOKI_USER
-              valueFrom:
-                secretKeyRef:
-                  name: grafana-cloud-secrets
-                  key: GRAFANA_CLOUD_LOKI_USER
-                  optional: true
+          # No GRAFANA_CLOUD_* env vars here — this DaemonSet is the mode=local
+          # config (k8s/monitoring/grafana/local/configmap.yaml), which routes
+          # everything to in-cluster Jaeger/Prometheus/Loki only and never
+          # references any Grafana Cloud credential. Cloud mode doesn't deploy
+          # this DaemonSet at all (see monitoring.manifests.cloud: [] in
+          # conf.yml) — it uses the grafana/k8s-monitoring Helm chart instead,
+          # which reads grafana-cloud-secrets itself.
           ports:
             - name: otlp-grpc
               containerPort: 4317

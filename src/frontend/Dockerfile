@@ -30,12 +30,15 @@ FROM nginxinc/nginx-unprivileged:alpine@sha256:ede1d5af209ef9d29c902e0775ae850ce
 USER root
 COPY --from=build /app/dist/otel-frontend /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-# Entrypoint writes runtime env vars into assets/env.js before nginx starts.
-# Override FARO_URL and API_BASE_URL via K8s Deployment env vars.
-COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh \
+# Baked-in default env.js — used as-is for a bare `docker run` (no runtime
+# config injection outside K8s). In-cluster, deploy-local.sh's
+# frontend-env-js ConfigMap is mounted read-only over this exact path via
+# `subPath`, shadowing this default with the real FARO_URL/API_BASE_URL — no
+# entrypoint script needed, and the mount is compatible with
+# readOnlyRootFilesystem: true (see k8s/app/frontend/deployment.yaml).
+RUN printf 'window.__ENV = {\n  FARO_URL: "",\n  API_BASE_URL: "/api"\n};\n' \
+      > /usr/share/nginx/html/assets/env.js \
     && chown -R 101:101 /usr/share/nginx/html
 USER 101
 EXPOSE 8080
-ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["nginx", "-g", "daemon off;"]
+ENTRYPOINT ["nginx", "-g", "daemon off;"]

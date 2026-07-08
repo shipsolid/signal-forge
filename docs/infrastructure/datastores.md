@@ -177,12 +177,13 @@ traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
 
 ### Credentials
 
-Default credentials: `guest/guest`. In production, change these and store in the `db-secrets`
-Secret.
+Default credentials: `signalforge/guest` (purpose-named application user, not the reserved `guest`
+account — see `RABBITMQ_USER`/`RABBITMQ_PASSWORD` in the `db-secrets` Secret). Rotate both in
+production the same way the DB passwords are rotated.
 
 ### Inspecting message flow
 
-Management UI at `http://localhost:15672` (guest/guest):
+Management UI at `http://localhost:15672` (signalforge/guest):
 
 - Queues tab → `notifications` → Get Message: inspect headers to verify `traceparent` is present
 - Queues tab → `notifications.dlq`: inspect dead-lettered messages for debugging

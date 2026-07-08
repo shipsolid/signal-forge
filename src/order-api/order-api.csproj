@@ -25,14 +25,22 @@
     <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.9.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.GrpcNetClient" Version="1.9.0-beta.1" />
     <PackageReference Include="OpenTelemetry.Instrumentation.EntityFrameworkCore" Version="1.0.0-beta.12" />
-    <PackageReference Include="Npgsql.OpenTelemetry" Version="8.0.3" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.9.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.9.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Process" Version="0.5.0-beta.6" />
   </ItemGroup>
 
   <ItemGroup>
-    <Protobuf Include="Protos\orders.proto" GrpcServices="Server" />
+    <Protobuf Include="..\proto\orders.proto" GrpcServices="Server" />
+    <Compile Include="..\proto\OrderValidation.cs" Link="OrderValidation.cs" />
+    <!-- Docker build context is scoped to this directory, so ../proto above is
+         invisible to `docker build`; deploy-local.sh/CI stage a copy at a local
+         ./proto instead (see Dockerfile's COPY proto/ /proto/ comment). Without
+         this Remove, the SDK's implicit **/*.cs glob would also pick up that
+         staged copy, double-compiling OrderValidation.cs. Never applies to a
+         plain `dotnet build`/`dotnet test` — that local ./proto only exists
+         transiently during a Docker build. -->
+    <Compile Remove="proto\**\*.cs" />
   </ItemGroup>
 
   <ItemGroup>

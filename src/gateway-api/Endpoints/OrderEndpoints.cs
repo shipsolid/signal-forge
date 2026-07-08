@@ -2,6 +2,7 @@ using GatewayApi.Telemetry;
 using Grpc.Core;
 using OpenTelemetry.Trace;
 using OrderApi.Protos;
+using OrderContracts;
 using System.Diagnostics;
 using OrderServiceClient = OrderApi.Protos.OrderService.OrderServiceClient;
 
@@ -24,17 +25,18 @@ public static class OrderEndpoints
     static async Task<IResult> CreateOrder(
         CreateOrderDto dto,
         OrderServiceClient orderClient,
+        HttpContext httpContext,
         ILogger<Program> logger)
     {
         if (dto.ProjectId <= 0)
             return Results.ValidationProblem(new Dictionary<string, string[]>
                 { ["projectId"] = ["ProjectId must be a positive integer."] });
-        if (dto.Amount <= 0 || dto.Amount > 999_999.99)
+        if (dto.Amount <= 0 || dto.Amount > OrderLimits.MaxAmount)
             return Results.ValidationProblem(new Dictionary<string, string[]>
-                { ["amount"] = ["Amount must be between 0.01 and 999999.99."] });
-        if (string.IsNullOrWhiteSpace(dto.Description) || dto.Description.Length > 500)
+                { ["amount"] = [$"Amount must be between 0.01 and {OrderLimits.MaxAmount}."] });
+        if (string.IsNullOrWhiteSpace(dto.Description) || dto.Description.Length > OrderLimits.MaxDescriptionLength)
             return Results.ValidationProblem(new Dictionary<string, string[]>
-                { ["description"] = ["Description is required and must be 500 characters or fewer."] });
+                { ["description"] = [$"Description is required and must be {OrderLimits.MaxDescriptionLength} characters or fewer."] });
 
         // ActivityKind.Client: this span initiates an outbound call to order-api.
         // Kind=Client is the OTel convention for synchronous RPC/HTTP client spans.
@@ -55,7 +57,7 @@ public static class OrderEndpoints
                 Description = dto.Description,
                 Amount = dto.Amount,
                 IdempotencyKey = idempotencyKey
-            });
+            }, httpContext.PlantIdMetadata());
 
             sw.Stop();
             DiagnosticsConfig.DownstreamDuration.Record(sw.Elapsed.TotalMilliseconds,
@@ -97,6 +99,7 @@ public static class OrderEndpoints
     static async Task<IResult> GetOrder(
         int id,
         OrderServiceClient orderClient,
+        HttpContext httpContext,
         ILogger<Program> logger)
     {
         using var activity = DiagnosticsConfig.ActivitySource.StartActivity("gateway.fanout", ActivityKind.Client);
@@ -104,7 +107,7 @@ public static class OrderEndpoints
 
         try
         {
-            var response = await orderClient.GetOrderAsync(new GetOrderRequest { OrderId = id });
+            var response = await orderClient.GetOrderAsync(new GetOrderRequest { OrderId = id }, httpContext.PlantIdMetadata());
             return Results.Ok(new
             {
                 id = response.Id,
@@ -219,4 +222,6 @@ public static class OrderEndpoints
     static IResult HealthCheck() => Results.Ok(new { status = "healthy" });
 }
 
+// Amount is double to mirror orders.proto's wire type — see that file's comment
+// for why this is an accepted lab-scale tradeoff rather than an oversight.
 public record CreateOrderDto(int ProjectId, string Description, double Amount);

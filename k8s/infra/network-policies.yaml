@@ -48,8 +48,21 @@ spec:
           port: 53
 ---
 # Ingress from the cluster ingress-controller (traefik on k3d) into app pods.
-# Matches by namespace label — works with both stock k3d (kube-system traefik)
-# and dedicated ingress namespaces.
+# Matches by namespace label — kube-system, where Traefik actually runs on
+# this repo's k3d setup (confirmed: no ingress-nginx/ALB controller is
+# installed anywhere). Previously an empty namespaceSelector ({}) — any
+# namespace, not just the ingress controller's — which materially weakened
+# the "default-deny + tiered allow" story: a compromised pod in ANY namespace
+# (including monitoring) could hit these ports directly, bypassing the
+# ingress controller entirely.
+#
+# Deploying to a cluster whose ingress controller lives elsewhere (e.g. AWS
+# ALB controller in ingress-nginx on EKS)? Add an overlay patch here the same
+# way k8s/overlays/prod/kustomization.yaml already patches other
+# environment-specific values — replace this namespaceSelector's
+# matchLabels.kubernetes.io/metadata.name with the real controller namespace.
+# Don't revert to {} for portability; that reopens exactly the gap described
+# above.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -62,7 +75,9 @@ spec:
   policyTypes: ["Ingress"]
   ingress:
     - from:
-        - namespaceSelector: {}   # any namespace — traefik lives in kube-system on k3d
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
       ports:
         - protocol: TCP
           port: 5000   # gateway-api

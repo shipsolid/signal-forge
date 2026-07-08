@@ -282,11 +282,13 @@ Log records emitted in request handlers include a manually injected `TraceId` st
 
 | Instrument name              | Type                | Unit      | Dimensions   | Prometheus name                                              |
 | ---------------------------- | ------------------- | --------- | ------------ | ------------------------------------------------------------ |
-| `orders.created.total`       | Counter\<long\>     | `{order}` | `project_id` | `orders_created_total`                                       |
-| `orders.amount.total`        | Counter\<double\>   | `USD`     | `project_id` | `orders_amount_total`                                        |
-| `orders.processing.duration` | Histogram\<double\> | `ms`      | `project_id` | `orders_processing_duration_milliseconds_{bucket,count,sum}` |
+| `orders.created.total`       | Counter\<long\>     | `{order}` | none | `orders_created_total`                                       |
+| `orders.amount.total`        | Counter\<double\>   | `USD`     | none | `orders_amount_total`                                        |
+| `orders.processing.duration` | Histogram\<double\> | `ms`      | none | `orders_processing_duration_milliseconds_{bucket,count,sum}` |
 
-**`orders.processing.duration`** measures wall-clock time from the start of `order.create` to completion of `OrderPublisher.Publish()`, capturing DB write + message publish latency end-to-end. Because this recording happens inside a sampled trace, it carries a trace exemplar.
+None of these carry a `project_id` dimension — it's unbounded (grows with every project ever created), and this project's own engineering principles flag unbounded/high-churn labels as an automatic stop for metrics. Per-project drill-down uses the `order.project_id` span attribute (set on `order.create`) and this histogram's trace-based exemplar instead — both can safely carry high-cardinality IDs.
+
+**`orders.processing.duration`** measures wall-clock time from the start of `order.create` to the DB write committing — not to completion of `OrderPublisher.Publish()`, which no longer happens inline (see the outbox pattern: `OutboxRelayWorker` publishes later, out-of-band, in its own poll loop). Because this recording happens inside a sampled trace, it carries a trace exemplar.
 
 #### Standard instruments
 

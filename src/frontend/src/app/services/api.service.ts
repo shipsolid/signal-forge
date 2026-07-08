@@ -33,9 +33,9 @@ export interface Notification {
 /**
  * ApiService is the single HTTP boundary between the Angular SPA and gateway-api.
  *
- * All calls go to `window.__ENV.API_BASE_URL` (injected at container startup by
- * docker-entrypoint.sh — see assets/env.js), falling back to
- * `environment.apiBaseUrl` for local `ng serve` where env.js is never overwritten.
+ * All calls go to `window.__ENV.API_BASE_URL` (mounted from a ConfigMap in K8s
+ * — see assets/env.js), falling back to `environment.apiBaseUrl` for local
+ * `ng serve` where env.js is never overwritten.
  * Same pattern as faro.ts's FARO_URL — see that file for why `||` and not `??`.
  * This is what actually makes the Deployment's `API_BASE_URL` env var do
  * anything; reading only `environment.apiBaseUrl` here would silently ignore it.

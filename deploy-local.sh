@@ -303,10 +303,11 @@ build_images() {
   local count
   count="$(python3 -c "import yaml; print(len(yaml.safe_load(open('$CONF'))['images']['builds']))")"
   for (( i=0; i<count; i++ )); do
-    local name ctx inject
+    local name ctx inject stage_proto
     name="$(yq "images.builds[$i].name")"
     ctx="$(yq "images.builds[$i].context")"
     inject="$(yq "images.builds[$i].inject_ca")"
+    stage_proto="$(yq "images.builds[$i].stage_shared_proto")"
     local ctx_abs="${SCRIPT_DIR}/${ctx}"
 
     log "build: $name:$IMG_TAG  (context: $ctx)"
@@ -321,8 +322,29 @@ build_images() {
       else
         : > "$staged_ca"
       fi
-      trap '[[ -n "${staged_ca:-}" && -f "$staged_ca" ]] && rm -f "$staged_ca"' EXIT
     fi
+
+    # Docker build context is scoped to $ctx_abs — order-api/gateway-api's
+    # .csproj references ../proto (src/proto/, the single source of truth
+    # for orders.proto + OrderValidation.cs), which is outside that context
+    # and invisible to `docker build` no matter what relative path the
+    # .csproj uses. Stage a copy at $ctx_abs/proto/ so the Dockerfile's
+    # `COPY proto/ /proto/` can put it where the container's /src/../proto
+    # (i.e. /proto) resolution expects it. Direct `dotnet build`/`dotnet test`
+    # outside Docker are unaffected — they resolve ../proto against the real
+    # filesystem, not a build context.
+    local staged_proto=""
+    if [[ "$stage_proto" == "True" || "$stage_proto" == "true" ]]; then
+      staged_proto="${ctx_abs}/proto"
+      rm -rf "$staged_proto"
+      mkdir -p "$staged_proto"
+      cp "${SCRIPT_DIR}/src/proto/orders.proto" "${SCRIPT_DIR}/src/proto/OrderValidation.cs" "$staged_proto/"
+    fi
+
+    trap '
+      [[ -n "${staged_ca:-}" && -f "$staged_ca" ]] && rm -f "$staged_ca"
+      [[ -n "${staged_proto:-}" && -d "$staged_proto" ]] && rm -rf "$staged_proto"
+    ' EXIT
 
     # Collect build args from shell env + conf.yml (env wins on conflict).
     # Warn on unresolved build_args_from_env entries.
@@ -346,6 +368,10 @@ build_images() {
     if [[ -n "$staged_ca" && -f "$staged_ca" ]]; then
       rm -f "$staged_ca"
       staged_ca=""
+    fi
+    if [[ -n "$staged_proto" && -d "$staged_proto" ]]; then
+      rm -rf "$staged_proto"
+      staged_proto=""
     fi
   done
 }
@@ -490,6 +516,33 @@ secret = {
 print(yaml.safe_dump(secret, sort_keys=False), end="")
 PY
   done
+}
+
+# Frontend runtime config (env.js). Rendered straight from the already-resolved
+# GC_FARO_ENDPOINT value — no K8s Secret round-trip needed, this ConfigMap IS
+# the delivery mechanism now, mounted read-only via subPath so the frontend
+# container can run with readOnlyRootFilesystem: true (see
+# k8s/app/frontend/deployment.yaml; the image's baked-in default env.js is
+# what a bare `docker run` without this ConfigMap falls back to).
+apply_frontend_env_configmap() {
+  log "kubectl apply — frontend-env-js ConfigMap → ns/$NAMESPACE"
+  python3 - "$NAMESPACE" "$GC_FARO_ENDPOINT" <<'PY' | kubectl apply -f -
+import sys, yaml
+namespace, faro_url = sys.argv[1], sys.argv[2]
+env_js = (
+    "window.__ENV = {\n"
+    f'  FARO_URL: "{faro_url}",\n'
+    '  API_BASE_URL: "/api"\n'
+    "};\n"
+)
+cm = {
+    "apiVersion": "v1",
+    "kind": "ConfigMap",
+    "metadata": {"name": "frontend-env-js", "namespace": namespace},
+    "data": {"env.js": env_js},
+}
+print(yaml.safe_dump(cm, sort_keys=False), end="")
+PY
 }
 
 wait_datastores() {
@@ -784,6 +837,7 @@ fi
 apply_stage infra
 apply_app_env_configmap
 apply_grafana_cloud_secret
+apply_frontend_env_configmap
 install_cert_manager
 apply_stage datastores
 wait_datastores

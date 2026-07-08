@@ -171,7 +171,7 @@ kubectl apply -k k8s/overlays/dev           # apply dev overlay
 ### Endpoints (after deploy)
 
 - `http://localhost:8080` — Frontend + `/api/*` → gateway-api (always)
-- `http://localhost:15672` — RabbitMQ Management, guest/guest (always)
+- `http://localhost:15672` — RabbitMQ Management, signalforge/guest (always)
 - `http://localhost:3000 | :16686 | :9090` — Grafana / Jaeger / Prometheus (local mode only)
 - `https://signal-forge.local:8443` — TLS frontend (requires `security.tls.enabled` + `/etc/hosts`)
 - Helm chart's alloy-receiver UI:

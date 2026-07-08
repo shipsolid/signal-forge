@@ -10,12 +10,25 @@ public static class DiagnosticsConfig
     public static readonly ActivitySource ActivitySource = new(ServiceName);
     public static readonly Meter Meter = new(ServiceName);
 
+    // No project_id dimension on any instrument below — project_id is
+    // unbounded (grows with every project ever created), and this project's
+    // own engineering principles flag unbounded/high-churn labels as an
+    // automatic stop for metrics. Per-project drill-down uses the
+    // order.project_id span attribute + trace-based exemplars instead, which
+    // can safely carry high-cardinality IDs. Keep it that way — don't add a
+    // project_id tag back onto these without a relabel/drop rule or a stated
+    // cardinality bound.
     public static readonly Counter<long> OrdersCreated =
         Meter.CreateCounter<long>(
             "orders.created.total",
             unit: "{order}",
-            description: "Total number of orders created, by project");
+            description: "Total number of orders created");
 
+    // Counter<double>: OTel's Counter<T> only supports long/double anyway, so this
+    // was never going to be decimal-precise — same accepted lab-scale tradeoff as
+    // the proto's `amount` field (see orders.proto). Metric aggregation doesn't
+    // need decimal precision; the DB row (Order.Amount) is the source of truth
+    // and is already `decimal`.
     public static readonly Counter<double> OrdersAmount =
         Meter.CreateCounter<double>(
             "orders.amount.total",

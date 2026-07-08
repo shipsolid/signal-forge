@@ -1,6 +1,6 @@
 # Container & Pod Hardening
 
-Every workload in signal-forge runs under the [Kubernetes Pod Security Standards "restricted" profile][pss] (with one documented exception — see §Frontend). This page is the reference for _what_ is hardened, _where_ it's set, and _why_ each control is there.
+Every workload in signal-forge runs under the [Kubernetes Pod Security Standards "restricted" profile][pss] — no exceptions. This page is the reference for _what_ is hardened, _where_ it's set, and _why_ each control is there.
 
 [pss]: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
 
@@ -14,7 +14,7 @@ Every workload in signal-forge runs under the [Kubernetes Pod Security Standards
 | `seccompProfile: RuntimeDefault`  | ✓         |                 | Default seccomp filter rejects unusual syscalls                                        |
 | `allowPrivilegeEscalation: false` |           | ✓               | Blocks `setuid` / `fcaps` escalation                                                   |
 | `capabilities.drop: [ALL]`        |           | ✓               | No Linux capabilities granted                                                          |
-| `readOnlyRootFilesystem: true`    |           | ✓               | Where feasible (see §Datastores + §Frontend) — emptyDir `/tmp` provided where required |
+| `readOnlyRootFilesystem: true`    |           | ✓               | Enforced everywhere (see §Datastores + §Frontend) — emptyDir provided wherever a workload needs a writable path |
 
 ## Per-image UID mapping
 
@@ -45,25 +45,25 @@ Changing any of these UIDs is a two-file change: the Dockerfile's `USER` directi
 - **No secrets in layers**. `FARO_API_KEY` is the only `ARG` we accept, and webpack inlines it at build time into the bundle — it's a user-side source-map upload token, not a server-side secret.
 - **USER as the last instruction before ENTRYPOINT**. Everything after `USER` runs as non-root, including the entrypoint.
 
-## Frontend: the documented exception
+## Frontend: no longer an exception
 
-`readOnlyRootFilesystem` is **not** set on the frontend because `docker-entrypoint.sh` writes `/usr/share/nginx/html/assets/env.js` at container start to inject runtime env vars (`FARO_URL`, `API_BASE_URL`). Making this path writable requires either:
+`readOnlyRootFilesystem: true` **is** set on the frontend. It used to be omitted because
+`docker-entrypoint.sh` wrote `/usr/share/nginx/html/assets/env.js` into the container's own root
+filesystem at startup to inject runtime env vars (`FARO_URL`, `API_BASE_URL`) — neither an
+initContainer nor an extra `emptyDir` for the whole `assets/` directory was actually needed once
+volume-mount semantics are used correctly: `env.js` is now a single-key `frontend-env-js` ConfigMap
+(rendered by `deploy-local.sh`'s `apply_frontend_env_configmap()`, straight from the same Grafana
+Cloud credentials already resolved for `grafana-cloud-secrets` — no Secret round-trip) mounted with
+`subPath` directly over that one file. Volume mounts are exempt from `readOnlyRootFilesystem`, so
+the entrypoint script is gone entirely — the image's `ENTRYPOINT` now just runs `nginx` directly,
+and the Dockerfile bakes in a default `env.js` (used as-is for a bare `docker run` outside K8s) that
+the ConfigMap mount shadows in-cluster.
 
-1. An `emptyDir` volume mounted at `/usr/share/nginx/html/assets` plus an init container that copies the baked-in assets there — adds complexity, saves one write location.
-2. An `initContainer` that writes `env.js` before the main container starts and then the main container keeps `readOnlyRootFilesystem: true` — same complexity, slightly cleaner separation.
+nginx's own writable paths (`/var/cache/nginx`, `/var/run`, and `/tmp` for client-body temp files)
+are covered by three `emptyDir` mounts — the same idiom already used for Redis's `/data` below.
 
-The current tradeoff is explicit in [k8s/app/frontend/deployment.yaml](../../k8s/app/frontend/deployment.yaml) via an inline comment:
-
-```yaml
-securityContext:
-  # readOnlyRootFilesystem intentionally OMITTED: docker-entrypoint.sh
-  # writes /usr/share/nginx/html/assets/env.js at container start.
-  allowPrivilegeEscalation: false
-  capabilities:
-    drop: ["ALL"]
-```
-
-The other four restricted-profile controls (non-root, drop ALL caps, no priv-esc, seccomp) _are_ enforced. If you decide this tradeoff is wrong, option (2) above is the smallest patch — a ~20-line initContainer.
+All five restricted-profile controls (non-root, drop ALL caps, no priv-esc, seccomp,
+`readOnlyRootFilesystem`) are now enforced on every workload in this repo, no exceptions.
 
 ## Datastores: what's different
 
@@ -98,7 +98,7 @@ kubectl -n otel-lab get pods -l tier=app -o jsonpath='{range .items[*]}{.metadat
 # No container holds any capabilities:
 kubectl -n otel-lab get pods -l tier=app -o jsonpath='{range .items[*]}{.metadata.name}{"  caps="}{.spec.containers[0].securityContext.capabilities}{"\n"}{end}'
 
-# Root filesystem is read-only (expect true for all except otel-frontend):
+# Root filesystem is read-only (expect true for every pod, no exceptions):
 kubectl -n otel-lab get pods -o jsonpath='{range .items[*]}{.metadata.name}{"  readOnly="}{.spec.containers[0].securityContext.readOnlyRootFilesystem}{"\n"}{end}'
 ```
 

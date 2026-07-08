@@ -25,6 +25,11 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
         builder.UseSetting("ConnectionStrings:DefaultConnection", "Server=test;Database=test;User=test;Password=test");
         builder.UseSetting("OrderApi:Address", "http://localhost:5001");
         builder.UseSetting("NotificationSvc:Address", "http://localhost:8000");
+        // appsettings.json's real AllowedHosts allow-list is scoped to actual
+        // cluster/ingress hostnames — TestServer's in-memory Host header isn't
+        // one of them. These endpoint tests aren't exercising host filtering
+        // itself, so relax it here rather than coupling every test to it.
+        builder.UseSetting("AllowedHosts", "*");
 
         builder.ConfigureServices(services =>
         {
