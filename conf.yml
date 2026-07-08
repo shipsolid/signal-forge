@@ -129,12 +129,20 @@ datastore_ready:
   timeout: 600s
 
 # ─── Observability (SLOs, alerts) ───────────────────────────────────────────
-# SLO rules ship as a PrometheusRule CRD. Requires kube-prometheus-stack OR
-# grafana/k8s-monitoring with prometheusOperatorObjects.enabled=true. Leave
-# disabled by default so lab clusters without Prom-Op CRDs still deploy clean.
+# k8s/monitoring/slo-rules.yaml is a bare Prometheus rule file (no CRD
+# dependency — see that file's header). Two evaluation paths, gated by this
+# one flag:
+#   mode=local  deploy-local.sh's apply_local_slo_rules() loads it straight
+#               into the vanilla Prometheus Deployment via rule_files: —
+#               fully automatic, safe to leave enabled.
+#   mode=cloud  Grafana Cloud Mimir doesn't consume this file on its own —
+#               run ./scripts/push-slo-rules-to-mimir.sh manually to load it
+#               into the Ruler API (deploy-local.sh just reminds you to).
+# If kube-prometheus-stack happens to be installed, deploy-local.sh's
+# apply_slo_rules() wraps the same file into a PrometheusRule on the fly.
 observability:
   slo_rules:
-    enabled: false
+    enabled: true
     manifest: k8s/monitoring/slo-rules.yaml
 
 # ─── Security (TLS, PSP/PSA, image signing expectations) ─────────────────────

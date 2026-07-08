@@ -26,6 +26,10 @@ spec:
             # Without this, Prometheus silently discards exemplars attached to
             # histogram observations and Grafana cannot render click-to-trace dots.
             - "--enable-feature=exemplar-storage"
+            # Enables POST /-/reload so deploy-local.sh can pick up SLO rule
+            # changes on a redeploy without restarting the pod (and losing the
+            # ephemeral TSDB below).
+            - "--web.enable-lifecycle"
           ports:
             - containerPort: 9090
           resources:
@@ -40,6 +44,8 @@ spec:
               mountPath: /etc/prometheus
             - name: data
               mountPath: /prometheus
+            - name: slo-rules
+              mountPath: /etc/prometheus/rules
       volumes:
         - name: config
           configMap:
@@ -48,6 +54,12 @@ spec:
           # emptyDir is intentionally ephemeral for the lab.
           # On pod restart, metric history is lost. Use a PVC in production.
           emptyDir: {}
+        - name: slo-rules
+          # Generated imperatively by deploy-local.sh's apply_local_slo_rules()
+          # from k8s/monitoring/slo-rules.yaml — not a static manifest in this
+          # directory, so there's only ever one copy of the rule content.
+          configMap:
+            name: prometheus-slo-rules
 ---
 apiVersion: v1
 kind: Service

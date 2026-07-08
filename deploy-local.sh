@@ -580,24 +580,84 @@ if missing:
 PY
 }
 
-# SLO rules (PrometheusRule CRD). Gated on observability.slo_rules.enabled because
-# the CRDs aren't installed in every cluster.
-apply_slo_rules() {
-  local enabled rel
+# SLO rules — local mode. k8s/monitoring/slo-rules.yaml is a bare Prometheus
+# rule file (no CRD dependency); load it straight into the vanilla Prometheus
+# Deployment via a generated ConfigMap + rule_files:. Single source of truth —
+# see that file's header comment for the full consumption story.
+apply_local_slo_rules() {
+  [[ "${MONITORING_MODE:-local}" == "local" ]] || return
+  local enabled rel path
   enabled="$(yq observability.slo_rules.enabled)"
   if [[ "$enabled" != "True" && "$enabled" != "true" ]]; then
     return
   fi
   rel="$(yq observability.slo_rules.manifest)"
   [[ -n "$rel" ]] || { warn "observability.slo_rules.enabled=true but manifest path missing"; return; }
-  local path="${SCRIPT_DIR}/${rel}"
+  path="${SCRIPT_DIR}/${rel}"
   [[ -f "$path" ]] || die "slo rules manifest not found: $path"
-  if ! kubectl get crd prometheusrules.monitoring.coreos.com >/dev/null 2>&1; then
-    warn "PrometheusRule CRD not installed — skipping SLO rule apply. Install kube-prometheus-stack or flip prometheusOperatorObjects.enabled in values-cloud.yaml.tmpl."
+
+  log "kubectl apply — prometheus-slo-rules ConfigMap (from $rel)"
+  kubectl create configmap prometheus-slo-rules \
+    --from-file="slo-rules.yml=${path}" \
+    -n "$NAMESPACE" \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+  # Best-effort reload: a first-ever deploy doesn't need this (the pod mounts
+  # the ConfigMap at startup), but a redeploy onto an already-running
+  # Prometheus does. Non-fatal — Prometheus may not be up yet on a cold
+  # deploy, or the NodePort may not be reachable in every environment.
+  if curl --max-time 5 --fail --silent --output /dev/null -X POST "http://localhost:9090/-/reload"; then
+    log "prometheus reloaded — SLO rules active"
+  fi
+}
+
+# SLO rules — Prometheus-Operator CRD path (kube-prometheus-stack), for anyone
+# who installs it on top of either mode. Synthesizes the PrometheusRule wrapper
+# on the fly from the same bare rule file so there's still only one copy of the
+# rule content. When the CRD isn't present (the common case in cloud mode,
+# since Grafana Cloud Mimir doesn't consume PrometheusRule CRDs at all), point
+# at the real cloud-mode path instead of silently doing nothing.
+apply_slo_rules() {
+  local enabled rel path
+  enabled="$(yq observability.slo_rules.enabled)"
+  if [[ "$enabled" != "True" && "$enabled" != "true" ]]; then
     return
   fi
-  log "kubectl apply — SLO rules ($rel)"
-  kubectl apply -f "$path"
+  rel="$(yq observability.slo_rules.manifest)"
+  [[ -n "$rel" ]] || { warn "observability.slo_rules.enabled=true but manifest path missing"; return; }
+  path="${SCRIPT_DIR}/${rel}"
+  [[ -f "$path" ]] || die "slo rules manifest not found: $path"
+
+  if ! kubectl get crd prometheusrules.monitoring.coreos.com >/dev/null 2>&1; then
+    if [[ "${MONITORING_MODE:-local}" == "cloud" ]]; then
+      log "SLO rules ready in $rel but not yet loaded into Grafana Cloud Mimir — run ./scripts/push-slo-rules-to-mimir.sh to load them"
+    fi
+    return
+  fi
+
+  log "kubectl apply — SLO rules as PrometheusRule ($rel, kube-prometheus-stack detected)"
+  python3 - "$path" "$NAMESPACE" <<'PY' | kubectl apply -f -
+import sys, yaml
+path, namespace = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    rules = yaml.safe_load(f)
+wrapped = {
+    "apiVersion": "monitoring.coreos.com/v1",
+    "kind": "PrometheusRule",
+    "metadata": {
+        "name": "signal-forge-slos",
+        "namespace": namespace,
+        "labels": {
+            "app.kubernetes.io/name": "signal-forge",
+            "app.kubernetes.io/component": "slo-alerts",
+            "prometheus": "signal-forge",
+            "role": "alert-rules",
+        },
+    },
+    "spec": {"groups": rules["groups"]},
+}
+print(yaml.safe_dump(wrapped, sort_keys=False), end="")
+PY
 }
 
 # cert-manager install + self-signed ClusterIssuer bootstrap.
@@ -727,6 +787,9 @@ apply_grafana_cloud_secret
 install_cert_manager
 apply_stage datastores
 wait_datastores
+# Local-mode SLO rules ConfigMap must exist before the Prometheus Deployment
+# (in apply_monitoring's manifest list) mounts it.
+apply_local_slo_rules
 apply_monitoring
 apply_stage app
 apply_stage post
@@ -736,7 +799,8 @@ if [[ "$MONITORING_MODE" == "cloud" || "$WITH_HELM" -eq 1 ]]; then
   install_helm
 fi
 
-# SLO rules — requires Prom-Op CRDs; skips cleanly if absent.
+# SLO rules — Prometheus-Operator CRD path; skips cleanly (with a cloud-mode
+# reminder) if the CRD isn't present.
 apply_slo_rules
 
 echo

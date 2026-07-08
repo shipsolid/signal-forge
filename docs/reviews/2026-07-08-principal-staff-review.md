@@ -16,7 +16,7 @@ observability pipeline, Kubernetes/Helm/infra, and testing/documentation integri
 > the 1 Critical and all 9 High findings were found, fixed, and verified closed; that record isn't
 > reproduced here beyond the note at the bottom.
 
-**Open findings: 0 Critical · 0 High · 20 Medium · ~30 Low/Nit**
+**Open findings: 0 Critical · 0 High · 19 Medium · ~30 Low/Nit**
 
 ## Contents
 
@@ -183,13 +183,6 @@ elsewhere. A silent, asymmetric SCA gap relative to the other three stacks.
 
 ### 2.3 Observability pipeline
 
-**🟡 MEDIUM · production-readiness** — The multi-window burn-rate SLO alerts never fire out of the
-box `conf.yml:137` (`slo_rules.enabled: false`); `values-cloud.yaml.tmpl:116-117`
-(`prometheusOperatorObjects` disabled) Even enabled, applying the `PrometheusRule` against Grafana
-Cloud Mimir requires a manual `cortex-tool rules load` step never invoked by `deploy-local.sh`. Good
-SLO math with no evaluation path is a common way "we have SLOs" claims fall apart under review — the
-honest current answer to "show me the alert firing" is "it can't, by default."
-
 **🟡 MEDIUM · both** — `project_id` as a Prometheus label — the one place cardinality discipline
 slips `docs/observability/otel-contracts.md:283-289` — `orders.created.total`,
 `orders.amount.total`, `orders.processing.duration` Exactly the tenant/entity-ID-as-label pattern
@@ -303,7 +296,7 @@ endpoint (the Mimir-endpoint footgun in §2.4) — it hard-fails on lookup too.
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | Backend services & gRPC       | Strong — outbox pattern, cursor streaming, layered validation, multi-replica-safe relay (Testcontainers-verified)                                                      | Conditional — no single blocker left, but blanket exception→502 mapping still erases most gRPC status codes and `AllowedHosts` is wildcarded with no manifest override | Papercuts, not architecture problems; each is a small, scoped fix                                         |
 | Messaging & frontend          | Strong — correct async span semantics, tested backoff logic, DLQ now distinguishes transient from permanent failures                                                   | Conditional — TTL mismatch can still let a redelivery duplicate a notification, no resilience layer on the Angular HTTP client                                         | The design vocabulary and the implementation now agree; what's left is defense-in-depth, not correctness  |
-| Observability pipeline        | Very strong, if only the local-mode path is inspected; cloud-mode docs now match what ships                                                                            | Conditional — SLO alerts are wired but disabled by default and can't fire without a manual step, `project_id` is a Prometheus label with unbounded cardinality         | The design is sound; a few "should be on by default" switches are still off                               |
+| Observability pipeline        | Very strong, if only the local-mode path is inspected; cloud-mode docs now match what ships                                                                            | Conditional — `project_id` is a Prometheus label with unbounded cardinality; SLO alerts now evaluate automatically in local mode and have a documented manual push for cloud mode | The design is sound; the alert-evaluation gap is closed, cardinality discipline is the remaining slip     |
 | K8s / Helm / infra & security | Strong — unusually honest self-disclosed gaps                                                                                                                          | Conditional — NetworkPolicy allows any namespace (self-documented tradeoff), RabbitMQ runs as the reserved `guest` account with no purpose-named identity              | Self-awareness about known gaps is real, but a couple of them are pre-prod TODOs, not just disclosed risk |
 | Testing & docs integrity      | Tests: strong (127 tests, one real Testcontainers concurrency test, frontend suite now runs clean off pinned local deps). Docs: much improved, still a few stale spots | Conditional — zero integration coverage for the 5-hop trace-propagation claim the lab exists to demonstrate                                                            | Real test engineering, now matched by a working toolchain; one real coverage gap remains                  |
 
@@ -339,11 +332,13 @@ live credential exposure, the retry/idempotency gap on order creation, the prod 
 inability to avoid dev's placeholder secrets, the outbox relay's multi-replica race, the DLQ
 conflating transient and permanent failures, the fabricated API contracts and doc sections, the
 plaintext employer naming, the broken frontend test toolchain — is resolved and verified against
-current source, not just claimed fixed. What remains is 20 Medium and ~30 Low/Nit items: real, worth
-fixing, but individually small and none of them a blocker on their own. The one with the most
-compounding risk is the disabled SLO alerts (good math, no evaluation path) — "can't verify this
-claim is true" is a different, more uncomfortable category than "this one thing is broken," and it's
-the last finding in that category left in this review.
+current source, not just claimed fixed. The SLO alerts' missing evaluation path — the finding with
+the most compounding risk, since "can't verify this claim is true" is a more uncomfortable category
+than "this one thing is broken" — is also now closed: local mode evaluates the same rule file
+automatically (verified end-to-end against a live k3d cluster — all 4 groups, 16 rules, `health: ok`),
+and cloud mode has the previously-missing manual push script
+(`scripts/push-slo-rules-to-mimir.sh`). What remains is 19 Medium and ~30 Low/Nit items: real, worth
+fixing, but individually small and none of them a blocker on their own.
 
 One discovery outside the review's own scope, surfaced while fixing the toolchain split above:
 `src/frontend/node_modules` is tracked in git — 471 MB, 45,010 files, no `.gitignore` entry (unlike
@@ -379,4 +374,9 @@ Medium findings about the wrong test stack and the unpinned CI workaround, and r
 Karma/Jasmine scaffold entirely (`karma.conf.js`, `src/test.ts`, the `angular.json` test target).
 Lower-severity items were compacted into "also worth a look" lists per subsection rather than
 omitted, and are unchanged from the first pass except where a Critical/High fix incidentally
-resolved one (one such case, in §2.1)._
+resolved one (one such case, in §2.1). Fourth pass, same day: the highest-compounding Medium
+finding — SLO burn-rate alerts with good math but no evaluation path in either mode — was closed.
+`k8s/monitoring/slo-rules.yaml` was de-wrapped from a `PrometheusRule` CRD to a bare Prometheus/Mimir
+rule file (one canonical file instead of a format only kube-prometheus-stack can consume); local
+mode now loads it automatically via `rule_files:` (verified against a live k3d deploy — all 4 groups,
+16 rules, `health: ok`), and cloud mode gained the previously-missing `mimirtool`-based push script._

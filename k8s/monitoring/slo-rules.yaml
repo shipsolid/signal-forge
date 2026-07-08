@@ -11,181 +11,178 @@
 #   page  — fast burn (1h @ 14.4x, 5m confirm) → wake someone; 2% of 30d error budget in 1h
 #   ticket — slow burn (6h @ 6x, 30m confirm)  → next-business-day triage; 5% of 30d budget in 6h
 #
-# Applies anywhere Prometheus-style alerting exists:
-#   - mode=cloud: Grafana Cloud Mimir alerting (apply via API or grafana-cloud-ruler)
-#   - mode=local: Prometheus with --web.enable-remote-write-receiver still evaluates
-#                 PrometheusRule CRDs when kube-prometheus-stack is installed
+# This is a bare Prometheus/Mimir rule file (native `groups:` format) — deliberately
+# NOT a PrometheusRule CRD, so it has zero Prometheus-Operator dependency. Two
+# consumers, one file, no duplication:
+#
+#   - mode=local: deploy-local.sh's apply_local_slo_rules() loads this file straight
+#                 into the vanilla Prometheus Deployment via `rule_files:`
+#                 (k8s/monitoring/local/prometheus/). No CRDs involved.
+#   - mode=cloud: scripts/push-slo-rules-to-mimir.sh pushes this file to Grafana
+#                 Cloud Mimir's Ruler API via `mimirtool rules load` (manual step —
+#                 see docs/observability/slos.md).
+#
+# If a cluster *does* have kube-prometheus-stack installed, deploy-local.sh's
+# apply_slo_rules() wraps this file's groups into a PrometheusRule on the fly —
+# no separate CRD-shaped copy is maintained here.
 #
 # When deployed, verify with:
-#   kubectl -n otel-lab get prometheusrule signal-forge-slos
----
-# Prometheus-Operator CRD version. If the cluster doesn't have Prom-Op installed,
-# these rules can be loaded directly into Prometheus/Mimir as YAML files.
-apiVersion: monitoring.coreos.com/v1
-kind: PrometheusRule
-metadata:
-  name: signal-forge-slos
-  namespace: otel-lab
-  labels:
-    app.kubernetes.io/name: signal-forge
-    app.kubernetes.io/component: slo-alerts
-    prometheus: signal-forge   # kube-prometheus-stack selector (adjust as needed)
-    role: alert-rules
-spec:
-  groups:
-    # ── Recording rules: rate of requests + rate of errors + p99 latency ────
-    - name: signal-forge.sli
-      interval: 30s
-      rules:
-        # Traffic (requests/sec), per service, all statuses.
-        - record: sli:requests:rate5m
-          expr: |
-            sum by (service_name) (
-              rate(traces_spanmetrics_calls_total[5m])
+#   mode=local: curl -s http://localhost:9090/api/v1/rules
+#   mode=cloud: mimirtool rules list --address=<mimir-base-url> --id=<mimir-user> --key=<api-key>
+groups:
+  # ── Recording rules: rate of requests + rate of errors + p99 latency ────
+  - name: signal-forge.sli
+    interval: 30s
+    rules:
+      # Traffic (requests/sec), per service, all statuses.
+      - record: sli:requests:rate5m
+        expr: |
+          sum by (service_name) (
+            rate(traces_spanmetrics_calls_total[5m])
+          )
+      - record: sli:requests:rate30m
+        expr: |
+          sum by (service_name) (
+            rate(traces_spanmetrics_calls_total[30m])
+          )
+      - record: sli:requests:rate6h
+        expr: |
+          sum by (service_name) (
+            rate(traces_spanmetrics_calls_total[6h])
+          )
+
+      # Errors (5xx only — spanmetrics emits status_code as OTel span status).
+      - record: sli:errors:rate5m
+        expr: |
+          sum by (service_name) (
+            rate(traces_spanmetrics_calls_total{status_code="STATUS_CODE_ERROR"}[5m])
+          )
+      - record: sli:errors:rate30m
+        expr: |
+          sum by (service_name) (
+            rate(traces_spanmetrics_calls_total{status_code="STATUS_CODE_ERROR"}[30m])
+          )
+      - record: sli:errors:rate6h
+        expr: |
+          sum by (service_name) (
+            rate(traces_spanmetrics_calls_total{status_code="STATUS_CODE_ERROR"}[6h])
+          )
+
+      # Error ratio = errors/total, safe against divide-by-zero.
+      - record: sli:error_ratio:rate5m
+        expr: |
+          sli:errors:rate5m / clamp_min(sli:requests:rate5m, 1e-9)
+      - record: sli:error_ratio:rate30m
+        expr: |
+          sli:errors:rate30m / clamp_min(sli:requests:rate30m, 1e-9)
+      - record: sli:error_ratio:rate6h
+        expr: |
+          sli:errors:rate6h / clamp_min(sli:requests:rate6h, 1e-9)
+
+      # p99 latency per service.
+      - record: sli:latency_p99:rate5m
+        expr: |
+          histogram_quantile(0.99,
+            sum by (service_name, le) (
+              rate(traces_spanmetrics_duration_milliseconds_bucket[5m])
             )
-        - record: sli:requests:rate30m
-          expr: |
-            sum by (service_name) (
-              rate(traces_spanmetrics_calls_total[30m])
-            )
-        - record: sli:requests:rate6h
-          expr: |
-            sum by (service_name) (
-              rate(traces_spanmetrics_calls_total[6h])
-            )
+          )
 
-        # Errors (5xx only — spanmetrics emits status_code as OTel span status).
-        - record: sli:errors:rate5m
-          expr: |
-            sum by (service_name) (
-              rate(traces_spanmetrics_calls_total{status_code="STATUS_CODE_ERROR"}[5m])
-            )
-        - record: sli:errors:rate30m
-          expr: |
-            sum by (service_name) (
-              rate(traces_spanmetrics_calls_total{status_code="STATUS_CODE_ERROR"}[30m])
-            )
-        - record: sli:errors:rate6h
-          expr: |
-            sum by (service_name) (
-              rate(traces_spanmetrics_calls_total{status_code="STATUS_CODE_ERROR"}[6h])
-            )
+  # ── Multi-window burn-rate alerts (availability SLO = 99.5%) ────────────
+  # Error budget = 0.5%. Burn rates scale "how fast" we're using it:
+  #   14.4x → 2% of 30d budget burned in 1h   (page)
+  #   6x    → 5% of 30d budget burned in 6h   (ticket)
+  - name: signal-forge.availability-burn
+    rules:
+      - alert: SignalForgeAvailabilityFastBurn
+        expr: |
+          (sli:error_ratio:rate5m > (14.4 * 0.005))
+          and
+          (sli:error_ratio:rate30m > (14.4 * 0.005))
+        for: 2m
+        labels:
+          severity: page
+          slo: availability
+          burn_rate: fast
+        annotations:
+          summary: "{{ $labels.service_name }} burning availability error budget 14.4× faster than target"
+          description: |
+            Service {{ $labels.service_name }} error ratio over the last 5m and 30m
+            both exceed the 14.4× burn threshold for a 99.5% SLO. At this rate the
+            30-day error budget will be exhausted in ~2 days.
+            Current 5m error ratio: {{ $value | humanizePercentage }}
+          runbook_url: https://example.com/runbooks/signal-forge-availability
 
-        # Error ratio = errors/total, safe against divide-by-zero.
-        - record: sli:error_ratio:rate5m
-          expr: |
-            sli:errors:rate5m / clamp_min(sli:requests:rate5m, 1e-9)
-        - record: sli:error_ratio:rate30m
-          expr: |
-            sli:errors:rate30m / clamp_min(sli:requests:rate30m, 1e-9)
-        - record: sli:error_ratio:rate6h
-          expr: |
-            sli:errors:rate6h / clamp_min(sli:requests:rate6h, 1e-9)
+      - alert: SignalForgeAvailabilitySlowBurn
+        expr: |
+          (sli:error_ratio:rate30m > (6 * 0.005))
+          and
+          (sli:error_ratio:rate6h > (6 * 0.005))
+        for: 15m
+        labels:
+          severity: ticket
+          slo: availability
+          burn_rate: slow
+        annotations:
+          summary: "{{ $labels.service_name }} burning availability error budget 6× faster than target"
+          description: |
+            Service {{ $labels.service_name }} error ratio over the last 30m and 6h
+            both exceed the 6× burn threshold for a 99.5% SLO.
+            Current 30m error ratio: {{ $value | humanizePercentage }}
+          runbook_url: https://example.com/runbooks/signal-forge-availability
 
-        # p99 latency per service.
-        - record: sli:latency_p99:rate5m
-          expr: |
-            histogram_quantile(0.99,
-              sum by (service_name, le) (
-                rate(traces_spanmetrics_duration_milliseconds_bucket[5m])
-              )
-            )
+  # ── Latency SLO alerts (p99 < 500ms for gateway, <300ms for others) ─────
+  - name: signal-forge.latency
+    rules:
+      - alert: SignalForgeGatewayLatencyHigh
+        expr: |
+          sli:latency_p99:rate5m{service_name="gateway-api"} > 500
+        for: 10m
+        labels:
+          severity: ticket
+          slo: latency
+          service: gateway-api
+        annotations:
+          summary: "gateway-api p99 latency > 500ms (current: {{ $value }}ms)"
+          description: |
+            gateway-api p99 latency has been above 500ms for 10 minutes.
+            Downstream investigation: check order-api and notification-svc latency rules.
 
-    # ── Multi-window burn-rate alerts (availability SLO = 99.5%) ────────────
-    # Error budget = 0.5%. Burn rates scale "how fast" we're using it:
-    #   14.4x → 2% of 30d budget burned in 1h   (page)
-    #   6x    → 5% of 30d budget burned in 6h   (ticket)
-    - name: signal-forge.availability-burn
-      rules:
-        - alert: SignalForgeAvailabilityFastBurn
-          expr: |
-            (sli:error_ratio:rate5m > (14.4 * 0.005))
-            and
-            (sli:error_ratio:rate30m > (14.4 * 0.005))
-          for: 2m
-          labels:
-            severity: page
-            slo: availability
-            burn_rate: fast
-          annotations:
-            summary: "{{ $labels.service_name }} burning availability error budget 14.4× faster than target"
-            description: |
-              Service {{ $labels.service_name }} error ratio over the last 5m and 30m
-              both exceed the 14.4× burn threshold for a 99.5% SLO. At this rate the
-              30-day error budget will be exhausted in ~2 days.
-              Current 5m error ratio: {{ $value | humanizePercentage }}
-            runbook_url: https://example.com/runbooks/signal-forge-availability
+      - alert: SignalForgeDownstreamLatencyHigh
+        expr: |
+          sli:latency_p99:rate5m{service_name=~"order-api|notification-svc"} > 300
+        for: 10m
+        labels:
+          severity: ticket
+          slo: latency
+        annotations:
+          summary: "{{ $labels.service_name }} p99 latency > 300ms (current: {{ $value }}ms)"
+          description: |
+            {{ $labels.service_name }} p99 latency has been above 300ms for 10 minutes.
 
-        - alert: SignalForgeAvailabilitySlowBurn
-          expr: |
-            (sli:error_ratio:rate30m > (6 * 0.005))
-            and
-            (sli:error_ratio:rate6h > (6 * 0.005))
-          for: 15m
-          labels:
-            severity: ticket
-            slo: availability
-            burn_rate: slow
-          annotations:
-            summary: "{{ $labels.service_name }} burning availability error budget 6× faster than target"
-            description: |
-              Service {{ $labels.service_name }} error ratio over the last 30m and 6h
-              both exceed the 6× burn threshold for a 99.5% SLO.
-              Current 30m error ratio: {{ $value | humanizePercentage }}
-            runbook_url: https://example.com/runbooks/signal-forge-availability
+  # ── Infra health — liveness of the observability pipeline itself ────────
+  - name: signal-forge.infra
+    rules:
+      - alert: AlloyReceiverDown
+        expr: |
+          up{job=~".*alloy-receiver.*"} == 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "alloy-receiver is unreachable — app OTLP traffic is being dropped"
+          description: |
+            The grafana-k8s-alloy-receiver scrape target has been down for 5 minutes.
+            All app traces, metrics, and log-bridge data are being silently discarded.
 
-    # ── Latency SLO alerts (p99 < 500ms for gateway, <300ms for others) ─────
-    - name: signal-forge.latency
-      rules:
-        - alert: SignalForgeGatewayLatencyHigh
-          expr: |
-            sli:latency_p99:rate5m{service_name="gateway-api"} > 500
-          for: 10m
-          labels:
-            severity: ticket
-            slo: latency
-            service: gateway-api
-          annotations:
-            summary: "gateway-api p99 latency > 500ms (current: {{ $value }}ms)"
-            description: |
-              gateway-api p99 latency has been above 500ms for 10 minutes.
-              Downstream investigation: check order-api and notification-svc latency rules.
-
-        - alert: SignalForgeDownstreamLatencyHigh
-          expr: |
-            sli:latency_p99:rate5m{service_name=~"order-api|notification-svc"} > 300
-          for: 10m
-          labels:
-            severity: ticket
-            slo: latency
-          annotations:
-            summary: "{{ $labels.service_name }} p99 latency > 300ms (current: {{ $value }}ms)"
-            description: |
-              {{ $labels.service_name }} p99 latency has been above 300ms for 10 minutes.
-
-    # ── Infra health — liveness of the observability pipeline itself ────────
-    - name: signal-forge.infra
-      rules:
-        - alert: AlloyReceiverDown
-          expr: |
-            up{job=~".*alloy-receiver.*"} == 0
-          for: 5m
-          labels:
-            severity: page
-          annotations:
-            summary: "alloy-receiver is unreachable — app OTLP traffic is being dropped"
-            description: |
-              The grafana-k8s-alloy-receiver scrape target has been down for 5 minutes.
-              All app traces, metrics, and log-bridge data are being silently discarded.
-
-        - alert: DatastoreDown
-          expr: |
-            kube_pod_status_ready{namespace="otel-lab", pod=~"mysql-.*|postgres-.*|redis-.*|rabbitmq-.*", condition="true"} == 0
-          for: 3m
-          labels:
-            severity: page
-          annotations:
-            summary: "Datastore {{ $labels.pod }} not Ready for 3m"
-            description: |
-              Single-replica datastore {{ $labels.pod }} has been not-Ready for 3 minutes.
-              App tier requests are failing — see availability burn-rate alert for user impact.
+      - alert: DatastoreDown
+        expr: |
+          kube_pod_status_ready{namespace="otel-lab", pod=~"mysql-.*|postgres-.*|redis-.*|rabbitmq-.*", condition="true"} == 0
+        for: 3m
+        labels:
+          severity: page
+        annotations:
+          summary: "Datastore {{ $labels.pod }} not Ready for 3m"
+          description: |
+            Single-replica datastore {{ $labels.pod }} has been not-Ready for 3 minutes.
+            App tier requests are failing — see availability burn-rate alert for user impact.

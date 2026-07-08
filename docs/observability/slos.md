@@ -65,26 +65,28 @@ The slow-burn alert has `for: 15m` because its whole purpose is non-urgent — 1
 
 ## Where the alerts are evaluated
 
-Depends on `monitoring.mode`:
+`k8s/monitoring/slo-rules.yaml` is a bare Prometheus/Mimir rule file (native `groups:` format,
+not a `PrometheusRule` CRD) — one file, no Prometheus-Operator dependency, consumed differently
+per `monitoring.mode`:
 
-| Mode    | Evaluator                                                                | How rules land                                                                                                                                                              |
-| ------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `local` | In-cluster Prometheus (when deployed via `monitoring.manifests.local[]`) | `kubectl apply -f slo-rules.yaml` — Prometheus picks up `PrometheusRule` if `kube-prometheus-stack` is installed; otherwise load the file directly via Prom's `-rule-files` |
-| `cloud` | Grafana Cloud Mimir (rules in Grafana Cloud Alerting)                    | `cortex-tool rules load` or the Grafana Cloud Ruler API; see [this guide][gc-alerting]                                                                                      |
+| Mode    | Evaluator                     | How rules land |
+| ------- | ------------------------------ | -------------- |
+| `local` | In-cluster vanilla Prometheus | Automatic. `deploy-local.sh`'s `apply_local_slo_rules()` generates a `prometheus-slo-rules` ConfigMap from this file and Prometheus loads it via `rule_files:` — no kube-prometheus-stack needed. |
+| `cloud` | Grafana Cloud Mimir (Ruler) | Manual. Run `./scripts/push-slo-rules-to-mimir.sh` (wraps `mimirtool rules load`) — Grafana Cloud Mimir doesn't consume this file on its own, and `deploy-local.sh` won't push to a live account automatically. Use `--dry-run` for a read-only `mimirtool rules diff` first. |
 
-[gc-alerting]: https://grafana.com/docs/grafana-cloud/alerting-and-irm/alerting/
+If a cluster *does* have kube-prometheus-stack installed, `deploy-local.sh`'s `apply_slo_rules()`
+wraps the same file's `groups:` into a `PrometheusRule` on the fly (no separate CRD-shaped copy
+is maintained anywhere).
 
-The rules manifest uses the Prometheus-Operator CRD (`kind: PrometheusRule`). For clusters without Prom-Op CRDs, either install [kube-prometheus-stack] or convert the manifest's `spec.groups` into a plain `rule_files:` entry for a vanilla Prometheus.
-
-[kube-prometheus-stack]: https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack
-
-`deploy-local.sh` auto-applies the rule manifest when `observability.slo_rules.enabled: true` in conf.yml AND the `prometheusrules.monitoring.coreos.com` CRD is present. Otherwise it logs a skip reason.
+`observability.slo_rules.enabled` in conf.yml (default `true`) is the master switch for both the
+local ConfigMap load and the kube-prometheus-stack fallback; it doesn't gate the cloud script,
+which you run explicitly when you want rules live in Grafana Cloud.
 
 ## Runbook links
 
 Every alert has a `runbook_url` annotation pointing at `https://example.com/runbooks/...` as a placeholder. Real runbook content would live in:
 
-- [docs/operations/runbooks.md](runbooks.md) — update with a section per alert name
+- [docs/operations/runbooks.md](../operations/runbooks.md) — update with a section per alert name
 - Or a Wiki / Notion / PagerDuty runbook field, replacing the URL in the `PrometheusRule` annotations.
 
 ## Tuning

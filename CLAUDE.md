@@ -129,10 +129,17 @@ Frontend is the documented exception to `readOnlyRootFilesystem: true` — see
 ./scripts/fetch-grafana-cloud-conf-from-akv.sh --dry-run   # preview diff against AKV
 ./scripts/fetch-grafana-cloud-conf-from-akv.sh             # apply → writes conf.yml + conf.yml.bak
 ./scripts/fetch-grafana-cloud-conf-from-akv.sh --print     # legacy: emit YAML block for manual paste
+
+./scripts/push-slo-rules-to-mimir.sh --dry-run   # mimirtool rules diff — read-only, mode=cloud only
+./scripts/push-slo-rules-to-mimir.sh             # mimirtool rules load — pushes k8s/monitoring/slo-rules.yaml
 ```
 
 Auth: either `az login` first, or export `ARM_CLIENT_ID` + `ARM_CLIENT_SECRET` in the shell (no
 `.env` loading).
+
+`push-slo-rules-to-mimir.sh` is the mode=cloud counterpart to `observability.slo_rules` — see
+[docs/observability/slos.md](docs/observability/slos.md#where-the-alerts-are-evaluated).
+mode=local needs no manual step; `deploy-local.sh` loads the same rules file automatically.
 
 ### Tests / CI
 
