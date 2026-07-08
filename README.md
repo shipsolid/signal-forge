@@ -411,15 +411,16 @@ context-guard and NodePort drift-check.
 ## Testing & CI
 
 ```bash
-# .NET
+# .NET — order-api.Tests requires Docker (Testcontainers starts a real postgres:16.4
+# for OutboxRelayWorkerTests)
 dotnet test src/order-api.Tests/order-api.Tests.csproj --configuration Release
 dotnet test src/gateway-api.Tests/gateway-api.Tests.csproj --configuration Release
 
 # Python
 python -m pytest src/notification-svc/tests/ -v --tb=short
 
-# Frontend (requires npm ci in src/frontend first)
-# See .github/workflows/ci.yml for the /tmp/ng-test-deps workaround
+# Frontend
+cd src/frontend && npm ci --legacy-peer-deps && npx jest --config jest.config.js
 ```
 
 CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on `push`/`pull_request` to `main`

@@ -108,17 +108,16 @@ test-python:
 	fi
 	cd src/notification-svc && .venv/bin/python -m pytest tests/ -v
 
-# Run Angular Jest tests.
-# Installs jest-preset-angular to /tmp/ng-test-deps on first run (avoids touching root-owned node_modules).
+# Run Angular Jest tests. jest/jest-preset-angular are real devDependencies
+# (src/frontend/package.json) — installed into src/frontend/node_modules like
+# everything else, not a separate prefix. If node_modules is root-owned from a
+# prior Docker-based install, `npm ci` below fails loudly with EACCES; fix with
+# `sudo chown -R $$USER:$$USER src/frontend/node_modules` and re-run.
 test-frontend:
-	@if [ ! -d /tmp/ng-test-deps/node_modules/jest-preset-angular ]; then \
-	  npm install --prefix /tmp/ng-test-deps \
-	    jest jest-environment-jsdom jest-preset-angular \
-	    @types/jest typescript --legacy-peer-deps --silent; \
+	@if [ ! -d src/frontend/node_modules/jest ]; then \
+	  cd src/frontend && npm ci --legacy-peer-deps; \
 	fi
-	cd src/frontend && \
-	  NODE_PATH=/tmp/ng-test-deps/node_modules \
-	  /tmp/ng-test-deps/node_modules/.bin/jest --config jest.config.js
+	cd src/frontend && npx jest --config jest.config.js
 
 # Apply load-test manifests to the running cluster (requires a live cluster).
 test:

@@ -142,8 +142,12 @@ Local:
 dotnet test src/order-api.Tests/order-api.Tests.csproj --configuration Release
 dotnet test src/gateway-api.Tests/gateway-api.Tests.csproj --configuration Release
 python -m pytest src/notification-svc/tests/ -v --tb=short
-# Frontend: npm ci in src/frontend, then jest via /tmp/ng-test-deps hack — see .github/workflows/ci.yml
+cd src/frontend && npm ci --legacy-peer-deps && npx jest --config jest.config.js
 ```
+
+Note the Testcontainers dependency: `order-api.Tests`' `OutboxRelayWorkerTests` starts a real
+`postgres:16.4` container, so `dotnet test src/order-api.Tests/...` requires a running Docker
+daemon.
 
 CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs all four test stacks + `pip-audit` +
 `dotnet list package --vulnerable` + Trivy scan (HIGH/CRITICAL, fixed-only) + Syft SBOM

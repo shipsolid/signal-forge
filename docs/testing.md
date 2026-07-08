@@ -26,9 +26,8 @@ python -m venv .venv && .venv/bin/pip install -r requirements-test.txt
 
 # Angular frontend
 cd src/frontend
-# Requires jest and jest-preset-angular (installed to /tmp/ng-test-deps by make test-unit)
-NODE_PATH=/tmp/ng-test-deps/node_modules \
-  /tmp/ng-test-deps/node_modules/.bin/jest --config jest.config.js
+npm ci --legacy-peer-deps   # jest/jest-preset-angular are real devDependencies now
+npx jest --config jest.config.js
 ```
 
 ## Test suites
@@ -161,33 +160,39 @@ python -m venv .venv
 
 ### Frontend tests (50 tests)
 
-**Framework:** Jest 29, jest-preset-angular 14, jsdom
+**Framework:** Jest 29.7, jest-preset-angular 14.6, jsdom
 
 **Location:** `src/frontend/src/app/`
 
 **Setup:**
 
-The project's `node_modules` is owned by root (created by Docker builds). Jest and
-`jest-preset-angular` are installed to `/tmp/ng-test-deps/` and referenced via `modulePaths` in
-`jest.config.js`. Run:
+`jest`, `jest-preset-angular`, `jest-environment-jsdom`, and `@types/jest` are real, pinned
+`devDependencies` in `package.json` — installed into `src/frontend/node_modules` like everything
+else:
 
 ```bash
-npm install --prefix /tmp/ng-test-deps jest jest-environment-jsdom jest-preset-angular \
-  @types/jest typescript --legacy-peer-deps
-
 cd src/frontend
-NODE_PATH=/tmp/ng-test-deps/node_modules \
-  /tmp/ng-test-deps/node_modules/.bin/jest --config jest.config.js
+npm ci --legacy-peer-deps   # or: npm install
+npx jest --config jest.config.js
 ```
 
-Once `node_modules` is owned by the current user
-(`sudo chown -R $USER:$USER src/frontend/node_modules`), `npm test` works directly.
+`--legacy-peer-deps` is needed because `@angular-devkit/build-angular` and `jest-preset-angular`
+declare overlapping-but-not-identical Angular peer ranges; both are satisfied in practice.
 
-> **Unpinned dependency risk:** `jest`/`jest-preset-angular` are installed ad hoc into
-> `/tmp/ng-test-deps` with no version lockfile — the versions above are what this doc was last
-> verified against, not an enforced pin. A newer `jest-preset-angular` major can (and has, in ad hoc
-> testing) break test collection outright with no code change on either side. Pinning versions in
-> the install command is a good follow-up; not done here.
+If `node_modules` ends up root-owned (e.g. from an `npm ci` run inside a bind-mounted Docker
+container), `npm ci` fails loudly with `EACCES` rather than silently misbehaving. Fix with
+`sudo chown -R $USER:$USER src/frontend/node_modules` and re-run.
+
+> **Formerly:** this project installed Jest ad hoc into a separate `/tmp/ng-test-deps` prefix
+> (worked around root-owned `node_modules`) and referenced it via `NODE_PATH`. That split install
+> was the actual root cause of a real breakage, not just a theoretical risk: `jest-preset-angular`'s
+> own `require()` calls resolved `typescript` from its _own_ prefix's `node_modules` first — an
+> unpinned install there could land a `typescript` major ahead of this project's pinned `~5.4.2`
+> (observed: `6.0.3`) and/or a `jest-preset-angular` major requiring a newer Angular than this
+> project pins, and either one broke Ivy's DI factory generation with a bare `NG0202` at every
+> `TestBed.inject()` call — no code change on either side. Colocating everything in one
+> `node_modules` (this section, now) removes the cross-resolution ambiguity entirely: `npm ci`
+> installs versions declared and locked in this project's own `package.json`/`package-lock.json`.
 
 **What it covers (by spec file):**
 
@@ -204,8 +209,7 @@ Once `node_modules` is owned by the current user
 calls; `ApiService` is mocked via `jest.Mocked<ApiService>` in component tests.
 
 ```bash
-NODE_PATH=/tmp/ng-test-deps/node_modules \
-  /tmp/ng-test-deps/node_modules/.bin/jest --config jest.config.js
+npx jest --config jest.config.js
 # 50 passed
 ```
 

@@ -2,15 +2,10 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "outDir": "./out-tsc/spec",
-    "types": ["jest"],
-    "typeRoots": [
-      "/tmp/ng-test-deps/node_modules/@types",
-      "node_modules/@types"
-    ]
+    "types": ["jest"]
   },
   "include": [
     "src/**/*.spec.ts",
-    "src/**/*.d.ts",
-    "src/test.ts"
+    "src/**/*.d.ts"
   ]
 }

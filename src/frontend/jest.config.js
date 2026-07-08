@@ -11,10 +11,6 @@ module.exports = {
       },
     ],
   },
-  modulePaths: [
-    '<rootDir>/node_modules',
-    '/tmp/ng-test-deps/node_modules',
-  ],
   transformIgnorePatterns: ['node_modules/(?!.*\\.mjs$)'],
   moduleNameMapper: {
     '^src/(.*)$': '<rootDir>/src/$1',

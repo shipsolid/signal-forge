@@ -89,19 +89,11 @@ jobs:
           cache-dependency-path: src/frontend/package-lock.json
 
       - name: Install app dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
         working-directory: src/frontend
 
-      - name: Install Jest + preset
-        run: |
-          npm install --prefix /tmp/ng-test-deps \
-            jest jest-environment-jsdom jest-preset-angular \
-            @types/jest typescript --legacy-peer-deps
-
       - name: Test — frontend
-        run: |
-          NODE_PATH=/tmp/ng-test-deps/node_modules \
-            /tmp/ng-test-deps/node_modules/.bin/jest --config jest.config.js --ci
+        run: npx jest --config jest.config.js --ci
         working-directory: src/frontend
 
   # ── Proto sync ───────────────────────────────────────────────────────────────

@@ -16,7 +16,7 @@ observability pipeline, Kubernetes/Helm/infra, and testing/documentation integri
 > the 1 Critical and all 9 High findings were found, fixed, and verified closed; that record isn't
 > reproduced here beyond the note at the bottom.
 
-**Open findings: 0 Critical · 0 High · 22 Medium · ~30 Low/Nit**
+**Open findings: 0 Critical · 0 High · 20 Medium · ~30 Low/Nit**
 
 ## Contents
 
@@ -269,28 +269,6 @@ enforcement, which is a materially weaker claim than it sounds.
 
 ### 2.5 Testing & documentation integrity
 
-**🟡 MEDIUM · interview-signal** — Frontend's `package.json` still declares the wrong test stack
-`devDependencies` lists the unused default Karma/Jasmine scaffold; Jest — what actually runs — is
-not declared anywhere in the file, installed ad hoc into `/tmp/ng-test-deps`. Reads as an incomplete
-Karma→Jest migration to anyone opening `package.json` first.
-
-**🟡 MEDIUM · production-readiness** — The CI Jest workaround is unpinned and solves a problem CI
-doesn't have `.github/workflows/ci.yml:78-81`
-`npm install --prefix /tmp/ng-test-deps jest ... --legacy-peer-deps`, zero version pins, no
-lockfile. The root-owned `node_modules` problem it works around is a local-Docker-build artifact; a
-fresh GitHub Actions checkout via `actions/setup-node` + `npm ci` never has it. Porting the local
-fix into CI verbatim means test behavior can silently shift with a new Jest/TS major release. **Not
-theoretical** — reproduced during this review's fix pass: an unpinned install picked up
-`jest-preset-angular@17.0.0`, whose own `peerDependencies` require Angular ≥18 (this project pins
-17.3), and separately renamed the `jest-preset-angular/setup-jest` import path this project's
-`setup-jest.ts` uses to `setup-env`. Pinning to a version in-range (`jest-preset-angular@14.6.2`,
-`jest@29`) restored the old import path but a different, pre-existing failure remained: every
-`ApiService`-injecting spec throws `NG0202` (invalid DI factory dependency) — reproduced identically
-against unmodified `main`, so it's not caused by any fix in this pass, but it means the frontend
-suite currently cannot be run to green in this environment at all, pinned or not. Root cause not
-diagnosed further (out of scope for this pass); worth a dedicated look, since it blocks verifying
-any future frontend change.
-
 **🟡 MEDIUM · both** — Zero integration tests for the headline scenario the whole lab exists to
 demonstrate The 5-hop cross-language trace propagation claim is validated only "manually via Jaeger
 UI," per the testing doc's own gap table. Solid unit base → one shallow syntactic proto-diff check →
@@ -321,13 +299,13 @@ endpoint (the Mimir-endpoint footgun in §2.4) — it hard-fails on lookup too.
 
 ## 3. Verdict matrix
 
-| Domain                        | Interview / portfolio signal                                                                                         | Production sign-off                                                                                                                                                                                                  | Where they diverge                                                                                        |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Backend services & gRPC       | Strong — outbox pattern, cursor streaming, layered validation, multi-replica-safe relay (Testcontainers-verified)    | Conditional — no single blocker left, but blanket exception→502 mapping still erases most gRPC status codes and `AllowedHosts` is wildcarded with no manifest override                                               | Papercuts, not architecture problems; each is a small, scoped fix                                         |
-| Messaging & frontend          | Strong — correct async span semantics, tested backoff logic, DLQ now distinguishes transient from permanent failures | Conditional — TTL mismatch can still let a redelivery duplicate a notification, no resilience layer on the Angular HTTP client                                                                                       | The design vocabulary and the implementation now agree; what's left is defense-in-depth, not correctness  |
-| Observability pipeline        | Very strong, if only the local-mode path is inspected; cloud-mode docs now match what ships                          | Conditional — SLO alerts are wired but disabled by default and can't fire without a manual step, `project_id` is a Prometheus label with unbounded cardinality                                                       | The design is sound; a few "should be on by default" switches are still off                               |
-| K8s / Helm / infra & security | Strong — unusually honest self-disclosed gaps                                                                        | Conditional — NetworkPolicy allows any namespace (self-documented tradeoff), RabbitMQ runs as the reserved `guest` account with no purpose-named identity                                                            | Self-awareness about known gaps is real, but a couple of them are pre-prod TODOs, not just disclosed risk |
-| Testing & docs integrity      | Tests: strong (127 tests, one real Testcontainers concurrency test). Docs: much improved, still a few stale spots    | Conditional — zero integration coverage for the 5-hop trace-propagation claim the lab exists to demonstrate, and the frontend suite currently cannot run to green in this environment (root cause not yet diagnosed) | Real test engineering, undermined by one confirmed-broken toolchain path and one real coverage gap        |
+| Domain                        | Interview / portfolio signal                                                                                                                                           | Production sign-off                                                                                                                                                    | Where they diverge                                                                                        |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Backend services & gRPC       | Strong — outbox pattern, cursor streaming, layered validation, multi-replica-safe relay (Testcontainers-verified)                                                      | Conditional — no single blocker left, but blanket exception→502 mapping still erases most gRPC status codes and `AllowedHosts` is wildcarded with no manifest override | Papercuts, not architecture problems; each is a small, scoped fix                                         |
+| Messaging & frontend          | Strong — correct async span semantics, tested backoff logic, DLQ now distinguishes transient from permanent failures                                                   | Conditional — TTL mismatch can still let a redelivery duplicate a notification, no resilience layer on the Angular HTTP client                                         | The design vocabulary and the implementation now agree; what's left is defense-in-depth, not correctness  |
+| Observability pipeline        | Very strong, if only the local-mode path is inspected; cloud-mode docs now match what ships                                                                            | Conditional — SLO alerts are wired but disabled by default and can't fire without a manual step, `project_id` is a Prometheus label with unbounded cardinality         | The design is sound; a few "should be on by default" switches are still off                               |
+| K8s / Helm / infra & security | Strong — unusually honest self-disclosed gaps                                                                                                                          | Conditional — NetworkPolicy allows any namespace (self-documented tradeoff), RabbitMQ runs as the reserved `guest` account with no purpose-named identity              | Self-awareness about known gaps is real, but a couple of them are pre-prod TODOs, not just disclosed risk |
+| Testing & docs integrity      | Tests: strong (127 tests, one real Testcontainers concurrency test, frontend suite now runs clean off pinned local deps). Docs: much improved, still a few stale spots | Conditional — zero integration coverage for the 5-hop trace-propagation claim the lab exists to demonstrate                                                            | Real test engineering, now matched by a working toolchain; one real coverage gap remains                  |
 
 ---
 
@@ -347,23 +325,33 @@ trace-shape docs still described the old synchronous publish, the cloud-mode Hel
 replaced the hand-rolled Alloy config while `docs/OTEL-PATTERNS.md` kept describing a fictional
 "Dual-Export" feature, the legacy Makefile target writing the wrong Mimir endpoint format long after
 the canonical path moved on, real employer infrastructure naming sitting in plaintext across nine
-files — was this same failure mode, not a design flaw. All of it is now fixed and verified (27
-order-api tests including a real Testcontainers-based concurrency test, 26 notification-svc tests,
-50 frontend specs by count — though see the Testing row above for a caveat on actually running that
-last suite in this environment). None of it was hard to explain or hard to fix. "I didn't re-check
-the docs after the refactor" is a real deduction at the Staff bar the first time; catching and
-fixing all of it in a structured pass is itself the stronger interview story.
+files, and a real toolchain split (`/tmp/ng-test-deps`) that silently cross-resolved to incompatible
+TypeScript/Angular-compiler versions and broke every frontend test with an opaque `NG0202` — was
+this same failure mode, not a design flaw. All of it is now fixed and verified: 27 order-api tests
+including a real Testcontainers-based concurrency test, 26 notification-svc tests, and — once Jest
+became a real pinned `devDependency` instead of an ad hoc `/tmp` install — 50/50 frontend specs
+actually passing, not just counted. None of it was hard to explain or hard to fix. "I didn't
+re-check the docs after the refactor" is a real deduction at the Staff bar the first time; catching
+and fixing all of it in a structured pass is itself the stronger interview story.
 
 **As something to ship:** meaningfully closer. Every unconditional stop found across both passes —
 live credential exposure, the retry/idempotency gap on order creation, the prod overlay's structural
 inability to avoid dev's placeholder secrets, the outbox relay's multi-replica race, the DLQ
 conflating transient and permanent failures, the fabricated API contracts and doc sections, the
-plaintext employer naming — is resolved and verified against current source, not just claimed fixed.
-What remains is 22 Medium and ~30 Low/Nit items: real, worth fixing, but individually small and none
-of them a blocker on their own. The two with the most compounding risk are the disabled SLO alerts
-(good math, no evaluation path) and the frontend test suite's confirmed inability to run cleanly in
-this environment — both are "can't verify this claim is true," which is a different, more
-uncomfortable category than "this one thing is broken."
+plaintext employer naming, the broken frontend test toolchain — is resolved and verified against
+current source, not just claimed fixed. What remains is 20 Medium and ~30 Low/Nit items: real, worth
+fixing, but individually small and none of them a blocker on their own. The one with the most
+compounding risk is the disabled SLO alerts (good math, no evaluation path) — "can't verify this
+claim is true" is a different, more uncomfortable category than "this one thing is broken," and it's
+the last finding in that category left in this review.
+
+One discovery outside the review's own scope, surfaced while fixing the toolchain split above:
+`src/frontend/node_modules` is tracked in git — 471 MB, 45,010 files, no `.gitignore` entry (unlike
+`dist/` and `.angular/`, which are correctly ignored right next to it). Nothing in the
+build/CI/deploy path reads from the tracked copy — `npm ci` always reinstalls fresh — so it appears
+to be pure accidental bloat, not a deliberate vendoring strategy. Not fixed here: removing it needs
+the repo owner's sign-off (untracking 471 MB is one thing; a prior push means it lives in history
+too, which is a separate, bigger decision than this review scope covers).
 
 **The throughline:** where the two lenses diverge, they diverge in the same direction every time:
 the design vocabulary and the hard engineering decisions are ahead of the implementation and
@@ -383,8 +371,12 @@ Second pass: the resulting 1 Critical and 9 High findings were fixed and verifie
 working session — code changes backed by tests (including a new Testcontainers-based PostgreSQL
 concurrency test for the outbox-relay race, and two Angular unit tests for the runtime-config
 fallback), doc changes cross-checked against the actual current source rather than assumed correct
-once written. One finding (the CI Jest workaround) was strengthened rather than closed — its
-predicted failure mode was independently reproduced during the fix pass and the finding now cites
-that evidence instead of stating it as a risk. Lower-severity items were compacted into "also worth
-a look" lists per subsection rather than omitted, and are unchanged from the first pass except where
-a Critical/High fix incidentally resolved one (one such case, in §2.1)._
+once written. Third pass, same day: the frontend Jest suite's `NG0202` failure (surfaced, not
+caused, by the second pass) was root-caused to the `/tmp/ng-test-deps` split-install pattern
+cross-resolving to incompatible TypeScript/Angular-compiler versions; fixed by making Jest a real
+pinned `devDependency` colocated with the rest of the project's toolchain, which also closed the two
+Medium findings about the wrong test stack and the unpinned CI workaround, and removed the dead
+Karma/Jasmine scaffold entirely (`karma.conf.js`, `src/test.ts`, the `angular.json` test target).
+Lower-severity items were compacted into "also worth a look" lists per subsection rather than
+omitted, and are unchanged from the first pass except where a Critical/High fix incidentally
+resolved one (one such case, in §2.1)._

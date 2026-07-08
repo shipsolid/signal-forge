@@ -20,6 +20,7 @@ src/frontend/coverage/
 src/frontend/out-tsc/
 src/frontend/dist/
 src/frontend/.angular/
+src/frontend/node_modules/
 
 # Python virtual environments
 src/**/.venv/
