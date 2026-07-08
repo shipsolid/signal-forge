@@ -170,10 +170,17 @@ calls with sensitive payloads.
 ## AllowedHosts
 
 `AllowedHosts` in `appsettings.json` restricts which `Host` headers are accepted. Wildcard `*` (the
-ASP.NET Core default) is replaced with explicit names:
+ASP.NET Core default) is replaced with explicit names. **The delimiter is `;`, not `,`** —
+`HostFilteringOptionsSetup` (internal to `Microsoft.AspNetCore.Hosting`) splits on `;` only; a
+comma-separated list parses as one unmatched entry and every request 400s. See
+[docs/services/gateway-api.md](../services/gateway-api.md) for the full incident writeup.
 
-**gateway-api**: `gateway-api,gateway-api.otel-lab,localhost,127.0.0.1` **order-api**:
-`order-api,order-api.otel-lab,localhost,127.0.0.1`
+**gateway-api**: `gateway-api;gateway-api.otel-lab.svc.cluster.local;signal-forge.local;localhost;127.0.0.1`
+**order-api**: `order-api;order-api.otel-lab.svc.cluster.local`
+
+Both services also append their own pod IP (bare and `:port` forms) at startup via the `MY_POD_IP`
+Downward API env var, so kubelet's liveness/readiness probes — which connect using the pod's own
+ephemeral IP as the `Host` header — pass without widening the list to `*`.
 
 This prevents Host header injection attacks in environments where the service is exposed externally.
 

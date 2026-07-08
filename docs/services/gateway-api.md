@@ -67,18 +67,23 @@ All configuration is via environment variables injected from Kubernetes secrets 
 | `OTEL_EXPORTER_OTLP_ENDPOINT`          | Deployment env                                | Yes      | `http://grafana-k8s-alloy-receiver.monitoring:4317`   |
 
 `AllowedHosts` in `appsettings.json` is set to
-`gateway-api,gateway-api.otel-lab.svc.cluster.local,signal-forge.local,localhost,127.0.0.1` — not
-wildcard. That list covers every legitimate caller: the two Service DNS forms (pod-to-pod), the TLS
-ingress hostname, and `localhost`/`127.0.0.1` for the hostless dev ingress rule and direct
-`curl`/port-forward access. kubelet's liveness/readiness probes would otherwise fail this check —
-they connect using the pod's own (ephemeral) IP as the `Host` header, which can't be listed ahead
-of time. Pinning the probe's own `httpHeaders: [{name: Host, value: gateway-api}]` was tried first
-and doesn't work — confirmed empirically against a live k3d cluster, kubelet's Host override never
-reached ASP.NET Core's host filtering and every probe still 400'd. The fix that actually works:
-`MY_POD_IP` is injected via the Downward API (`fieldRef: status.podIP`), and `Program.cs` appends
-it to the configured `AllowedHosts` before `Build()` runs, every pod allow-listing exactly its own
-IP at startup. order-api has no external exposure at all, so its `AllowedHosts` is narrower:
-`order-api,order-api.otel-lab.svc.cluster.local` (plus the same `MY_POD_IP` mechanism).
+`gateway-api;gateway-api.otel-lab.svc.cluster.local;signal-forge.local;localhost;127.0.0.1` — not
+wildcard. **The delimiter is `;`, not `,`.** ASP.NET Core's internal
+`HostFilteringOptionsSetup.ParseHosts` splits the config string on `;` only; a comma-separated list
+parses as a single, unmatched entry and every request 400s — including ones against hosts that look
+like they're already in the list. This cost real debugging time (see git history around this
+comment) before being traced to that one delimiter. That list covers every legitimate caller: the
+two Service DNS forms (pod-to-pod), the TLS ingress hostname, and `localhost`/`127.0.0.1` for the
+hostless dev ingress rule and direct `curl`/port-forward access. kubelet's liveness/readiness probes
+would otherwise fail this check — they connect using the pod's own (ephemeral) IP as the `Host`
+header, which can't be listed ahead of time. Pinning the probe's own `httpHeaders: [{name: Host,
+value: gateway-api}]` was tried first and doesn't work — confirmed empirically against a live k3d
+cluster, kubelet's Host override never reached ASP.NET Core's host filtering and every probe still
+400'd. The fix that actually works: `MY_POD_IP` is injected via the Downward API (`fieldRef:
+status.podIP`), and `Program.cs` appends it (both bare-IP and `IP:port` forms, `;`-joined) to the
+configured `AllowedHosts` before `Build()` runs, so every pod allow-lists exactly its own IP at
+startup. order-api has no external exposure at all, so its `AllowedHosts` is narrower:
+`order-api;order-api.otel-lab.svc.cluster.local` (plus the same `MY_POD_IP` mechanism).
 
 Fail-fast: if `ConnectionStrings__DefaultConnection` is empty at startup, the process throws `InvalidOperationException` immediately. The pod enters `CrashLoopBackOff` and the error is visible in `kubectl describe pod`.
 

@@ -44,9 +44,13 @@ var builder = WebApplication.CreateBuilder(args);
 var podIp = Environment.GetEnvironmentVariable("MY_POD_IP");
 if (!string.IsNullOrEmpty(podIp))
 {
+    // HostFilteringOptionsSetup splits AllowedHosts on ';', not ',' — confirmed
+    // by reading Microsoft.AspNetCore.Hosting's internal ParseHosts. A comma
+    // here silently produces a single unmatched entry and every request 400s,
+    // including ones against hosts already in the list.
     var allowedHosts = builder.Configuration["AllowedHosts"];
-    var podEntries = $"{podIp},{podIp}:5000";
-    builder.Configuration["AllowedHosts"] = string.IsNullOrEmpty(allowedHosts) ? podEntries : $"{allowedHosts},{podEntries}";
+    var podEntries = $"{podIp};{podIp}:5000";
+    builder.Configuration["AllowedHosts"] = string.IsNullOrEmpty(allowedHosts) ? podEntries : $"{allowedHosts};{podEntries}";
 }
 
 // ── Database ─────────────────────────────────────────────────────────────────
