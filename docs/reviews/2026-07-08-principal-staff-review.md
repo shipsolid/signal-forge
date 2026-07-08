@@ -16,7 +16,7 @@ observability pipeline, Kubernetes/Helm/infra, and testing/documentation integri
 > the 1 Critical and all 9 High findings were found, fixed, and verified closed; that record isn't
 > reproduced here beyond the note at the bottom.
 
-**Open findings: 0 Critical · 0 High · 19 Medium · ~30 Low/Nit**
+**Open findings: 0 Critical · 0 High · 18 Medium · ~30 Low/Nit**
 
 ## Contents
 
@@ -102,15 +102,6 @@ sides still agree behaviorally. (One concrete instance of exactly this — `GetO
 documented `INVALID_ARGUMENT` validation that the implementation didn't actually have — was found
 and fixed; the structural gap that let it ship undetected in the first place is what this finding is
 about, and remains open.)
-
-**🟡 MEDIUM · production-readiness** — Blanket exception→502 mapping erases gRPC status semantics
-for most failure modes `src/gateway-api/Endpoints/OrderEndpoints.cs:75` (`CreateOrder`), `:164`
-(`GetNotifications`), `ProjectEndpoints.cs:178` `CreateOrder` and the project/notification endpoints
-still catch `Exception` generically and always return 502, regardless of whether the underlying
-`RpcException` was `InvalidArgument`, `Unavailable`, or `Internal`. (`GetOrder`, wired up since this
-review, does correctly special-case `NotFound` → 404 at `OrderEndpoints.cs:109` before falling
-through to the same generic 502 for anything else — proof the pattern is known, just not applied
-everywhere.) Still a latent bug for the next failure mode that isn't `NotFound`.
 
 **🟡 MEDIUM · production-readiness** — gRPC streaming's memory benefit is discarded one hop later,
 with no size cap `src/gateway-api/Endpoints/ProjectEndpoints.cs:148-164` order-api correctly streams
@@ -294,7 +285,7 @@ endpoint (the Mimir-endpoint footgun in §2.4) — it hard-fails on lookup too.
 
 | Domain                        | Interview / portfolio signal                                                                                                                                           | Production sign-off                                                                                                                                                    | Where they diverge                                                                                        |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Backend services & gRPC       | Strong — outbox pattern, cursor streaming, layered validation, multi-replica-safe relay (Testcontainers-verified)                                                      | Conditional — no single blocker left, but blanket exception→502 mapping still erases most gRPC status codes and `AllowedHosts` is wildcarded with no manifest override | Papercuts, not architecture problems; each is a small, scoped fix                                         |
+| Backend services & gRPC       | Strong — outbox pattern, cursor streaming, layered validation, multi-replica-safe relay (Testcontainers-verified)                                                      | Conditional — gRPC status codes now map to real HTTP statuses instead of a blanket 502, but `AllowedHosts` is still wildcarded with no manifest override | Papercuts, not architecture problems; each is a small, scoped fix                                         |
 | Messaging & frontend          | Strong — correct async span semantics, tested backoff logic, DLQ now distinguishes transient from permanent failures                                                   | Conditional — TTL mismatch can still let a redelivery duplicate a notification, no resilience layer on the Angular HTTP client                                         | The design vocabulary and the implementation now agree; what's left is defense-in-depth, not correctness  |
 | Observability pipeline        | Very strong, if only the local-mode path is inspected; cloud-mode docs now match what ships                                                                            | Conditional — `project_id` is a Prometheus label with unbounded cardinality; SLO alerts now evaluate automatically in local mode and have a documented manual push for cloud mode | The design is sound; the alert-evaluation gap is closed, cardinality discipline is the remaining slip     |
 | K8s / Helm / infra & security | Strong — unusually honest self-disclosed gaps                                                                                                                          | Conditional — NetworkPolicy allows any namespace (self-documented tradeoff), RabbitMQ runs as the reserved `guest` account with no purpose-named identity              | Self-awareness about known gaps is real, but a couple of them are pre-prod TODOs, not just disclosed risk |
@@ -337,7 +328,11 @@ the most compounding risk, since "can't verify this claim is true" is a more unc
 than "this one thing is broken" — is also now closed: local mode evaluates the same rule file
 automatically (verified end-to-end against a live k3d cluster — all 4 groups, 16 rules, `health: ok`),
 and cloud mode has the previously-missing manual push script
-(`scripts/push-slo-rules-to-mimir.sh`). What remains is 19 Medium and ~30 Low/Nit items: real, worth
+(`scripts/push-slo-rules-to-mimir.sh`). The blanket exception→502 mapping in gateway-api is also
+fixed: `CreateOrder`, `GetOrder`, and `GetOrdersByProject` now route `RpcException` through a shared
+status mapping (`GrpcErrorMapping.ToProblem()`) instead of collapsing every downstream failure into
+502, verified with new tests covering `InvalidArgument`→400 and `Unavailable`→503 (previously both
+returned 502). What remains is 18 Medium and ~30 Low/Nit items: real, worth
 fixing, but individually small and none of them a blocker on their own.
 
 One discovery outside the review's own scope, surfaced while fixing the toolchain split above:
@@ -379,4 +374,11 @@ finding — SLO burn-rate alerts with good math but no evaluation path in either
 `k8s/monitoring/slo-rules.yaml` was de-wrapped from a `PrometheusRule` CRD to a bare Prometheus/Mimir
 rule file (one canonical file instead of a format only kube-prometheus-stack can consume); local
 mode now loads it automatically via `rule_files:` (verified against a live k3d deploy — all 4 groups,
-16 rules, `health: ok`), and cloud mode gained the previously-missing `mimirtool`-based push script._
+16 rules, `health: ok`), and cloud mode gained the previously-missing `mimirtool`-based push script.
+Fifth pass, same day: gateway-api's blanket exception→502 mapping was closed. A shared
+`GrpcErrorMapping.ToProblem()` extension now maps `RpcException` status codes to their real HTTP
+equivalents in `CreateOrder`, `GetOrder`, and `GetOrdersByProject` (`InvalidArgument`→400,
+`NotFound`→404, `Unavailable`→503, etc.), replacing three separate blanket-`Exception`→502 catches;
+`GetNotifications` also stopped collapsing a well-formed 4xx from notification-svc into 502. Verified
+with `dotnet test` (29/29 passing, including new cases for the two previously-misclassified codes and
+an existing test updated from an asserted 502 to the now-correct 503)._

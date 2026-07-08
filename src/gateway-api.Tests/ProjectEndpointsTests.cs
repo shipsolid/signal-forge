@@ -165,7 +165,7 @@ public class ProjectEndpointsTests : IClassFixture<CustomWebApplicationFactory>
     }
 
     [Fact]
-    public async Task GetOrdersByProject_GrpcFails_Returns502()
+    public async Task GetOrdersByProject_GrpcUnavailable_Returns503()
     {
         var db = GetDb();
         var project = new Project { Name = "Theta", Owner = "Thor", CreatedAt = DateTime.UtcNow };
@@ -179,6 +179,47 @@ public class ProjectEndpointsTests : IClassFixture<CustomWebApplicationFactory>
                 It.IsAny<DateTime?>(),
                 It.IsAny<CancellationToken>()))
             .Throws(new Grpc.Core.RpcException(new Grpc.Core.Status(Grpc.Core.StatusCode.Unavailable, "down")));
+
+        var resp = await _client.GetAsync($"/api/projects/{project.Id}/orders");
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetOrdersByProject_GrpcInvalidArgument_Returns400()
+    {
+        var db = GetDb();
+        var project = new Project { Name = "Iota", Owner = "Ivy", CreatedAt = DateTime.UtcNow };
+        db.Projects.Add(project);
+        await db.SaveChangesAsync();
+
+        _factory.MockOrderClient
+            .Setup(c => c.GetOrdersByProject(
+                It.IsAny<GetOrdersByProjectRequest>(),
+                It.IsAny<Grpc.Core.Metadata>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<CancellationToken>()))
+            .Throws(new Grpc.Core.RpcException(
+                new Grpc.Core.Status(Grpc.Core.StatusCode.InvalidArgument, "ProjectId must be a positive integer.")));
+
+        var resp = await _client.GetAsync($"/api/projects/{project.Id}/orders");
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetOrdersByProject_GrpcInternal_Returns502()
+    {
+        var db = GetDb();
+        var project = new Project { Name = "Kappa", Owner = "Kai", CreatedAt = DateTime.UtcNow };
+        db.Projects.Add(project);
+        await db.SaveChangesAsync();
+
+        _factory.MockOrderClient
+            .Setup(c => c.GetOrdersByProject(
+                It.IsAny<GetOrdersByProjectRequest>(),
+                It.IsAny<Grpc.Core.Metadata>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<CancellationToken>()))
+            .Throws(new Grpc.Core.RpcException(new Grpc.Core.Status(Grpc.Core.StatusCode.Internal, "DB error")));
 
         var resp = await _client.GetAsync($"/api/projects/{project.Id}/orders");
         Assert.Equal(HttpStatusCode.BadGateway, resp.StatusCode);

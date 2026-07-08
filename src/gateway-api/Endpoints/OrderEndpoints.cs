@@ -72,6 +72,15 @@ public static class OrderEndpoints
                 status = response.Status
             });
         }
+        catch (RpcException ex)
+        {
+            sw.Stop();
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Status.Detail);
+            activity?.RecordException(ex);
+            logger.LogError(ex, "order-api rejected CreateOrder for project {ProjectId} with {GrpcStatus}. TraceId: {TraceId}",
+                dto.ProjectId, ex.StatusCode, Activity.Current?.TraceId.ToString());
+            return ex.ToProblem("Failed to create order");
+        }
         catch (Exception ex)
         {
             sw.Stop();
@@ -106,10 +115,13 @@ public static class OrderEndpoints
                 createdAt = response.CreatedAt
             });
         }
-        catch (RpcException ex) when (ex.StatusCode == Grpc.Core.StatusCode.NotFound)
+        catch (RpcException ex)
         {
-            activity?.SetStatus(ActivityStatusCode.Error, "Order not found");
-            return Results.NotFound();
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Status.Detail);
+            activity?.RecordException(ex);
+            logger.LogError(ex, "order-api rejected GetOrder {OrderId} with {GrpcStatus}. TraceId: {TraceId}",
+                id, ex.StatusCode, Activity.Current?.TraceId.ToString());
+            return ex.ToProblem("Failed to retrieve order");
         }
         catch (Exception ex)
         {
@@ -160,6 +172,17 @@ public static class OrderEndpoints
 
             logger.LogInformation("Fetched notifications. TraceId: {TraceId}", Activity.Current?.TraceId.ToString());
             return Results.Content(body, "application/json");
+        }
+        // notification-svc returned a well-formed 4xx (not a connectivity/5xx failure) —
+        // that's a real client-facing status, not a "bad gateway" condition.
+        catch (HttpRequestException ex) when (ex.StatusCode is { } code && (int)code is >= 400 and < 500)
+        {
+            sw.Stop();
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.RecordException(ex);
+            logger.LogError(ex, "notification-svc returned {StatusCode} while fetching notifications. TraceId: {TraceId}",
+                (int)code, Activity.Current?.TraceId.ToString());
+            return Results.Problem("Failed to retrieve notifications", statusCode: (int)code);
         }
         catch (Exception ex)
         {

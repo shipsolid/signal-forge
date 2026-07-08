@@ -175,6 +175,15 @@ public static class ProjectEndpoints
                 orders.Count, id, Activity.Current?.TraceId.ToString());
             return Results.Ok(orders);
         }
+        catch (RpcException ex)
+        {
+            sw.Stop();
+            fanout?.SetStatus(ActivityStatusCode.Error, ex.Status.Detail);
+            fanout?.RecordException(ex);
+            logger.LogError(ex, "order-api rejected GetOrdersByProject {ProjectId} with {GrpcStatus}. TraceId: {TraceId}",
+                id, ex.StatusCode, Activity.Current?.TraceId.ToString());
+            return ex.ToProblem("Failed to retrieve orders");
+        }
         catch (Exception ex)
         {
             sw.Stop();

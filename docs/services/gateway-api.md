@@ -121,11 +121,32 @@ Exemplars are enabled via `OTEL_METRICS_EXEMPLAR_FILTER=trace_based` in the Depl
 | Scenario                                 | Behaviour                                 | Trace/log evidence                                                 |
 | ---------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------ |
 | MySQL unavailable                        | Fail-fast at startup (`CrashLoopBackOff`) | Error in pod logs                                                  |
-| order-api unreachable                    | gRPC `StatusCode.Unavailable` → HTTP 502  | Error span with `grpc.status_code`                                 |
-| notification-svc Content-Type unexpected | `InvalidOperationException` → 500         | Error span with `exception.message`                                |
+| order-api RpcException (any endpoint)    | Mapped per gRPC status — see table below, not a blanket 502 | Error span with `grpc.status_code`                  |
+| notification-svc Content-Type unexpected | `InvalidOperationException` → 502 (falls through to the generic catch) | Error span with `exception.message`  |
 | Invalid order input                      | `HTTP 422 ValidationProblem`              | No error span (client error, not server fault)                     |
 | `/api/error` called                      | `InvalidOperationException` thrown        | Error span, `otel.status_code=ERROR`, `exception.stacktrace` event |
 | `/api/slow` called                       | 2–5s `Task.Delay`                         | Slow span, always retained by tail sampling                        |
+
+`CreateOrder`, `GetOrder`, and `GetOrdersByProject` all route `RpcException` through the shared
+`GrpcErrorMapping.ToProblem()` extension
+([Endpoints/GrpcErrorMapping.cs](../../src/gateway-api/Endpoints/GrpcErrorMapping.cs)) instead of
+each catching `Exception` and returning a flat 502:
+
+| gRPC status                                           | HTTP status | Detail relayed to client?                                       |
+| ------------------------------------------------------ | ----------- | ------------------------------------------------------------------ |
+| `InvalidArgument`, `FailedPrecondition`, `OutOfRange`  | 400         | Yes — order-api only sets these to caller-safe validation text |
+| `Unauthenticated`                                      | 401         | Yes                                                                 |
+| `PermissionDenied`                                     | 403         | Yes                                                                 |
+| `NotFound`                                             | 404         | Yes                                                                 |
+| `AlreadyExists`, `Aborted`                             | 409         | Yes                                                                 |
+| `ResourceExhausted`                                    | 429         | Yes                                                                 |
+| `Unimplemented`                                        | 501         | No — generic message                                                |
+| `Unavailable`                                          | 503         | No — generic message                                                |
+| `DeadlineExceeded`                                     | 504         | No — generic message                                                |
+| `Internal`, `Unknown`, `DataLoss`, `Cancelled`         | 502         | No — generic message                                                |
+
+A non-`RpcException` failure (e.g. a connection reset before any gRPC status was ever set) still
+falls through to a flat 502.
 
 ---
 

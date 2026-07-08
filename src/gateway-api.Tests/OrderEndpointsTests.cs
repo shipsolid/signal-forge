@@ -109,6 +109,27 @@ public class OrderEndpointsTests : IClassFixture<CustomWebApplicationFactory>
         Assert.Equal(HttpStatusCode.BadGateway, resp.StatusCode);
     }
 
+    [Fact]
+    public async Task CreateOrder_GrpcInvalidArgument_Returns400()
+    {
+        // order-api can reject a request gateway-side validation let through
+        // (e.g. a project that fails a downstream-only check) — this used to
+        // collapse into the same 502 as a genuine outage.
+        _factory.MockOrderClient
+            .Setup(c => c.CreateOrderAsync(
+                It.IsAny<CreateOrderRequest>(),
+                It.IsAny<Grpc.Core.Metadata>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<CancellationToken>()))
+            .Throws(new Grpc.Core.RpcException(
+                new Grpc.Core.Status(Grpc.Core.StatusCode.InvalidArgument, "ProjectId must be a positive integer.")));
+
+        var resp = await _client.PostAsJsonAsync("/api/orders",
+            new { projectId = 1, description = "Widget", amount = 10.0 });
+
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
     // ── GET /api/orders/{id} ──────────────────────────────────────────────────
 
     [Fact]
@@ -160,6 +181,23 @@ public class OrderEndpointsTests : IClassFixture<CustomWebApplicationFactory>
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }
 
+    [Fact]
+    public async Task GetOrder_GrpcUnavailable_Returns503()
+    {
+        _factory.MockOrderClient
+            .Setup(c => c.GetOrderAsync(
+                It.IsAny<GetOrderRequest>(),
+                It.IsAny<Grpc.Core.Metadata>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<CancellationToken>()))
+            .Throws(new Grpc.Core.RpcException(
+                new Grpc.Core.Status(Grpc.Core.StatusCode.Unavailable, "down")));
+
+        var resp = await _client.GetAsync("/api/orders/7");
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, resp.StatusCode);
+    }
+
     // ── GET /api/notifications ────────────────────────────────────────────────
 
     [Fact]
@@ -193,6 +231,23 @@ public class OrderEndpointsTests : IClassFixture<CustomWebApplicationFactory>
 
         var resp = await _client.GetAsync("/api/notifications");
         Assert.Equal(HttpStatusCode.BadGateway, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetNotifications_DownstreamReturns4xx_PassesStatusThrough()
+    {
+        // A well-formed 4xx from notification-svc is a real client-facing status,
+        // not a connectivity/5xx failure — it shouldn't collapse into 502 either.
+        var mockHttpClient = new HttpClient(new FakeHttpHandler(
+            new HttpResponseMessage(HttpStatusCode.BadRequest)))
+        { BaseAddress = new Uri("http://notification-svc") };
+
+        _factory.MockHttpClientFactory
+            .Setup(f => f.CreateClient("notification-svc"))
+            .Returns(mockHttpClient);
+
+        var resp = await _client.GetAsync("/api/notifications");
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
     // ── GET /healthz ──────────────────────────────────────────────────────────
