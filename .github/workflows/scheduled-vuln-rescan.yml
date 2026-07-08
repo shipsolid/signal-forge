@@ -10,8 +10,8 @@ name: Scheduled vulnerability re-scan
 # vulnerability that had no fix in it does surface once one exists.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 6 * * 1"   # weekly, Monday 06:00 UTC
+  # schedule:
+  #   - cron: "0 6 * * 1"   # weekly, Monday 06:00 UTC
 
 jobs:
   rescan:
