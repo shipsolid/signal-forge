@@ -168,3 +168,39 @@ Follow the conventions of the existing service in the same runtime:
 - **TypeScript:** JSDoc on public service methods
 
 Avoid committing generated files (`bin/`, `obj/`, `__pycache__/`, `dist/`, `.angular/`). They are listed in `.gitignore`.
+
+## Coding guidelines
+
+Naming and error-handling conventions, distilled from the existing services — match these rather
+than introducing a new style per PR.
+
+**Naming:**
+
+- **.NET:** PascalCase for public members/types, camelCase for locals/parameters. Custom OTel
+  instruments use dot-separated lowercase names matching their Prometheus metric name
+  (`gateway.requests.inflight` → `gateway_requests_inflight` — see `DiagnosticsConfig.cs`).
+- **Python:** snake_case throughout, including span/attribute names (`notification.process`,
+  `order.id`).
+- **TypeScript/Angular:** camelCase for members, kebab-case for component selectors and file names.
+- Across all three: `OTEL_SERVICE_NAME` (Deployment env var) must exactly match the
+  `DiagnosticsConfig.ServiceName` / equivalent constant in code — enforced by the PR checklist above.
+
+**Error handling:**
+
+- **Fail-fast at startup** for required configuration (DB connection strings, downstream
+  addresses) — throw immediately rather than falling back to a default that only works on a
+  developer's machine. See [ADR-006](docs/architecture/decisions.md#adr-006-fail-fast-on-missing-secrets)
+  for the rationale and the exact `InvalidOperationException` pattern to copy.
+- **Validate at the API boundary**, not deeper in the call chain — return a structured `422`
+  (REST) or `InvalidArgument` (gRPC) before any downstream call is made. See
+  [docs/operations/security.md § Input validation](docs/operations/security.md#input-validation)
+  for the exact validation blocks in `OrderEndpoints.cs` / `OrderGrpcService.cs`.
+- **Never interpolate exception content into a log message string.** Use `logger.exception()`
+  (Python) or `RecordException(ex)` on the span (.NET) so the traceback is captured without risking
+  a credential-bearing exception message landing in a log field that isn't treated as sensitive.
+  See [docs/operations/security.md § Credential leakage prevention](docs/operations/security.md#credential-leakage-prevention-in-logs).
+- **Distinguish transient failures from poison input** on any consumer/retry path — a downstream
+  timeout should retry or circuit-break, a malformed message should not. See
+  [docs/operations/resilience-patterns.md](docs/operations/resilience-patterns.md) for the pattern
+  catalogue (retry, circuit breaker, backoff, DLQ) and copy the closest existing one rather than
+  inventing a new retry policy.

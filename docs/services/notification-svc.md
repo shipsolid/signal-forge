@@ -32,6 +32,22 @@ async def lifespan(app):
     yield
 ```
 
+### Redis dedup TTL
+
+The Redis dedup key TTL is matched to the notification record's own TTL (both 24h):
+
+```python
+dedup_key = f"dedup:{event.order_id}"
+if not r.set(dedup_key, "1", nx=True, ex=86400):  # 24h dedup window
+    ...
+```
+
+These two TTLs used to differ (dedup key at 1h, notification record at 24h), leaving a window where
+a redelivery between 1h and 24h would bypass dedup entirely and double-push the notification ID
+onto the list. Fixed by aligning both TTLs to 86400s; `LREM` before `LPUSH` on `notification_ids`
+is kept as defense-in-depth so the same ID still can't appear twice in the list even if the two TTLs
+ever drift apart again.
+
 ### Exponential backoff on consumer crash
 
 If `start_consumer()` raises (e.g., RabbitMQ is unavailable), the loop retries with exponential

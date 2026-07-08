@@ -46,13 +46,15 @@ End-to-end technical and production-grade documentation for the SignalForge OTel
 
 ### Operations
 
-| Section                                             | Description                                                      |
-| --------------------------------------------------- | ---------------------------------------------------------------- |
-| [Runbooks](operations/runbooks.md)                  | Troubleshooting playbooks for every failure mode                 |
-| [Security](operations/security.md)                  | Secrets lifecycle, credential rotation, threat model             |
-| [Networking & TLS](operations/networking.md)        | NetworkPolicies, Ingress TLS via cert-manager, flannel caveat    |
-| [Reliability](operations/reliability.md)            | PodDisruptionBudgets, pod anti-affinity, graceful shutdown       |
-| [Supply-chain security](operations/supply-chain.md) | CI Trivy/Syft/cosign pipeline, digest pinning, SBOM verification |
+| Section                                                   | Description                                                       |
+| ---------------------------------------------------------- | ------------------------------------------------------------------ |
+| [Runbooks](operations/runbooks.md)                        | Troubleshooting playbooks for every failure mode                  |
+| [Security](operations/security.md)                        | Secrets lifecycle, credential rotation, threat model               |
+| [Networking & TLS](operations/networking.md)              | NetworkPolicies, Ingress TLS via cert-manager, flannel caveat     |
+| [Reliability](operations/reliability.md)                  | PodDisruptionBudgets, pod anti-affinity, graceful shutdown        |
+| [Resilience Patterns](operations/resilience-patterns.md)  | App-level retry/circuit-breaker/backoff/DLQ patterns, per service |
+| [Supply-chain security](operations/supply-chain.md)       | CI Trivy/Syft/cosign pipeline, digest pinning, SBOM verification  |
+| [Known Issues](operations/known-issues.md)                | Open limitations and accepted trade-offs, consolidated            |
 
 ### API reference
 

@@ -133,6 +133,39 @@ Exemplars are enabled via `OTEL_METRICS_EXEMPLAR_FILTER=trace_based` in the Depl
 
 ---
 
+## Resilience
+
+Both downstream clients — the gRPC channel to order-api and the `HttpClient` to notification-svc —
+are wrapped in `.AddStandardResilienceHandler()` (Microsoft.Extensions.Http.Resilience), configured
+with library defaults, not tuned in this repo:
+
+```csharp
+builder.Services.AddGrpcClient<OrderApi.Protos.OrderService.OrderServiceClient>(opts =>
+{
+    opts.Address = orderApiUri;
+})
+.AddStandardResilienceHandler();   // retry w/ exponential backoff, then circuit-breaks
+
+builder.Services.AddHttpClient("notification-svc", client =>
+{
+    client.BaseAddress = notificationUri;
+    client.Timeout = TimeSpan.FromSeconds(10);
+})
+.AddStandardResilienceHandler();
+```
+
+This means a transient order-api or notification-svc blip is retried automatically before it ever
+surfaces to the browser; a sustained outage opens the circuit so gateway-api stops hammering a
+downstream that's already down, rather than piling up threads waiting on it. The explicit 10s
+`client.Timeout` on the notification-svc `HttpClient` is separate from — and tighter than — the
+resilience handler's own per-attempt timeout.
+
+See [docs/operations/resilience-patterns.md](../operations/resilience-patterns.md) for how this
+fits alongside the other services' retry/backoff/circuit-breaker patterns, and what isn't covered
+(no automated fault-injection test exercises this path today).
+
+---
+
 ## Failure modes
 
 | Scenario                                 | Behaviour                                 | Trace/log evidence                                                 |
