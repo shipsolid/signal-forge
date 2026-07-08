@@ -5,34 +5,73 @@ using Moq;
 using OrderApi.Data;
 using OrderApi.Messaging;
 using OrderApi.Models;
+using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace OrderApi.Tests;
 
-public class OutboxRelayWorkerTests
+// Backed by a real PostgreSQL container, not EF Core's InMemory provider.
+// InMemory doesn't support transactions or raw SQL, and this worker's
+// multi-replica-safe claiming (FOR UPDATE SKIP LOCKED, see
+// OutboxRelayWorker.PublishAndMarkAsync) needs both — there's no portable
+// substitute that still exercises the real locking behaviour.
+public class PostgresFixture : IAsyncLifetime
 {
+    // Matches k8s/datastores/postgres/statefulset.yaml's pinned version.
+    public readonly PostgreSqlContainer Container = new PostgreSqlBuilder("postgres:16.4")
+        .WithDatabase("outbox_test")
+        .WithUsername("test")
+        .WithPassword("test")
+        .Build();
+
+    public Task InitializeAsync() => Container.StartAsync();
+    public Task DisposeAsync() => Container.DisposeAsync().AsTask();
+}
+
+public class OutboxRelayWorkerTests : IClassFixture<PostgresFixture>, IAsyncLifetime
+{
+    private readonly PostgresFixture _fixture;
+
+    public OutboxRelayWorkerTests(PostgresFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    // Fresh schema per test so tests don't see each other's rows, while still
+    // reusing one running container (and its startup cost) across the class.
+    public async Task InitializeAsync()
+    {
+        await using var db = OpenDb();
+        await db.Database.EnsureDeletedAsync();
+        await db.Database.EnsureCreatedAsync();
+    }
+
+    public Task DisposeAsync() => Task.CompletedTask;
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
-    private static IServiceScopeFactory BuildScopeFactory(string dbName)
+    private IServiceScopeFactory BuildScopeFactory()
     {
         var services = new ServiceCollection();
-        services.AddDbContext<AppDbContext>(opts => opts.UseInMemoryDatabase(dbName));
+        services.AddDbContext<AppDbContext>(opts => opts.UseNpgsql(_fixture.Container.GetConnectionString()));
         return services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
     }
 
-    private static AppDbContext OpenDb(IServiceScopeFactory factory)
-        => factory.CreateScope().ServiceProvider.GetRequiredService<AppDbContext>();
+    private AppDbContext OpenDb()
+        => new(new DbContextOptionsBuilder<AppDbContext>()
+            .UseNpgsql(_fixture.Container.GetConnectionString())
+            .Options);
 
     private static OutboxRelayWorker BuildWorker(IServiceScopeFactory factory, IOrderPublisher publisher)
-        => new OutboxRelayWorker(factory, publisher, NullLogger<OutboxRelayWorker>.Instance);
+        => new(factory, publisher, NullLogger<OutboxRelayWorker>.Instance);
 
     // ── Pending messages are published and marked processed ──────────────────
 
     [Fact]
     public async Task DrainOutboxAsync_PendingMessage_PublishesAndSetsProcessedAt()
     {
-        var factory = BuildScopeFactory(nameof(DrainOutboxAsync_PendingMessage_PublishesAndSetsProcessedAt));
-        var db = OpenDb(factory);
+        var factory = BuildScopeFactory();
+        await using var db = OpenDb();
 
         var order = new Order { ProjectId = 1, Description = "Widget", Amount = 10m };
         db.Orders.Add(order);
@@ -51,7 +90,8 @@ public class OutboxRelayWorkerTests
 
         publisher.Verify(p => p.PublishAsync(It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
 
-        var saved = await OpenDb(factory).OutboxMessages.FindAsync(msg.Id);
+        await using var verifyDb = OpenDb();
+        var saved = await verifyDb.OutboxMessages.FindAsync(msg.Id);
         Assert.NotNull(saved!.ProcessedAt);
     }
 
@@ -60,7 +100,7 @@ public class OutboxRelayWorkerTests
     [Fact]
     public async Task DrainOutboxAsync_NoMessages_DoesNotPublish()
     {
-        var factory = BuildScopeFactory(nameof(DrainOutboxAsync_NoMessages_DoesNotPublish));
+        var factory = BuildScopeFactory();
         var publisher = new Mock<IOrderPublisher>();
 
         var worker = BuildWorker(factory, publisher.Object);
@@ -74,8 +114,8 @@ public class OutboxRelayWorkerTests
     [Fact]
     public async Task DrainOutboxAsync_AlreadyProcessedMessage_IsSkipped()
     {
-        var factory = BuildScopeFactory(nameof(DrainOutboxAsync_AlreadyProcessedMessage_IsSkipped));
-        var db = OpenDb(factory);
+        var factory = BuildScopeFactory();
+        await using var db = OpenDb();
 
         var order = new Order { ProjectId = 1, Description = "Old", Amount = 5m };
         db.Orders.Add(order);
@@ -102,8 +142,8 @@ public class OutboxRelayWorkerTests
     [Fact]
     public async Task DrainOutboxAsync_PublisherThrows_LeavesMessageUnprocessed()
     {
-        var factory = BuildScopeFactory(nameof(DrainOutboxAsync_PublisherThrows_LeavesMessageUnprocessed));
-        var db = OpenDb(factory);
+        var factory = BuildScopeFactory();
+        await using var db = OpenDb();
 
         var order = new Order { ProjectId = 2, Description = "Fail me", Amount = 1m };
         db.Orders.Add(order);
@@ -120,7 +160,8 @@ public class OutboxRelayWorkerTests
         var worker = BuildWorker(factory, publisher.Object);
         await worker.DrainOutboxAsync(CancellationToken.None);
 
-        var saved = await OpenDb(factory).OutboxMessages.FindAsync(msg.Id);
+        await using var verifyDb = OpenDb();
+        var saved = await verifyDb.OutboxMessages.FindAsync(msg.Id);
         Assert.Null(saved!.ProcessedAt);
     }
 
@@ -129,8 +170,8 @@ public class OutboxRelayWorkerTests
     [Fact]
     public async Task DrainOutboxAsync_PendingMessage_PayloadContainsOrderId()
     {
-        var factory = BuildScopeFactory(nameof(DrainOutboxAsync_PendingMessage_PayloadContainsOrderId));
-        var db = OpenDb(factory);
+        var factory = BuildScopeFactory();
+        await using var db = OpenDb();
 
         var order = new Order { ProjectId = 7, Description = "Payload check", Amount = 42.50m };
         db.Orders.Add(order);
@@ -158,8 +199,8 @@ public class OutboxRelayWorkerTests
     [Fact]
     public async Task DrainOutboxAsync_WithTraceParent_ForwardsItToPublisher()
     {
-        var factory = BuildScopeFactory(nameof(DrainOutboxAsync_WithTraceParent_ForwardsItToPublisher));
-        var db = OpenDb(factory);
+        var factory = BuildScopeFactory();
+        await using var db = OpenDb();
 
         var order = new Order { ProjectId = 1, Description = "Trace test", Amount = 5m };
         db.Orders.Add(order);
@@ -184,5 +225,61 @@ public class OutboxRelayWorkerTests
         await worker.DrainOutboxAsync(CancellationToken.None);
 
         Assert.Equal(expectedTraceParent, capturedTraceParent);
+    }
+
+    // ── Multi-replica race: two workers polling concurrently must not both ───
+    // ── publish the same message ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task DrainOutboxAsync_TwoConcurrentReplicas_OnlyOnePublishesEachMessage()
+    {
+        // Two independent scope factories against the same database, standing
+        // in for two order-api pods polling the same OutboxMessages table.
+        var factoryA = BuildScopeFactory();
+        var factoryB = BuildScopeFactory();
+
+        await using (var db = OpenDb())
+        {
+            for (var i = 0; i < 10; i++)
+            {
+                var order = new Order { ProjectId = 1, Description = $"Order {i}", Amount = 1m };
+                db.Orders.Add(order);
+                db.OutboxMessages.Add(new OutboxMessage { Order = order, CreatedAt = DateTime.UtcNow });
+            }
+            await db.SaveChangesAsync();
+        }
+
+        var publishedOrderIds = new System.Collections.Concurrent.ConcurrentBag<int>();
+
+        IOrderPublisher MakeSlowPublisher()
+        {
+            var mock = new Mock<IOrderPublisher>();
+            mock.Setup(p => p.PublishAsync(It.IsAny<string>(), It.IsAny<string?>()))
+                .Returns<string, string?>(async (payload, _) =>
+                {
+                    // Widen the window between claiming a row and committing it,
+                    // so a real race (not just a lucky interleave) is exercised.
+                    await Task.Delay(50);
+                    var orderId = System.Text.Json.JsonDocument.Parse(payload).RootElement.GetProperty("order_id").GetInt32();
+                    publishedOrderIds.Add(orderId);
+                });
+            return mock.Object;
+        }
+
+        var workerA = BuildWorker(factoryA, MakeSlowPublisher());
+        var workerB = BuildWorker(factoryB, MakeSlowPublisher());
+
+        await Task.WhenAll(
+            workerA.DrainOutboxAsync(CancellationToken.None),
+            workerB.DrainOutboxAsync(CancellationToken.None));
+
+        // The real assertion: each order was published exactly once, total, across
+        // both replicas — not zero (both skipped it) and not two (both won the race).
+        Assert.Equal(10, publishedOrderIds.Count);
+        Assert.Equal(10, publishedOrderIds.Distinct().Count());
+
+        await using var verifyDb = OpenDb();
+        var processedCount = await verifyDb.OutboxMessages.CountAsync(m => m.ProcessedAt != null);
+        Assert.Equal(10, processedCount);
     }
 }

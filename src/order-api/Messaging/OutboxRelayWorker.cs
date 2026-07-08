@@ -16,6 +16,14 @@
 //   notification-svc dedup key (order_id) prevents duplicate notifications
 //   even if this worker publishes the same message twice.
 //
+// Multi-replica safety:
+//   order-api runs 2+ replicas, all polling independently. Each row is
+//   claimed via `SELECT ... FOR UPDATE SKIP LOCKED` in its own transaction
+//   (see PublishAndMarkAsync) so two replicas can never publish the same
+//   row concurrently — the second one's SELECT just skips it. This is
+//   defense-in-depth on top of, not a replacement for, the notification-svc
+//   dedup above.
+//
 // Poll interval: 5 seconds — acceptable for a lab. In production use
 // PostgreSQL LISTEN/NOTIFY or a trigger-based wake-up for lower latency.
 // ============================================================
@@ -79,27 +87,57 @@ public class OutboxRelayWorker : BackgroundService
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        // Process in batches of 100. ORDER BY CreatedAt ensures FIFO delivery.
-        var pending = await db.OutboxMessages
-            .Include(m => m.Order)
+        // Unlocked ID-only lookup, just to size the batch and fix FIFO iteration order.
+        // The actual row lock (FOR UPDATE SKIP LOCKED) happens per-message in
+        // PublishAndMarkAsync below — see that method for why.
+        var pendingIds = await db.OutboxMessages
             .Where(m => m.ProcessedAt == null)
             .OrderBy(m => m.CreatedAt)
+            .Select(m => m.Id)
             .Take(100)
             .ToListAsync(ct);
 
-        if (pending.Count == 0)
+        if (pendingIds.Count == 0)
             return;
 
-        _logger.LogInformation("OutboxRelayWorker found {Count} pending message(s)", pending.Count);
+        _logger.LogInformation("OutboxRelayWorker found {Count} pending message(s)", pendingIds.Count);
 
-        foreach (var msg in pending)
+        foreach (var id in pendingIds)
         {
-            await PublishAndMarkAsync(db, msg, ct);
+            await PublishAndMarkAsync(db, id, ct);
         }
     }
 
-    private async Task PublishAndMarkAsync(AppDbContext db, OutboxMessage msg, CancellationToken ct)
+    private async Task PublishAndMarkAsync(AppDbContext db, int outboxMessageId, CancellationToken ct)
     {
+        // order-api runs 2+ replicas, each polling independently on the same 5s interval.
+        // Without a lock, two replicas can both select the same unprocessed row in the
+        // same window and publish it twice. FOR UPDATE SKIP LOCKED closes that race: if
+        // another replica already has this row locked (mid-publish, in its own
+        // transaction below), this SELECT returns nothing here instead of blocking or
+        // double-publishing — the row is simply left for whichever replica holds the
+        // lock to finish (or for the next poll, if that replica's attempt fails and
+        // rolls back). One transaction per message, not one per batch, so a single
+        // failure never blocks or rolls back the rest of the batch — same isolation the
+        // prior per-message SaveChanges already gave us, just now also lock-safe across
+        // replicas.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        var msg = await db.OutboxMessages
+            .FromSqlInterpolated($@"
+                SELECT * FROM ""OutboxMessages""
+                WHERE ""Id"" = {outboxMessageId} AND ""ProcessedAt"" IS NULL
+                FOR UPDATE SKIP LOCKED")
+            .Include(m => m.Order)
+            .SingleOrDefaultAsync(ct);
+
+        if (msg is null)
+        {
+            // Already locked by another replica this cycle, or already processed.
+            await tx.RollbackAsync(ct);
+            return;
+        }
+
         using var activity = DiagnosticsConfig.ActivitySource.StartActivity("outbox.relay", ActivityKind.Internal);
         activity?.SetTag("outbox.message_id", msg.Id);
         activity?.SetTag("order.id", msg.Order.Id);
@@ -119,6 +157,7 @@ public class OutboxRelayWorker : BackgroundService
 
             msg.ProcessedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
 
             _logger.LogInformation(
                 "Relayed outbox message {MessageId} for order {OrderId}",
@@ -131,7 +170,8 @@ public class OutboxRelayWorker : BackgroundService
             _logger.LogError(ex,
                 "Failed to relay outbox message {MessageId} for order {OrderId}; will retry next poll",
                 msg.Id, msg.Order.Id);
-            // Leave ProcessedAt null — the message will be retried on the next poll.
+            // Rollback releases the row lock and leaves ProcessedAt null — retried next poll.
+            await tx.RollbackAsync(ct);
         }
     }
 }

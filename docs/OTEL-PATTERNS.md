@@ -18,7 +18,7 @@ chosen over alternatives, and _what you should see_ when the pattern works corre
 9. [Log Tailing & Trace Correlation](#9-log-tailing--trace-correlation)
 10. [K8s Attribute Enrichment](#10-k8s-attribute-enrichment)
 11. [Frontend RUM with Faro](#11-frontend-rum-with-faro)
-12. [Grafana Cloud Dual-Export](#12-grafana-cloud-dual-export)
+12. [Grafana Cloud export (cloud mode)](#12-grafana-cloud-export-cloud-mode)
 13. [Exemplar Pipeline End-to-End](#13-exemplar-pipeline-end-to-end)
 14. [Health-Check Exclusion](#14-health-check-exclusion)
 15. [Helm-Based Monitoring (Required)](#15-helm-based-monitoring-required)
@@ -542,105 +542,49 @@ gateway-api span — a single trace starting in the browser and ending in the My
 
 ---
 
-## 12. Grafana Cloud Dual-Export
+## 12. Grafana Cloud export (cloud mode)
 
-Alloy dual-exports all signals to Grafana Cloud when credentials are present. When env vars are
-empty the exporters log a configuration error and become no-ops — the local pipeline (Jaeger /
-Prometheus / Loki) is unaffected.
+`monitoring.mode` in [conf.yml](../conf.yml) is `local` or `cloud` — **mutually exclusive, never
+both.** There is no dual-export: `cloud` mode ships traces/metrics/logs to Grafana Cloud via the
+`grafana/k8s-monitoring` Helm chart's Alloy agents; `local` mode ships to the in-cluster
+Jaeger/Prometheus/Loki stack instead. Only one set of exporters is ever active. (An earlier version
+of this doc described a hand-authored `k8s/alloy/configmap.yaml` dual-exporting both — that file and
+that architecture no longer exist; see [docs/observability/pipeline.md](observability/pipeline.md)
+for the current chart-based pipeline.)
 
-### Credential architecture
+Grafana Cloud issues a **separate numeric instance ID per signal type** (Tempo, Mimir, Loki each
+have their own), with one shared API key as the password for all three, plus a raw-URL →
+adjusted-URL transform per signal (gRPC host:port for Tempo, Prometheus remote_write `/push` for
+Mimir — not OTLP HTTP, see
+[docs/deployment/grafana-cloud.md](deployment/grafana-cloud.md#endpoint-format-requirements) for why
+— and `/loki/api/v1/push` for Loki).
 
-Grafana Cloud issues a **separate numeric instance ID per signal type**. This is different from a
-single "username" — each data source (Tempo, Mimir, Loki) has its own ID. One shared API key is used
-as the password for all three.
-
-```text
-Azure Key Vault (mf-cc-dt-azrsrp-prd-kv)
-  grafana-mccaindev-cloud-api-key          → shared glsa_... token
-  grafana-mccaindev-cloud-tempo-endpoint   → https://tempo-prod-29-...grafana.net
-  grafana-mccaindev-cloud-tempo-username   → 1541184   (Tempo instance ID)
-  grafana-mccaindev-cloud-mimir-endpoint   → https://prometheus-us-central2.grafana.net
-  grafana-mccaindev-cloud-mimir-username   → 3102416   (Mimir instance ID)
-  grafana-mccaindev-cloud-loki-endpoint    → https://logs-prod-037.grafana.net
-  grafana-mccaindev-cloud-loki-username    → 1546883   (Loki instance ID)
-```
-
-### Endpoint path adjustments
-
-The raw AKV values need path suffixes that differ per exporter protocol:
-
-| Signal              | Raw AKV value                                | Adjusted value used by Alloy                                                                       |
-| ------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Traces (OTLP gRPC)  | `https://tempo-prod-29-....grafana.net`      | `tempo-prod-29-....grafana.net:443` — strip `https://`, append `:443` — gRPC uses h2 not HTTP URLs |
-| Metrics (OTLP HTTP) | `https://prometheus-us-central2.grafana.net` | `https://prometheus-us-central2.grafana.net/api/v1/otlp`                                           |
-| Logs (OTLP HTTP)    | `https://logs-prod-037.grafana.net`          | `https://logs-prod-037.grafana.net/loki/api/v1/push`                                               |
-
-These adjustments are applied automatically by `make secrets-fetch-akv`.
-
-### How it is wired
-
-```text
-make secrets-fetch-akv
-  │
-  ├─ az login --service-principal  (SP from .env)
-  ├─ 7× az keyvault secret show    (pull from AKV)
-  ├─ sed / string append           (adjust endpoint paths)
-  ├─ kubectl create secret --dry-run | apply   (idempotent)
-  └─ kubectl rollout restart deployment/otel-frontend -n otel-lab   (picks up FARO_URL)
-        │
-        ▼
-  Alloy pod env vars (from K8s Secret via secretKeyRef optional: true)
-        │
-        ▼
-  Three auth blocks in River config (k8s/alloy/configmap.yaml):
-    otelcol.auth.basic "grafana_cloud_tempo"  { username = env("GRAFANA_CLOUD_TEMPO_USER") ... }
-    otelcol.auth.basic "grafana_cloud_mimir"  { username = env("GRAFANA_CLOUD_MIMIR_USER") ... }
-    otelcol.auth.basic "grafana_cloud_loki"   { username = env("GRAFANA_CLOUD_LOKI_USER")  ... }
-        │
-        ▼
-  Three exporters in the batch output:
-    otelcol.exporter.otlp     "grafana_cloud_traces"  → Tempo  (gRPC :443)
-    otelcol.exporter.otlphttp "grafana_cloud_metrics" → Mimir  (/api/v1/otlp)
-    otelcol.exporter.otlphttp "grafana_cloud_logs"    → Loki   (/loki/api/v1/push)
-```
-
-### Setup (one command)
-
-```bash
-# 1. Add SP credentials to .env once (copy from .env.example):
-cp .env.example .env
-# edit .env: ARM_CLIENT_ID, ARM_CLIENT_SECRET, ARM_TENANT_ID,
-#            ARM_SUBSCRIPTION_ID, Resource_Group, Azure_KeyVault
-
-# 2. Pull from AKV and apply:
-make secrets-fetch-akv
-
-# 3. Verify (API key is redacted):
-make secrets-show
-```
+The full credential model — Azure Key Vault layout, the fetch script, `conf.yml` wiring, and the K8s
+Secret it produces — is documented once, in
+[docs/deployment/grafana-cloud.md](deployment/grafana-cloud.md); this section intentionally doesn't
+duplicate it. Setup is `./scripts/fetch-grafana-cloud-conf-from-akv.sh` (populates `conf.yml`) then
+`./deploy-local.sh --skip-cluster --skip-build` — the canonical path. `make secrets-fetch-akv` is a
+legacy alternative (see `CLAUDE.md`) that writes the Secret directly and drives its own
+`helm upgrade`, bypassing `deploy-local.sh`; prefer the script-based flow above.
 
 ### Verifying cloud export is working
 
 ```bash
-# Check Alloy receiver logs for export errors:
-kubectl -n monitoring logs daemonset/grafana-k8s-alloy-receiver | grep -i "grafana_cloud"
+# Mode-aware triage: conf.yml values, pod state, Alloy exporter counters, reachability probe.
+./scripts/debug.sh
 
-# Should see successful export, not "endpoint is empty" or auth errors.
-# Send a test trace:
-curl -s http://localhost:8080/api/projects   # generates a trace
-# Then check Grafana Cloud → Explore → Tempo for the trace.
+# Or check Alloy logs directly for export errors:
+kubectl -n monitoring logs daemonset/grafana-k8s-alloy-receiver | grep -i "grafana_cloud\|error"
+
+# Send a test trace, then check Grafana Cloud → Explore → Tempo:
+curl -s http://localhost:8080/api/projects
 ```
 
-### graceful degradation
+### Graceful degradation
 
-`optional: true` on every `secretKeyRef` means Alloy pods start even when the secret is absent.
-Missing env vars cause the cloud exporters to log:
-
-```text
-level=error msg="failed to export" exporter=grafana_cloud_traces err="endpoint is empty"
-```
-
-Local backends are not affected. This is the intended local-only mode.
+Grafana Cloud credential env vars are sourced via `secretKeyRef` with `optional: true`, so Alloy
+pods start even when the secret is absent or incomplete — missing values surface as export errors in
+the log grep above (`endpoint is empty`, `401`), not as a pod crash.
 
 ---
 
@@ -852,26 +796,11 @@ annotations:
 
 ### Grafana Cloud export not working
 
-1. Verify the K8s Secret was applied: `make secrets-show` — all 7 fields should be non-empty
-
-2. Check Alloy is reading the env vars:
-   `kubectl -n otel-lab exec daemonset/alloy -- env | grep GRAFANA`
-
-3. Check Alloy logs for exporter errors:
-   `kubectl -n otel-lab logs daemonset/alloy | grep -E "grafana_cloud|export.*fail|endpoint"`
-
-   - `"endpoint is empty"` → secret not applied or Alloy not restarted after apply
-   - `"401 Unauthorized"` → wrong API key or wrong instance ID for that signal
-   - `"connection refused"` → wrong endpoint host/port
-
-4. Verify endpoint format per signal:
-
-   - Tempo: must be `host:443` with **no** `https://` prefix (gRPC transport)
-   - Mimir: must be `https://host/api/v1/otlp` (not `/api/prom/push`)
-   - Loki: must be `https://host/loki/api/v1/push` Run `make secrets-show` and compare against these
-     formats.
-
-5. Re-pull from AKV if credentials were rotated: `make secrets-fetch-akv`
+See [docs/operations/runbooks.md](operations/runbooks.md#grafana-cloud-export-not-working) — the
+canonical version of this runbook, kept in one place rather than duplicated here to avoid exactly
+the kind of drift this copy had (wrong Alloy resource name/namespace, and an inverted Mimir endpoint
+format that told the reader to use the broken `/api/v1/otlp` form instead of the correct
+`/api/prom/push`).
 
 ### AKV authentication failing (`secrets-fetch-akv` errors)
 
@@ -887,8 +816,8 @@ annotations:
      --tenant  "$ARM_TENANT_ID"
    ```
 
-3. Verify SP has Key Vault Secrets User role on `mf-cc-dt-azrsrp-prd-kv`:
-   `az keyvault show --name mf-cc-dt-azrsrp-prd-kv --query "properties.accessPolicies"`
+3. Verify SP has Key Vault Secrets User role on `example-org-prd-kv`:
+   `az keyvault show --name example-org-prd-kv --query "properties.accessPolicies"`
 
 4. Confirm secrets exist with the expected names:
-   `az keyvault secret list --vault-name mf-cc-dt-azrsrp-prd-kv --query "[?starts_with(name,'grafana-mccaindev')].name" -o tsv`
+   `az keyvault secret list --vault-name example-org-prd-kv --query "[?starts_with(name,'grafana-example-org')].name" -o tsv`

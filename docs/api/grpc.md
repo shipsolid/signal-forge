@@ -1,10 +1,7 @@
 # gRPC API Reference
 
-**Service**: `orders.OrderService`
-**Server**: order-api
-**Port**: 5001 (cluster-internal)
-**Protocol**: HTTP/2 with protobuf encoding
-**Client**: gateway-api (uses `Grpc.Net.Client`)
+**Service**: `orders.OrderService` **Server**: order-api **Port**: 5001 (cluster-internal)
+**Protocol**: HTTP/2 with protobuf encoding **Client**: gateway-api (uses `Grpc.Net.Client`)
 
 Proto definition: `src/order-api/Protos/orders.proto` (also copied to `src/gateway-api/Protos/`)
 
@@ -27,15 +24,22 @@ service OrderService {
 
 ## RPC: CreateOrder
 
-Creates an order, persists to PostgreSQL, and publishes an `order.created` event to RabbitMQ (with W3C `traceparent` in message headers).
+Persists the order and an outbox row to PostgreSQL in one transaction, then returns — it does
+**not** publish to RabbitMQ itself. `OutboxRelayWorker` picks up the outbox row on its next poll
+(≤5s later) and publishes the `order.created` event from there, with W3C `traceparent` (captured at
+write time) in the message headers. See
+[order-api.md](../services/order-api.md#rabbitmq-publishing-outboxrelayworkercs-orderpublishercs)
+for the full outbox flow and its trace-shape implications.
 
 ### Request
 
 ```protobuf
 message CreateOrderRequest {
-  int32  project_id  = 1;   // Must be > 0
-  string description = 2;   // Non-empty, ≤ 500 chars
-  double amount      = 3;   // > 0 and ≤ 999999.99
+  int32  project_id      = 1;   // Must be > 0
+  string description     = 2;   // Non-empty, ≤ 500 chars
+  double amount          = 3;   // > 0 and ≤ 999999.99
+  string idempotency_key = 4;   // Optional. Same key on a retried call replays the
+                                 // original order instead of duplicating it.
 }
 ```
 
@@ -53,14 +57,19 @@ message CreateOrderResponse {
 | gRPC status        | Condition                                                                |
 | ------------------ | ------------------------------------------------------------------------ |
 | `INVALID_ARGUMENT` | `project_id` ≤ 0, `amount` out of range, or `description` empty/too long |
-| `INTERNAL`         | Database write failed or RabbitMQ publish failed                         |
-| `UNAVAILABLE`      | PostgreSQL or RabbitMQ unreachable                                       |
+| `INTERNAL`         | Database write (order + outbox row) failed                               |
+| `UNAVAILABLE`      | PostgreSQL unreachable                                                   |
+
+A RabbitMQ outage does **not** surface as an error here — publish happens later, out-of-band, in
+`OutboxRelayWorker`. `CreateOrder` only touches PostgreSQL.
 
 ---
 
 ## RPC: GetOrdersByProject
 
-Server-streaming RPC. Streams all orders for a given project, ordered by `created_at` descending. Rows are streamed directly from the PostgreSQL cursor using `AsAsyncEnumerable()` — memory usage is O(1) regardless of result set size.
+Server-streaming RPC. Streams all orders for a given project, ordered by `created_at` descending.
+Rows are streamed directly from the PostgreSQL cursor using `AsAsyncEnumerable()` — memory usage is
+O(1) regardless of result set size.
 
 ### Request
 
@@ -86,7 +95,8 @@ message OrderResponse {
 ### Behaviour
 
 - Returns zero messages if no orders exist for the project (not an error)
-- Respects client cancellation: if the gRPC client disconnects, the DB cursor is cancelled via `CancellationToken`
+- Respects client cancellation: if the gRPC client disconnects, the DB cursor is cancelled via
+  `CancellationToken`
 - Error codes: `INVALID_ARGUMENT` (project_id ≤ 0), `INTERNAL` (DB error)
 
 ---
@@ -118,7 +128,8 @@ message GetOrderRequest {
 
 ## Trace propagation
 
-gRPC metadata is the carrier for W3C `traceparent`. gateway-api's `AddGrpcClientInstrumentation()` injects this automatically in outbound calls.
+gRPC metadata is the carrier for W3C `traceparent`. gateway-api's `AddGrpcClientInstrumentation()`
+injects this automatically in outbound calls.
 
 ```
 gateway-api (gRPC client)
@@ -147,7 +158,13 @@ These attributes appear in Jaeger and can be used as search filters.
 | `GetOrdersByProject` | gRPC CLIENT span (streaming)                | gRPC SERVER span (streaming)                    |
 | `GetOrder`           | gRPC CLIENT span                            | gRPC SERVER span                                |
 
-The `order.publish` PRODUCER span is a child of `order.create` — it represents the RabbitMQ publish step within the order creation flow.
+The `order.publish` PRODUCER span is **not** a child of `order.create`. `CreateOrder` writes the
+order and an outbox row in one transaction and returns immediately; the actual RabbitMQ publish
+happens later, out-of-band, inside `OutboxRelayWorker`'s poll loop, as a child of its own
+`outbox.relay` span — a separate, disconnected trace from the original request. See the trace-shape
+comment at the top of `OrderGrpcService.cs` and `OutboxRelayWorker.cs`/`OrderPublisher.cs` for the
+full picture, including why notification-svc's CONSUMER span still correctly links back to
+`order.create` even though `order.publish` itself doesn't.
 
 ---
 
@@ -162,6 +179,8 @@ The proto file is included in each .NET project's `.csproj`:
 </ItemGroup>
 ```
 
-Code generation runs at build time. The generated client (`OrderService.OrderServiceClient`) and server base class (`OrderService.OrderServiceBase`) are available in the `Orders` namespace.
+Code generation runs at build time. The generated client (`OrderService.OrderServiceClient`) and
+server base class (`OrderService.OrderServiceBase`) are available in the `Orders` namespace.
 
-Any schema change to `orders.proto` requires rebuilding both `order-api` and `gateway-api`, re-importing images, and redeploying.
+Any schema change to `orders.proto` requires rebuilding both `order-api` and `gateway-api`,
+re-importing images, and redeploying.

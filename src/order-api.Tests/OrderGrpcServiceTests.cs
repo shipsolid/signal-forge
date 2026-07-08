@@ -265,4 +265,22 @@ public class OrderGrpcServiceTests
 
         Assert.Empty(stream.Written);
     }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task GetOrdersByProject_NonPositiveProjectId_ThrowsInvalidArgument(int projectId)
+    {
+        var svc = BuildService(BuildDb($"{nameof(GetOrdersByProject_NonPositiveProjectId_ThrowsInvalidArgument)}_{projectId}"));
+        var stream = new FakeServerStreamWriter<OrderResponse>();
+
+        var ex = await Assert.ThrowsAsync<RpcException>(() =>
+            svc.GetOrdersByProject(
+                new GetOrdersByProjectRequest { ProjectId = projectId },
+                stream,
+                TestServerCallContext.Create()));
+
+        Assert.Equal(StatusCode.InvalidArgument, ex.StatusCode);
+        Assert.Empty(stream.Written);
+    }
 }

@@ -1,11 +1,15 @@
 # Security
 
-This page is the **threat model and secrets lifecycle** reference. Controls that are heavy enough to have their own page are linked out:
+This page is the **threat model and secrets lifecycle** reference. Controls that are heavy enough to
+have their own page are linked out:
 
-- [Container hardening](../infrastructure/hardening.md) — securityContext, non-root UIDs, readOnlyRootFilesystem, digest-pinned base images, Pod Security Standards
-- [Networking & TLS](networking.md) — NetworkPolicy default-deny, Ingress TLS via cert-manager, flannel caveat
+- [Container hardening](../infrastructure/hardening.md) — securityContext, non-root UIDs,
+  readOnlyRootFilesystem, digest-pinned base images, Pod Security Standards
+- [Networking & TLS](networking.md) — NetworkPolicy default-deny, Ingress TLS via cert-manager,
+  flannel caveat
 - [Supply-chain security](supply-chain.md) — CI Trivy scan, Syft SBOM, cosign keyless signing
-- [Reliability](reliability.md) — PodDisruptionBudgets, graceful shutdown (defence against availability loss during drains)
+- [Reliability](reliability.md) — PodDisruptionBudgets, graceful shutdown (defence against
+  availability loss during drains)
 
 ## Threat model summary
 
@@ -20,7 +24,7 @@ This page is the **threat model and secrets lifecycle** reference. Controls that
 | Credential leakage in logs         | `logger.exception()` used without string interpolation of sensitive fields                                                                         | this page                                                  |
 | Privilege escalation in-cluster    | Alloy ServiceAccount has minimum RBAC; every app pod drops all Linux capabilities                                                                  | this page + [hardening.md](../infrastructure/hardening.md) |
 | Poison message amplification       | Dead Letter Queue isolates unprocessable messages                                                                                                  | this page                                                  |
-| Unauthorised cross-tier traffic    | `NetworkPolicy` default-deny + tiered allows (apps ↔ datastores, apps → alloy-receiver)                                                           | [networking.md](networking.md)                             |
+| Unauthorised cross-tier traffic    | `NetworkPolicy` default-deny + tiered allows (apps ↔ datastores, apps → alloy-receiver)                                                            | [networking.md](networking.md)                             |
 | MITM on Ingress                    | TLS via cert-manager (self-signed CA → leaf cert on each host)                                                                                     | [networking.md](networking.md)                             |
 | Tampered image in production       | cosign keyless signing at build time; admission-time verification gate _not yet wired_ — see supply-chain §Admission enforcement                   | [supply-chain.md](supply-chain.md)                         |
 
@@ -31,8 +35,8 @@ This page is the **threat model and secrets lifecycle** reference. Controls that
 ### Where secrets live
 
 ```
-Azure Key Vault (mf-cc-dt-azrsrp-prd-kv)
-  └─ grafana-mccaindev-* (7 secrets)
+Azure Key Vault (example-org-prd-kv)
+  └─ grafana-example-org-* (7 secrets)
         │
         │  make secrets-fetch-akv
         ▼
@@ -64,7 +68,8 @@ No plaintext credentials appear in:
 
 ### Fail-fast on missing required secrets
 
-.NET services throw `InvalidOperationException` at startup if `ConnectionStrings:DefaultConnection` is empty. This ensures:
+.NET services throw `InvalidOperationException` at startup if `ConnectionStrings:DefaultConnection`
+is empty. This ensures:
 
 - A misconfigured pod fails loudly (CrashLoopBackOff) rather than serving errors silently
 - The failure is visible in `kubectl describe pod` with the exact missing variable
@@ -78,7 +83,9 @@ if (string.IsNullOrWhiteSpace(connStr))
 
 ### Grafana Cloud secrets — `optional: true`
 
-Cloud credentials use `optional: true` in `secretKeyRef` because cloud export is an opt-in feature. The service starts without them and degrades gracefully (cloud exporters log errors but local pipeline continues).
+Cloud credentials use `optional: true` in `secretKeyRef` because cloud export is an opt-in feature.
+The service starts without them and degrades gracefully (cloud exporters log errors but local
+pipeline continues).
 
 ```yaml
 env:
@@ -109,7 +116,8 @@ if (string.IsNullOrWhiteSpace(dto.Description) || dto.Description.Length > 500)
     return Results.ValidationProblem(...);
 ```
 
-Returns `HTTP 422 Unprocessable Entity` with a structured error body. No database calls are made for invalid input.
+Returns `HTTP 422 Unprocessable Entity` with a structured error body. No database calls are made for
+invalid input.
 
 ### order-api (`OrderGrpcService.cs`)
 
@@ -120,7 +128,8 @@ if (request.ProjectId <= 0)
     throw new RpcException(new Status(StatusCode.InvalidArgument, "ProjectId must be positive."));
 ```
 
-This defence-in-depth means invalid data cannot reach PostgreSQL even if gateway-api validation is bypassed.
+This defence-in-depth means invalid data cannot reach PostgreSQL even if gateway-api validation is
+bypassed.
 
 ---
 
@@ -137,16 +146,19 @@ builder.Services.AddCors(opts => opts.AddDefaultPolicy(policy =>
           .AllowAnyHeader()));
 ```
 
-In Kubernetes, `Cors:AllowedOrigins` is set via Deployment env var to the actual frontend hostname. Faro CORS is `["*"]` — this is intentional because Faro receives RUM data from browsers, not API calls with sensitive payloads.
+In Kubernetes, `Cors:AllowedOrigins` is set via Deployment env var to the actual frontend hostname.
+Faro CORS is `["*"]` — this is intentional because Faro receives RUM data from browsers, not API
+calls with sensitive payloads.
 
 ---
 
 ## AllowedHosts
 
-`AllowedHosts` in `appsettings.json` restricts which `Host` headers are accepted. Wildcard `*` (the ASP.NET Core default) is replaced with explicit names:
+`AllowedHosts` in `appsettings.json` restricts which `Host` headers are accepted. Wildcard `*` (the
+ASP.NET Core default) is replaced with explicit names:
 
-**gateway-api**: `gateway-api,gateway-api.otel-lab,localhost,127.0.0.1`
-**order-api**: `order-api,order-api.otel-lab,localhost,127.0.0.1`
+**gateway-api**: `gateway-api,gateway-api.otel-lab,localhost,127.0.0.1` **order-api**:
+`order-api,order-api.otel-lab,localhost,127.0.0.1`
 
 This prevents Host header injection attacks in environments where the service is exposed externally.
 
@@ -165,7 +177,8 @@ logger.exception("Failed to process order.created event")
 logger.error("Failed to process: %s", exc)
 ```
 
-.NET's `RecordException(ex)` on spans follows the same principle — exception messages are attached to span events, not to log messages where they might be processed by log aggregation pipelines.
+.NET's `RecordException(ex)` on spans follows the same principle — exception messages are attached
+to span events, not to log messages where they might be processed by log aggregation pipelines.
 
 ---
 
@@ -183,7 +196,8 @@ rules:
     verbs: ["get", "list", "watch"]
 ```
 
-No write permissions. No access to Secrets, ConfigMaps, or service accounts. The ClusterRole is scoped to read-only operations needed for k8sattributes enrichment and log discovery.
+No write permissions. No access to Secrets, ConfigMaps, or service accounts. The ClusterRole is
+scoped to read-only operations needed for k8sattributes enrichment and log discovery.
 
 ---
 
@@ -191,10 +205,11 @@ No write permissions. No access to Secrets, ConfigMaps, or service accounts. The
 
 The SP used for `make secrets-fetch-akv` should have:
 
-- **Key Vault Secrets User** role on `mf-cc-dt-azrsrp-prd-kv` — read-only access to secrets
+- **Key Vault Secrets User** role on `example-org-prd-kv` — read-only access to secrets
 - No other roles in the subscription
 
-The SP credentials (`ARM_CLIENT_SECRET`) are stored only in `.env` (git-ignored) on the developer's machine. They are never committed to git or stored in Kubernetes.
+The SP credentials (`ARM_CLIENT_SECRET`) are stored only in `.env` (git-ignored) on the developer's
+machine. They are never committed to git or stored in Kubernetes.
 
 ---
 
@@ -202,8 +217,10 @@ The SP credentials (`ARM_CLIENT_SECRET`) are stored only in `.env` (git-ignored)
 
 ### Grafana Cloud API key
 
-1. Generate a new Access Policy token in Grafana Cloud with scopes: `metrics:write logs:write traces:write`
-2. Update in AKV: `az keyvault secret set --vault-name ... --name grafana-mccaindev-cloud-api-key --value "glsa_new..."`
+1. Generate a new Access Policy token in Grafana Cloud with scopes:
+   `metrics:write logs:write traces:write`
+2. Update in AKV:
+   `az keyvault secret set --vault-name ... --name grafana-example-org-cloud-api-key --value "glsa_new..."`
 3. Re-fetch: `make secrets-fetch-akv`
 4. Restart Alloy: `kubectl -n monitoring rollout restart daemonset/grafana-k8s-alloy-receiver`
 5. Revoke the old token in Grafana Cloud Access Policies
@@ -215,15 +232,19 @@ The SP credentials (`ARM_CLIENT_SECRET`) are stored only in `.env` (git-ignored)
 3. `kubectl apply -f k8s/infra/secrets.yaml`
 4. Restart the consuming service: `kubectl -n otel-lab rollout restart deployment/gateway-api`
 
-> **Note**: Changing the MySQL password requires updating both the Secret and the database before restarting the service. Do not restart the service before updating the database — it will fail authentication.
+> **Note**: Changing the MySQL password requires updating both the Secret and the database before
+> restarting the service. Do not restart the service before updating the database — it will fail
+> authentication.
 
 ---
 
 ## Security validation checklist
 
-- [ ] `kubectl -n otel-lab get secret db-secrets -o json | jq '.data'` — all values are base64 (not plaintext)
+- [ ] `kubectl -n otel-lab get secret db-secrets -o json | jq '.data'` — all values are base64 (not
+      plaintext)
 - [ ] `grep -r "password\|Password\|apikey\|api_key" k8s/app/` — no plaintext passwords in manifests
 - [ ] `grep -r "AllowedHosts" src/` — no `"*"` values in appsettings.json files
 - [ ] `grep -r "WithOrigins" src/` — no `AllowAnyOrigin()` calls in .NET CORS config
 - [ ] `.env` is in `.gitignore` — `git status` should never show `.env` as tracked
-- [ ] `kubectl auth can-i create secrets --as=system:serviceaccount:otel-lab:alloy` — should return `no`
+- [ ] `kubectl auth can-i create secrets --as=system:serviceaccount:otel-lab:alloy` — should return
+      `no`

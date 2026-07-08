@@ -126,18 +126,18 @@ diagrams.
 
 ## Ownership Boundary
 
-| Dimension       | Detail                                                             |
-| --------------- | ------------------------------------------------------------------ |
-| Team            | Personal lab / portfolio (Amit Singh)                              |
-| Primary owner   | Amit Singh — [amit.singh@mccain.com](mailto:amit.singh@mccain.com) |
-| On-call         | None — lab environment, no production SLA                          |
-| Escalation path | GitHub issues on this repo                                         |
+| Dimension       | Detail                                                    |
+| --------------- | --------------------------------------------------------- |
+| Team            | Personal lab / portfolio (Amit Singh)                     |
+| Primary owner   | Amit Singh — see GitHub profile / repo issues for contact |
+| On-call         | None — lab environment, no production SLA                 |
+| Escalation path | GitHub issues on this repo                                |
 
 This component does not own anything in shared infrastructure. It creates and manages its own k3d
 cluster (`otel-lab`) and its own Kubernetes namespace (`otel-lab`). The only external dependency
-with shared ownership is the Grafana Cloud stack (`mccaindev.grafana.net`) and the Azure Key Vault
-(`mf-cc-dt-azrsrp-prd-kv`) — those are McCain platform resources and are consumed read-only by this
-lab.
+with shared ownership is the Grafana Cloud stack (`example-org.grafana.net`) and the Azure Key Vault
+(`example-org-prd-kv`) — those are the parent organization's platform resources and are consumed
+read-only by this lab.
 
 The lab does not own the Grafana Cloud instance, the AKV vault, or any network resources outside the
 k3d cluster. Changes to Grafana Cloud credentials are fetched from AKV; they are never committed as
@@ -173,14 +173,14 @@ There is no staging or production deployment of this lab. The k3d cluster is eph
 
 ### Two deployment tools — do not mix them
 
-| Tool                              | Config source               | Credentials                                                         | Use                                                                                               |
-| --------------------------------- | --------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| **`./deploy-local.sh`** (primary) | [conf.yml](conf.yml)        | `./scripts/fetch-grafana-cloud-conf-from-akv.sh` → updates conf.yml | Recommended for all new work                                                                      |
-| `Makefile` (legacy)               | `.env` + hand-edited values | `make secrets-fetch-akv` → writes Secret directly                   | Reference only — `make secrets-fetch-akv` writes a stale Mimir URL that breaks cloud-mode metrics |
+| Tool                              | Config source               | Credentials                                                         | Use                                                    |
+| --------------------------------- | --------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------ |
+| **`./deploy-local.sh`** (primary) | [conf.yml](conf.yml)        | `./scripts/fetch-grafana-cloud-conf-from-akv.sh` → updates conf.yml | Recommended for all new work                           |
+| `Makefile` (legacy)               | `.env` + hand-edited values | `make secrets-fetch-akv` → writes Secret directly                   | Reference only — prefer `deploy-local.sh` for new work |
 
-`make secrets-fetch-akv` is a live footgun: it writes `GRAFANA_CLOUD_MIMIR_ENDPOINT=.../api/v1/otlp`
-into the Secret, but the chart expects `.../api/prom/push`. Do not run it after switching to the
-script-based flow.
+`make secrets-fetch-akv` used to write a stale `GRAFANA_CLOUD_MIMIR_ENDPOINT` (`/api/v1/otlp`) that
+didn't match the chart's expected `/api/prom/push` — fixed, it now writes the correct format. Still
+secondary/legacy; the script-based flow remains the recommended path.
 
 ### Credentials (Grafana Cloud, cloud mode only)
 
@@ -225,19 +225,19 @@ kubectl apply -k k8s/overlays/dev           # apply dev overlay
 
 ## Dependencies
 
-| Dependency                                    | Type     | Required                          | Notes                                                                                                                                |
-| --------------------------------------------- | -------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Docker 24+                                    | tooling  | yes                               | Image builds + k3d node images                                                                                                       |
-| k3d v5+                                       | tooling  | yes                               | Local Kubernetes cluster                                                                                                             |
-| kubectl v1.28+                                | tooling  | yes                               | Manifest apply                                                                                                                       |
-| helm v3.14+                                   | tooling  | yes                               | `grafana/k8s-monitoring` chart install                                                                                               |
-| Python 3.9+                                   | tooling  | yes                               | `deploy-local.sh` uses Python to parse conf.yml, render templates, run scripts                                                       |
-| Azure CLI 2.50+                               | tooling  | cloud mode only                   | `./scripts/fetch-grafana-cloud-conf-from-akv.sh` — not needed if credentials are already in conf.yml                                 |
-| Grafana Cloud stack (`mccaindev.grafana.net`) | upstream | cloud mode only                   | Tempo, Mimir, Loki endpoints; credentials in AKV                                                                                     |
-| Azure Key Vault (`mf-cc-dt-azrsrp-prd-kv`)    | upstream | cloud mode only                   | Stores Grafana Cloud API key + endpoint URLs                                                                                         |
-| Zscaler CA (`zcert.crt`)                      | infra    | corporate networks only           | Staged into Docker builds; empty placeholder used on non-corporate machines — Dockerfiles' `COPY zcert.crt` will not fail without it |
-| `grafana/k8s-monitoring` Helm chart v3.8.4    | infra    | cloud mode (auto-installed)       | Pulled at deploy time; no local vendored copy                                                                                        |
-| cert-manager v1.18.2 (jetstack chart)         | infra    | when `security.tls.enabled: true` | Installs into `cert-manager` namespace; skip by setting `security.tls.enabled: false`                                                |
+| Dependency                                      | Type     | Required                          | Notes                                                                                                                                |
+| ----------------------------------------------- | -------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Docker 24+                                      | tooling  | yes                               | Image builds + k3d node images                                                                                                       |
+| k3d v5+                                         | tooling  | yes                               | Local Kubernetes cluster                                                                                                             |
+| kubectl v1.28+                                  | tooling  | yes                               | Manifest apply                                                                                                                       |
+| helm v3.14+                                     | tooling  | yes                               | `grafana/k8s-monitoring` chart install                                                                                               |
+| Python 3.9+                                     | tooling  | yes                               | `deploy-local.sh` uses Python to parse conf.yml, render templates, run scripts                                                       |
+| Azure CLI 2.50+                                 | tooling  | cloud mode only                   | `./scripts/fetch-grafana-cloud-conf-from-akv.sh` — not needed if credentials are already in conf.yml                                 |
+| Grafana Cloud stack (`example-org.grafana.net`) | upstream | cloud mode only                   | Tempo, Mimir, Loki endpoints; credentials in AKV                                                                                     |
+| Azure Key Vault (`example-org-prd-kv`)          | upstream | cloud mode only                   | Stores Grafana Cloud API key + endpoint URLs                                                                                         |
+| Zscaler CA (`zcert.crt`)                        | infra    | corporate networks only           | Staged into Docker builds; empty placeholder used on non-corporate machines — Dockerfiles' `COPY zcert.crt` will not fail without it |
+| `grafana/k8s-monitoring` Helm chart v3.8.4      | infra    | cloud mode (auto-installed)       | Pulled at deploy time; no local vendored copy                                                                                        |
+| cert-manager v1.18.2 (jetstack chart)           | infra    | when `security.tls.enabled: true` | Installs into `cert-manager` namespace; skip by setting `security.tls.enabled: false`                                                |
 
 **Version pins that must not drift:**
 
@@ -349,7 +349,7 @@ First run: ~5-15 minutes (4 Docker builds + k3d create + cert-manager + Helm rol
 | `http://localhost:3000`  | Grafana    | admin/admin |
 | `http://localhost:9090`  | Prometheus | —           |
 
-**Cloud mode only:** your Grafana Cloud stack (e.g. `https://mccaindev.grafana.net`) — Explore for
+**Cloud mode only:** your Grafana Cloud stack (e.g. `https://example-org.grafana.net`) — Explore for
 Tempo/Mimir/Loki.
 
 ---
@@ -465,22 +465,22 @@ model and rotation procedure.
 
 ### Credentials
 
-Credentials are stored in **Azure Key Vault** (`mf-cc-dt-azrsrp-prd-kv`) under the
-`grafana-mccaindev-*` secret prefix. The fetch script writes them into [conf.yml](conf.yml) at
+Credentials are stored in **Azure Key Vault** (`example-org-prd-kv`) under the
+`grafana-example-org-*` secret prefix. The fetch script writes them into [conf.yml](conf.yml) at
 `monitoring.grafana_cloud.*`; `deploy-local.sh` materialises them into the `grafana-cloud-secrets`
 Kubernetes Secret.
 
-| AKV secret name                                  | conf.yml key                              | Notes                                                                        |
-| ------------------------------------------------ | ----------------------------------------- | ---------------------------------------------------------------------------- |
-| `grafana-mccaindev-alloy-writer-mccaindev-token` | `monitoring.grafana_cloud.api_key`        | `glc_` access-policy token — scopes: `metrics:write logs:write traces:write` |
-| `grafana-mccaindev-cloud-tempo-endpoint`         | `monitoring.grafana_cloud.tempo.endpoint` | host only — `:443` suffix added by fetch script                              |
-| `grafana-mccaindev-cloud-tempo-username`         | `monitoring.grafana_cloud.tempo.user`     | Tempo instance ID                                                            |
-| `grafana-mccaindev-cloud-mimir-endpoint`         | `monitoring.grafana_cloud.mimir.endpoint` | base URL → `/push` suffix added if missing                                   |
-| `grafana-mccaindev-cloud-mimir-username`         | `monitoring.grafana_cloud.mimir.user`     | Mimir instance ID                                                            |
-| `grafana-mccaindev-cloud-loki-endpoint`          | `monitoring.grafana_cloud.loki.endpoint`  | base URL → `/loki/api/v1/push` suffix added if missing                       |
-| `grafana-mccaindev-cloud-loki-username`          | `monitoring.grafana_cloud.loki.user`      | Loki instance ID                                                             |
-| `grafana-mccaindev-faro-api-endpoint`            | `monitoring.grafana_cloud.faro.endpoint`  | browser Faro collector (runtime env)                                         |
-| `grafana-mccaindev-faro-sourcemap-token`         | `monitoring.grafana_cloud.faro.api_key`   | webpack source-map upload (build arg)                                        |
+| AKV secret name                                      | conf.yml key                              | Notes                                                                        |
+| ---------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------- |
+| `grafana-example-org-alloy-writer-example-org-token` | `monitoring.grafana_cloud.api_key`        | `glc_` access-policy token — scopes: `metrics:write logs:write traces:write` |
+| `grafana-example-org-cloud-tempo-endpoint`           | `monitoring.grafana_cloud.tempo.endpoint` | host only — `:443` suffix added by fetch script                              |
+| `grafana-example-org-cloud-tempo-username`           | `monitoring.grafana_cloud.tempo.user`     | Tempo instance ID                                                            |
+| `grafana-example-org-cloud-mimir-endpoint`           | `monitoring.grafana_cloud.mimir.endpoint` | base URL → `/push` suffix added if missing                                   |
+| `grafana-example-org-cloud-mimir-username`           | `monitoring.grafana_cloud.mimir.user`     | Mimir instance ID                                                            |
+| `grafana-example-org-cloud-loki-endpoint`            | `monitoring.grafana_cloud.loki.endpoint`  | base URL → `/loki/api/v1/push` suffix added if missing                       |
+| `grafana-example-org-cloud-loki-username`            | `monitoring.grafana_cloud.loki.user`      | Loki instance ID                                                             |
+| `grafana-example-org-faro-api-endpoint`              | `monitoring.grafana_cloud.faro.endpoint`  | browser Faro collector (runtime env)                                         |
+| `grafana-example-org-faro-sourcemap-token`           | `monitoring.grafana_cloud.faro.api_key`   | webpack source-map upload (build arg)                                        |
 
 ---
 
@@ -522,7 +522,7 @@ For any step beyond local lab, the following controls are already implemented:
 | Prometheus | `http://localhost:9090`  | Metric explorer + exemplars |
 
 **Only in `monitoring.mode: cloud`:** your Grafana Cloud stack's Explore + dashboards (e.g.
-`https://mccaindev.grafana.net/explore`).
+`https://example-org.grafana.net/explore`).
 
 ---
 
@@ -558,17 +558,12 @@ and exit non-zero, so old muscle memory fails loudly instead of silently doing t
 
 ### Grafana Cloud credentials (Azure Key Vault)
 
-> **`make secrets-fetch-akv` is out of sync with the current cloud destination.** It writes
-> `GRAFANA_CLOUD_MIMIR_ENDPOINT=.../api/v1/otlp` into the Secret, but the chart's cloud destination
-> uses Prometheus remote_write and expects `.../api/prom/push`. Running it will break cloud-mode
-> metrics. Use the script-based flow instead.
-
-| Path                                                 | Description                                                                                                                                                                                |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **`./scripts/fetch-grafana-cloud-conf-from-akv.sh`** | **Preferred.** Pulls AKV secrets, writes them into `conf.yml` in place (preserving comments), supports `--dry-run`. Auth via existing `az login` or shell-exported `ARM_CLIENT_ID/SECRET`. |
-| `make secrets-fetch-akv`                             | Legacy — writes K8s Secret directly with stale Mimir URL.                                                                                                                                  |
-| `make secrets-apply`                                 | Legacy — applies credentials from `.env`.                                                                                                                                                  |
-| `make secrets-show`                                  | Print stored Secret values (API key redacted). Still accurate.                                                                                                                             |
+| Path                                                 | Description                                                                                                                                                                                                |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`./scripts/fetch-grafana-cloud-conf-from-akv.sh`** | **Preferred.** Pulls AKV secrets, writes them into `conf.yml` in place (preserving comments), supports `--dry-run`. Auth via existing `az login` or shell-exported `ARM_CLIENT_ID/SECRET`.                 |
+| `make secrets-fetch-akv`                             | Legacy — writes the K8s Secret directly and also drives its own `helm upgrade`, bypassing `deploy-local.sh`. Kept for the manual-`.env` fallback case; the script-based flow above covers everything else. |
+| `make secrets-apply`                                 | Legacy — applies credentials from `.env`.                                                                                                                                                                  |
+| `make secrets-show`                                  | Print stored Secret values (API key redacted). Still accurate.                                                                                                                                             |
 
 ### Helm monitoring
 

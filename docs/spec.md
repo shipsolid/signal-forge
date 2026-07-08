@@ -875,19 +875,12 @@ kubectl apply -f k8s/loadtest/
 
 ### 9.1 Grafana Cloud Mode
 
-To enable dual export, populate the Secret with your Grafana Cloud credentials:
-
-```yaml
-# k8s/secrets.yaml (add these)
-GRAFANA_CLOUD_USER: "<base64-encoded-instance-id>"
-GRAFANA_CLOUD_API_KEY: "<base64-encoded-api-key>"
-GRAFANA_CLOUD_TEMPO_ENDPOINT: "<base64-encoded-tempo-otlp-endpoint>"
-GRAFANA_CLOUD_MIMIR_ENDPOINT: "<base64-encoded-mimir-otlp-endpoint>"
-GRAFANA_CLOUD_LOKI_ENDPOINT: "<base64-encoded-loki-otlp-endpoint>"
-```
-
-When env vars are empty/unset, the Grafana Cloud exporters fail silently and only local backends
-receive data. No config change needed to toggle.
+Cloud and local mode are **mutually exclusive, not dual-export** — set by `monitoring.mode: cloud`
+in [conf.yml](../conf.yml), not by populating a Secret directly. Credentials are pulled from Azure
+Key Vault via `./scripts/fetch-grafana-cloud-conf-from-akv.sh` (which writes them into `conf.yml`),
+then `./deploy-local.sh` materializes them into the `grafana-cloud-secrets` Secret and the Helm
+chart's values file. See [docs/deployment/grafana-cloud.md](deployment/grafana-cloud.md) for the
+full credential model — this section is deliberately not a second copy of it.
 
 ---
 

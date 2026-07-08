@@ -115,7 +115,7 @@ builder.Services.AddOpenTelemetry()
 
             // EnrichWithHttpRequest — ACA guideline: capture client identity and
             // route context on the root HTTP span.
-            // In a real McCain service, plant.id would be extracted from a
+            // In a real multi-tenant deployment, plant.id would be extracted from a
             // custom request header (e.g. X-Plant-Id) or JWT claim here.
             opts.EnrichWithHttpRequest = (activity, request) =>
             {

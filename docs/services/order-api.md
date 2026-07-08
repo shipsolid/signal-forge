@@ -1,10 +1,10 @@
 # Service: order-api
 
-**Role**: gRPC Order Service. Handles order CRUD, persists to PostgreSQL, publishes `order.created` events to RabbitMQ.
+**Role**: gRPC Order Service. Handles order CRUD, persists to PostgreSQL, publishes `order.created`
+events to RabbitMQ.
 
-**Runtime**: .NET 8 gRPC server (+ minimal API for `/healthz`)
-**Port**: 5001 (gRPC, cluster-internal)
-**Replicas**: 2
+**Runtime**: .NET 8 gRPC server (+ minimal API for `/healthz`) **Port**: 5001 (gRPC,
+cluster-internal) **Replicas**: 2
 
 ---
 
@@ -21,9 +21,10 @@ service OrderService {
 }
 
 message CreateOrderRequest {
-  int32  project_id  = 1;
-  string description = 2;
-  double amount      = 3;
+  int32  project_id      = 1;
+  string description     = 2;
+  double amount          = 3;
+  string idempotency_key = 4;   // optional; replays the original order on retry
 }
 
 message CreateOrderResponse {
@@ -94,22 +95,34 @@ Fail-fast: empty `ConnectionStrings__DefaultConnection` throws at startup.
 
 ---
 
-## RabbitMQ publishing (`OrderPublisher.cs`)
+## RabbitMQ publishing (`OutboxRelayWorker.cs`, `OrderPublisher.cs`)
 
-On successful `CreateOrder`:
+Publishing is **not** part of `CreateOrder`. It's the outbox pattern: `CreateOrder` writes the
+`Order` and an `OutboxMessage` row in the same `SaveChanges` call, then returns — the caller sees
+success as soon as PostgreSQL commits, regardless of RabbitMQ's state.
 
-1. Start a `PRODUCER` span: `order.publish` (`ActivityKind.Producer`)
-2. Inject W3C `traceparent` into AMQP message headers (bytes-encoded, as pika delivers them):
+1. `OutboxRelayWorker` polls `WHERE ProcessedAt IS NULL` every 5s, oldest first, in batches of 100.
+2. For each pending row it starts an `INTERNAL` span, `outbox.relay`, then calls
+   `OrderPublisher.PublishAsync`.
+3. `PublishAsync` starts a `PRODUCER` span, `order.publish` (`ActivityKind.Producer`), as a **child
+   of `outbox.relay`** — not of the original request's `order.create`. `order.create` has already
+   finished and returned by the time this runs.
+4. It writes the `traceparent` **stored on the `OutboxMessage` row** (captured from
+   `Activity.Current?.Id` back when `CreateOrder` wrote it) directly into the AMQP message headers,
+   bytes-encoded as pika expects:
 
 ```csharp
-var propagator = Propagators.DefaultTextMapPropagator;
-propagator.Inject(
-    new PropagationContext(Activity.Current?.Context ?? default, Baggage.Current),
-    props.Headers,
-    (headers, key, value) => headers[key] = Encoding.UTF8.GetBytes(value));
+if (!string.IsNullOrEmpty(traceParent))
+    props.Headers["traceparent"] = Encoding.UTF8.GetBytes(traceParent);
 ```
 
-3. Publish to exchange `orders`, routing key `order.created`:
+This is deliberately **not** `Propagators.Inject(Activity.Current, ...)` — `Activity.Current` at
+this point is `order.publish`/`outbox.relay`'s own (new, disconnected) trace, not the original
+request's. Using the stored value is what lets notification-svc's CONSUMER span link back to
+`order.create` correctly; see [grpc.md](../api/grpc.md#rpc-createorder) for what this means for
+trace continuity on the order-api side.
+
+5. Publish to exchange `orders`, routing key `order.created`:
 
 ```json
 {
@@ -121,7 +134,12 @@ propagator.Inject(
 }
 ```
 
-**Why bytes?** pika (Python AMQP client) delivers header values as bytes. The Python consumer's `HeadersGetter.get()` decodes them before extraction.
+6. On success, `OutboxMessage.ProcessedAt` is set and saved. On failure, the exception is recorded
+   on the `outbox.relay` span and `ProcessedAt` is left `null` — the row is retried on the next 5s
+   poll, with no dedup counter or backoff (see the multi-replica race note below).
+
+**Why bytes?** pika (Python AMQP client) delivers header values as bytes. The Python consumer's
+`HeadersGetter.get()` decodes them before extraction.
 
 ---
 
@@ -140,7 +158,10 @@ await foreach (var order in _db.Orders
 }
 ```
 
-This uses the database cursor — one row is fetched, written to the gRPC stream, then the next is fetched. Memory usage is O(1) regardless of result size. `ToListAsync()` was intentionally avoided (see [ADR-010](../architecture/decisions.md#adr-010-grpc-server-streaming-via-asasyncenumerable-not-tolistasync)).
+This uses the database cursor — one row is fetched, written to the gRPC stream, then the next is
+fetched. Memory usage is O(1) regardless of result size. `ToListAsync()` was intentionally avoided
+(see
+[ADR-010](../architecture/decisions.md#adr-010-grpc-server-streaming-via-asasyncenumerable-not-tolistasync)).
 
 ---
 
@@ -148,13 +169,14 @@ This uses the database cursor — one row is fetched, written to the gRPC stream
 
 ### Custom spans and metrics
 
-| Instrument                   | Type             | Labels                                                                  | Description                                               |
-| ---------------------------- | ---------------- | ----------------------------------------------------------------------- | --------------------------------------------------------- |
-| `order.create` span          | `INTERNAL`       | `order.id`, `order.project_id`, `order.amount`                          | Wraps full create flow (validate → DB → publish)          |
-| `order.publish` span         | `PRODUCER`       | `order.id`, `messaging.system=rabbitmq`, `messaging.destination=orders` | RabbitMQ publish with W3C header injection                |
-| `orders.created.total`       | Counter          | `project_id`                                                            | Increments on each successful `CreateOrder`               |
-| `orders.amount.total`        | Counter (double) | `project_id`                                                            | Running sum of order amounts (financial throughput gauge) |
-| `orders.processing.duration` | Histogram        | `project_id`                                                            | Time from CreateOrder RPC received to publish complete    |
+| Instrument                   | Type             | Labels                                                                  | Description                                                                                     |
+| ---------------------------- | ---------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `order.create` span          | `INTERNAL`       | `order.id`, `order.project_id`, `order.amount`                          | Wraps validate + DB write (order + outbox row) only — no publish; see below                     |
+| `outbox.relay` span          | `INTERNAL`       | `outbox.message_id`, `order.id`                                         | `OutboxRelayWorker`'s per-message span, its own disconnected trace root                         |
+| `order.publish` span         | `PRODUCER`       | `order.id`, `messaging.system=rabbitmq`, `messaging.destination=orders` | RabbitMQ publish with W3C header injection; child of `outbox.relay`, not `order.create`         |
+| `orders.created.total`       | Counter          | `project_id`                                                            | Increments on each successful `CreateOrder`                                                     |
+| `orders.amount.total`        | Counter (double) | `project_id`                                                            | Running sum of order amounts (financial throughput gauge)                                       |
+| `orders.processing.duration` | Histogram        | `project_id`                                                            | Time from CreateOrder RPC received to DB write commit (not publish — that's later, out of band) |
 
 ### Trace context in custom span attributes
 
@@ -170,13 +192,13 @@ activity?.SetTag("order.amount", request.Amount);
 
 ## Failure modes
 
-| Scenario                      | Behaviour                                    | Evidence                                           |
-| ----------------------------- | -------------------------------------------- | -------------------------------------------------- |
-| PostgreSQL unavailable        | `CrashLoopBackOff`                           | Error in pod logs (fail-fast)                      |
-| RabbitMQ publish fails        | `RpcException(StatusCode.Internal)`          | Error span, `exception.type=IOException`           |
-| Duplicate order (idempotency) | No built-in dedup — order-api always inserts | See notification-svc for consumer-side dedup       |
-| Invalid input                 | `RpcException(StatusCode.InvalidArgument)`   | No error span (client fault)                       |
-| Client disconnects mid-stream | `CancellationToken` cancels DB cursor        | `OperationCanceledException` logged at debug level |
+| Scenario                            | Behaviour                                                                                                                                                                                                             | Evidence                                                        |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| PostgreSQL unavailable              | `CrashLoopBackOff`                                                                                                                                                                                                    | Error in pod logs (fail-fast)                                   |
+| RabbitMQ publish fails              | Does **not** affect `CreateOrder` — the RPC already returned. `OutboxRelayWorker` logs the error on the `outbox.relay` span and leaves `ProcessedAt` null; retried on the next 5s poll, indefinitely, with no backoff | Error span on `outbox.relay`, not on the original request trace |
+| Retried `CreateOrder` (idempotency) | `idempotency_key` unique index + replay: a repeated key returns the original order instead of inserting a duplicate                                                                                                   | `logger.LogInformation("CreateOrder replay detected...")`       |
+| Invalid input                       | `RpcException(StatusCode.InvalidArgument)`                                                                                                                                                                            | No error span (client fault)                                    |
+| Client disconnects mid-stream       | `CancellationToken` cancels DB cursor                                                                                                                                                                                 | `OperationCanceledException` logged at debug level              |
 
 ---
 

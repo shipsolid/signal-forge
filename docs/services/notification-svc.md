@@ -1,10 +1,9 @@
 # Service: notification-svc
 
-**Role**: RabbitMQ consumer. Processes `order.created` events, stores notifications in Redis with idempotency dedup, exposes a REST API for reading notifications.
+**Role**: RabbitMQ consumer. Processes `order.created` events, stores notifications in Redis with
+idempotency dedup, exposes a REST API for reading notifications.
 
-**Runtime**: Python 3.12, FastAPI + Uvicorn
-**Port**: 8000 (cluster-internal)
-**Replicas**: 2
+**Runtime**: Python 3.12, FastAPI + Uvicorn **Port**: 8000 (cluster-internal) **Replicas**: 2
 
 ---
 
@@ -35,7 +34,8 @@ async def lifespan(app):
 
 ### Exponential backoff on consumer crash
 
-If `start_consumer()` raises (e.g., RabbitMQ is unavailable), the loop retries with exponential backoff:
+If `start_consumer()` raises (e.g., RabbitMQ is unavailable), the loop retries with exponential
+backoff:
 
 ```python
 base_delay, max_delay, attempt = 5, 300, 0
@@ -51,7 +51,8 @@ while True:
         time.sleep(delay)
 ```
 
-Backoff sequence: 5s → 10s → 20s → 40s → ... → 300s (cap). This prevents thundering-herd reconnect storms when RabbitMQ restarts.
+Backoff sequence: 5s → 10s → 20s → 40s → ... → 300s (cap). This prevents thundering-herd reconnect
+storms when RabbitMQ restarts.
 
 ---
 
@@ -77,13 +78,16 @@ channel.queue_declare(
 )
 ```
 
-When a message is NACKed with `requeue=False`, RabbitMQ routes it to `orders.dlq` → `notifications.dlq`. No application-level retry counter is needed. See [ADR-008](../architecture/decisions.md#adr-008-dead-letter-queue-for-poison-message-handling).
+When a message is NACKed with `requeue=False`, RabbitMQ routes it to `orders.dlq` →
+`notifications.dlq`. No application-level retry counter is needed. See
+[ADR-008](../architecture/decisions.md#adr-008-dead-letter-queue-for-poison-message-handling).
 
 ---
 
 ## W3C trace context extraction
 
-The consumer extracts `traceparent` from RabbitMQ message headers and builds a `SpanLink` to the producer's span:
+The consumer extracts `traceparent` from RabbitMQ message headers and builds a `SpanLink` to the
+producer's span:
 
 ```python
 from opentelemetry.propagate import extract
@@ -111,45 +115,63 @@ with tracer.start_as_current_span(
 detach(token)
 ```
 
-This produces a dashed arrow in Jaeger connecting the `order.publish` span (order-api) to the `notification.process` span (notification-svc), both sharing the same `traceId`.
+This produces a dashed arrow in Jaeger connecting the `order.publish` span (order-api) to the
+`notification.process` span (notification-svc), both sharing the same `traceId`.
 
 ---
 
 ## Processing logic
 
 ```python
-async def handle_order_created(event: dict, links: list):
-    order_id = str(event["order_id"])
+def handle_order_created(ch, method, properties, body: bytes):
+    event = OrderCreatedEvent(**json.loads(body))
 
-    # 1. Idempotency check (Redis HSETNX)
-    key = f"notifications:{order_id}"
-    if redis.hsetnx(key, "order_id", order_id) == 0:
+    # 1. Idempotency check — atomic SET ... NX on a *separate* dedup key,
+    #    not HSETNX on the notification record itself. A prior version used
+    #    exists() + a later set() — a TOCTOU window where two near-simultaneous
+    #    deliveries could both pass the check before either set the key.
+    #    SET NX closes that window in one round trip.
+    dedup_key = f"dedup:{event.order_id}"
+    if not r.set(dedup_key, "1", nx=True, ex=3600):  # 1h dedup window
         span.set_attribute("notification.duplicate", True)
+        ch.basic_ack(delivery_tag=method.delivery_tag)
         return  # Already processed
 
-    # 2. Store notification
-    redis.hset(key, mapping={
-        "project_id": str(event["project_id"]),
-        "description": event["description"],
-        "amount": str(event["amount"]),
-        "processed_at": datetime.utcnow().isoformat(),
-        "status": "processed",
+    # 2. Store notification (separate 24h TTL from the 1h dedup key above —
+    #    a redelivery between 1h and 24h bypasses dedup; see docs/reviews/
+    #    2026-07-08-principal-staff-review.md §2.2 for the open gap this leaves)
+    notification_id = f"notif-{event.order_id}"
+    r.hset(f"notifications:{notification_id}", mapping={
+        "id": notification_id,
+        "order_id": event.order_id,
+        "project_id": event.project_id,
+        "message": f"Order #{event.order_id} created for project {event.project_id}: "
+                    f"{event.description} — ${event.amount:.2f}",
+        "status": "sent",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "trace_id": current_trace_id,
     })
-    redis.expire(key, 86400)  # TTL: 24h
+    r.expire(f"notifications:{notification_id}", 86400)  # TTL: 24h
+    r.lpush("notification_ids", notification_id)
+    r.ltrim("notification_ids", 0, 999)  # capped list, most-recent 1000
 
     # 3. Mock email send (child span)
     with tracer.start_as_current_span("notification.send_email") as email_span:
         delay_ms = random.randint(100, 500)
-        email_span.set_attribute("email.order_id", order_id)
+        email_span.set_attribute("email.order_id", event.order_id)
         email_span.set_attribute("email.delay_ms", delay_ms)
         time.sleep(delay_ms / 1000)
+
+    ch.basic_ack(delivery_tag=method.delivery_tag)
 ```
 
 ---
 
 ## Redis client (`redis_client.py`)
 
-Connection is created once and cached. Health check pings before returning the client; reconnects automatically on `ConnectionError`:
+Connection is created once and cached. Health check pings before returning the client; on
+`ConnectionError` the stale client is discarded and the exception re-raised (not silently retried
+in-place) so the caller's own error handling decides what happens next:
 
 ```python
 def get_redis() -> redis.Redis:
@@ -157,16 +179,16 @@ def get_redis() -> redis.Redis:
     if _client is None:
         _client = redis.Redis(
             host=REDIS_HOST, port=REDIS_PORT,
-            socket_connect_timeout=5,
+            socket_connect_timeout=5, socket_timeout=5,
             socket_keepalive=True,
             health_check_interval=30,
         )
     try:
         _client.ping()
     except redis.ConnectionError:
-        logger.warning("Redis connection lost, reconnecting")
+        logger.warning("Redis connection lost; client cleared, will reconnect on next call")
         _client = None
-        return get_redis()
+        raise
     return _client
 ```
 
@@ -197,7 +219,8 @@ Health-check exclusion: `excluded_urls="/healthz"` in `FastAPIInstrumentation().
 
 ## Log format
 
-Structured JSON via `python-json-logger`. Fields used by Alloy's `loki.process` trace correlation stage:
+Structured JSON via `python-json-logger`. Fields used by Alloy's `loki.process` trace correlation
+stage:
 
 ```json
 {
@@ -209,19 +232,20 @@ Structured JSON via `python-json-logger`. Fields used by Alloy's `loki.process` 
 }
 ```
 
-The Alloy `stage.json` in both collector configs extracts `python_trace = "otelTraceID"` and `python_span = "otelSpanID"` and promotes them to Loki structured metadata.
+The Alloy `stage.json` in both collector configs extracts `python_trace = "otelTraceID"` and
+`python_span = "otelSpanID"` and promotes them to Loki structured metadata.
 
 ---
 
 ## Failure modes
 
-| Scenario                                | Behaviour                           | Evidence                                                                 |
-| --------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------ |
-| RabbitMQ unavailable at start           | Backoff retry (5s → 300s)           | `logger.error("Consumer crashed")` in pod logs                           |
-| Redis unavailable                       | `ConnectionError` raised in handler | NACK with `requeue=True` (message re-queued), error span                 |
-| Duplicate message                       | Silent idempotency skip             | `notification.duplicate=True` span attribute, `status=duplicate` counter |
-| Malformed message                       | `KeyError` or `ValueError`          | NACK with `requeue=False` → DLQ, `logger.exception(...)`                 |
-| order-api publishes without traceparent | Consumer creates span with no link  | Span still created, no correlation                                       |
+| Scenario                                | Behaviour                            | Evidence                                                                        |
+| --------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------- |
+| RabbitMQ unavailable at start           | Backoff retry (5s → 300s)            | `logger.error("Consumer crashed")` in pod logs                                  |
+| Redis unavailable                       | `redis.RedisError` raised in handler | NACK with `requeue=True` (message re-queued), `status=failed_transient` counter |
+| Duplicate message                       | Silent idempotency skip              | `notification.duplicate=True` span attribute, `status=duplicate` counter        |
+| Malformed message                       | `KeyError` or `ValueError`           | NACK with `requeue=False` → DLQ, `logger.exception(...)`                        |
+| order-api publishes without traceparent | Consumer creates span with no link   | Span still created, no correlation                                              |
 
 ---
 

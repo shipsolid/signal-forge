@@ -46,6 +46,7 @@ import time
 from datetime import datetime, timezone
 
 import pika
+import redis
 from opentelemetry import trace
 from opentelemetry.context import attach, detach
 from opentelemetry.propagate import extract
@@ -145,6 +146,14 @@ def handle_order_created(ch, method, properties, body: bytes) -> None:
     Idempotency: RabbitMQ may deliver a message more than once if the
     consumer crashes after processing but before ACKing.  The Redis dedup
     key (TTL 1h) guards against duplicate notifications.
+
+    Failure handling distinguishes transient infra failures from poison
+    messages so a Redis blip doesn't permanently dead-letter live traffic:
+      - redis.RedisError (Redis down/unreachable): NACK requeue=True (retry)
+      - ValueError/KeyError (bad JSON, failed validation, missing field):
+        NACK requeue=False (DLQ) — retrying a malformed message never helps
+      - anything else unexpected: NACK requeue=False (DLQ), to avoid an
+        infinite requeue loop on a bug we don't otherwise understand
     """
     start_ms = time.time() * 1000
     counter, proc_hist, email_hist = _instruments()
@@ -201,6 +210,7 @@ def handle_order_created(ch, method, properties, body: bytes) -> None:
             r = get_redis()
             dedup_key = f"dedup:{event.order_id}"
             if not r.set(dedup_key, "1", nx=True, ex=3600):  # 1h dedup window
+                span.set_attribute("notification.duplicate", True)
                 logger.info("Duplicate notification skipped for order %d", event.order_id)
                 counter.add(1, {"status": "duplicate"})
                 ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -250,12 +260,29 @@ def handle_order_created(ch, method, properties, body: bytes) -> None:
             # ── Step 8: ACK ─────────────────────────────────────────────────
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
-    except Exception:
-        logger.exception("Failed to process order.created event")
+    except redis.RedisError:
+        # Transient infra failure (Redis down/unreachable), not a bad message.
+        # Requeue instead of DLQ-ing — a Redis restart during a routine deploy
+        # must not permanently dead-letter live traffic. Note this redelivers
+        # immediately: a sustained Redis outage will tight-loop retries on this
+        # message until Redis recovers, rather than backing off. /readyz already
+        # pulls the pod from Service rotation on Redis failure (see main.py) —
+        # that stops new HTTP traffic but not this consumer thread.
+        logger.warning("Redis error processing order.created event; requeueing", exc_info=True)
+        counter.add(1, {"status": "failed_transient"})
+        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+    except (ValueError, KeyError):
+        # Malformed message (bad JSON, failed pydantic validation, missing
+        # field) — retrying won't fix it. NACK without requeue: RabbitMQ
+        # routes it to DLQ_EXCHANGE (x-dead-letter-exchange on the queue
+        # declaration below) so it's preserved for inspection, not dropped.
+        logger.exception("Malformed order.created event; routing to DLQ")
         counter.add(1, {"status": "failed"})
-        # NACK without requeue: RabbitMQ routes the message to DLQ_EXCHANGE
-        # (configured via x-dead-letter-exchange on queue declaration below)
-        # so failed messages are preserved for inspection rather than dropped.
+        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+    except Exception:
+        # Unexpected — treat as poison rather than requeue indefinitely.
+        logger.exception("Unexpected error processing order.created event; routing to DLQ")
+        counter.add(1, {"status": "failed"})
         ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
     finally:
         # CRITICAL: detach the context even on error to prevent context leak.

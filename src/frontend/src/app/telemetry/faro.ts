@@ -10,11 +10,7 @@ import { environment } from '../../environments/environment';
 // startup.  Allows the collector URL to be changed per environment without
 // rebuilding the image.  Falls back to the Grafana Cloud collector URL for production
 // and the Angular environment file for local `ng serve` development.
-declare global {
-  interface Window {
-    __ENV?: { FARO_URL?: string; API_BASE_URL?: string };
-  }
-}
+// window.__ENV's type lives in src/window-env.d.ts, not here — see that file for why.
 
 export function initFaro(): void {
   // Production / k3d: FARO_URL is injected at container startup from the

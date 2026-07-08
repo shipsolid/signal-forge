@@ -1,7 +1,8 @@
 # SignalForge — Principal/Staff Engineering Review
 
-**Repo:** shipsolid/app-signal-forge **Date:** 2026-07-08 (findings) / trimmed 2026-07-08 **Reviewer
-lens:** interview/portfolio signal _and_ real production sign-off
+**Repo:** shipsolid/app-signal-forge **Date:** 2026-07-08 (findings) / trimmed 2026-07-08 /
+Critical+High closed 2026-07-08 **Reviewer lens:** interview/portfolio signal _and_ real production
+sign-off
 
 SignalForge is a four-service, three-language distributed system (Angular → gateway-api
 [.NET/gRPC-BFF] → order-api [.NET/gRPC] → RabbitMQ → notification-svc [Python]) built to demonstrate
@@ -10,11 +11,12 @@ Grafana Cloud). Five parallel deep-dives covered the backend services, messaging
 observability pipeline, Kubernetes/Helm/infra, and testing/documentation integrity.
 
 > This is the original five-domain review with every closed item removed (verified against current
-> source, not just against the fix-list's own claims — see note at the bottom). What remains below
-> is open work only. The credential-exposure incident and 15 other items were found, fixed, and
-> verified closed on 2026-07-08; that record isn't reproduced here.
+> source in both passes, not just against fix claims). What remains below is open work only. The
+> credential-exposure incident, 15 numbered fix-list items, and — in a second pass the same day —
+> the 1 Critical and all 9 High findings were found, fixed, and verified closed; that record isn't
+> reproduced here beyond the note at the bottom.
 
-**Open findings: 1 Critical · 9 High · 22 Medium · ~30 Low/Nit**
+**Open findings: 0 Critical · 0 High · 22 Medium · ~30 Low/Nit**
 
 ## Contents
 
@@ -53,9 +55,11 @@ in an interview.
   defaults, no plaintext credentials in manifests.
 - **Dead-letter queue offloaded to RabbitMQ's native mechanism** (ADR-008) instead of a hand-rolled
   Redis retry counter — the simpler, more correct choice.
-- **Substantive test suites** — 119+ tests across the stack with genuine boundary-value and
+- **Substantive test suites** — 127+ tests across the stack with genuine boundary-value and
   failure-path coverage (Moq-based gRPC status mapping, Redis-down → DLQ, invalid JSON → DLQ), not
-  scaffolding.
+  scaffolding. Includes one real concurrency test (`OutboxRelayWorkerTests`, via Testcontainers
+  against an actual PostgreSQL) proving two replicas racing for the same outbox row only publish it
+  once — not simulated, an actual `FOR UPDATE SKIP LOCKED` contention test.
 - **A real CI supply chain** — Trivy + Syft CycloneDX SBOM + cosign keyless OIDC signing +
   `pip-audit` + `dotnet list package --vulnerable` + `gitleaks`, correctly gated to `main`.
 - **`deploy-local.sh`'s defensive guards** — k3d context assertion, NodePort-drift check parsed
@@ -76,23 +80,6 @@ into a list at the end of each subsection rather than dropped.
 
 ### 2.1 Backend services & gRPC contracts (.NET)
 
-**🟠 HIGH · both** — The outbox refactor broke the documented trace shape, and the docs never caught
-up `docs/api/grpc.md:150`, `docs/services/order-api.md:97-125` vs.
-`src/order-api/Services/OrderGrpcService.cs:85-99`, `Messaging/OutboxRelayWorker.cs:101-109` Docs
-describe `order.publish` as a synchronous child span of `order.create`. The real code writes an
-outbox row and returns; publishing happens later in a background worker that starts a disconnected
-root span. The documented failure mode ("RabbitMQ publish fails → `RpcException(Internal)`") is
-simply wrong for current behavior — a broker outage no longer fails `CreateOrder` at all. A better
-outcome, shipped with stale documentation of the old, less-resilient behavior. _Why it matters:_
-narrating a design you haven't re-verified against your own implementation after a refactor is
-exactly the kind of thing that surfaces under "walk me through this trace" in an interview.
-
-**🟠 HIGH · production-readiness** — The outbox relay has a multi-replica race, undocumented
-`src/order-api/Messaging/OutboxRelayWorker.cs:77-99` order-api runs 2 replicas per its own docs. The
-relay polls `WHERE ProcessedAt IS NULL` with no row locking (`FOR UPDATE SKIP LOCKED`) and no leader
-election. Two pods can select and publish the same batch in the same window — silently tolerated
-only because notification-svc happens to dedupe downstream, which is incidental, not designed-in.
-
 **🟡 MEDIUM · interview-signal** — `plant.id` enrichment is dead code end-to-end
 `src/order-api/Program.cs:91-94` vs. `src/gateway-api/Endpoints/OrderEndpoints.cs:45-50` order-api's
 comment says `X-Plant-Id` is "forwarded by gateway-api from the original browser request," but
@@ -111,7 +98,10 @@ sync `src/proto/orders.proto`, order-api's and gateway-api's local `Protos/order
 service builds from the shared `src/proto/` copy — each has its own, already textually diverged in
 comments/formatting. CI's `proto-sync` job does structurally diff the three copies (a real, if
 shallow, protection against copy-paste drift), but nothing verifies the _implementations_ on both
-sides still agree behaviorally — see the `GetOrdersByProject` validation-contract gap in §2.5.
+sides still agree behaviorally. (One concrete instance of exactly this — `GetOrdersByProject`
+documented `INVALID_ARGUMENT` validation that the implementation didn't actually have — was found
+and fixed; the structural gap that let it ship undetected in the first place is what this finding is
+about, and remains open.)
 
 **🟡 MEDIUM · production-readiness** — Blanket exception→502 mapping erases gRPC status semantics
 for most failure modes `src/gateway-api/Endpoints/OrderEndpoints.cs:75` (`CreateOrder`), `:164`
@@ -140,8 +130,6 @@ at all.
   an approximate signal, wrong type for anything resembling a ledger.
 - Validation magic numbers (`999_999.99`, 500-char limits) duplicated verbatim across gateway-api
   and order-api with nothing keeping them in sync.
-- A code comment in `OrderGrpcService.cs` still describes the pre-refactor "loads everything into
-  memory" implementation directly above code that already uses `AsAsyncEnumerable()`.
 - Dead `Npgsql.OpenTelemetry` package reference — the code's own comment explains it's no longer
   used.
 - `OrderPublisher.cs`, self-labeled "the most critical instrumentation point in the lab," is mocked
@@ -153,38 +141,6 @@ at all.
   placeholder.
 
 ### 2.2 Messaging (notification-svc) & frontend
-
-**🔴 CRITICAL · both** — Docs describe an idempotency mechanism that isn't what the code does
-`docs/services/notification-svc.md:118-146` vs. `app/consumer.py:192-203` The docs show atomic
-`redis.hsetnx()` on a single `notifications:{order_id}` key with a 24h TTL. The real implementation
-checks a _separate_ `dedup:{order_id}` key via atomic `SET ... NX` with a _different_ (1h) TTL. The
-underlying race this describes was fixed (see below), but the doc was never brought back in line
-with what shipped — it still names the wrong key, the wrong primitive, and the wrong TTL. Anyone
-designing against — or citing in an interview — the documented mechanism would be describing a
-system that isn't running.
-
-**🟠 HIGH · both** — A single broad `except Exception` sends transient infra failures and poison
-messages to the DLQ alike, with zero retry `consumer.py:235-241`; contradicts
-`docs/services/notification-svc.md:221` and ADR-008 Confirmed intentional and tested
-(`test_redis_failure_nacks_to_dlq`) — but it contradicts both the service doc ("Redis unavailable →
-NACK requeue=True") and ADR-008's stated retry-then-DLQ design, neither of which is actually
-implemented. A Redis pod restart during any routine deploy would immediately dead-letter live
-traffic with no automatic recovery.
-
-**🟠 HIGH · interview-signal** — Frontend docs describe a runtime-config mechanism that was replaced
-and never updated `docs/services/frontend.md:110-120` vs. `docker-entrypoint.sh:19-24`,
-`faro.ts:13-27` The doc describes `envsubst` rewriting the compiled bundle directly — which would
-actively conflict with nginx's immutable JS caching. The real, better mechanism writes a separate
-`window.__ENV` object to `assets/env.js`. Good thing the documented approach isn't real; bad that a
-doc meant to onboard someone to the mechanism describes the wrong one.
-
-**🟠 HIGH · production-readiness** — A runtime config knob is wired end-to-end and never actually
-consumed `k8s/app/frontend/deployment.yaml:50-51`, `docker-entrypoint.sh` vs. `api.service.ts:45`
-`API_BASE_URL` is set in the Deployment, written into `env.js` as `window.__ENV.API_BASE_URL` — and
-never read. The app pulls `environment.apiBaseUrl` from the build-time Angular environment file
-instead. It only "works" today because both defaults happen to match. Change the Deployment env var
-in a different cluster and it silently does nothing — a classic
-confusing-incident-during-environment-promotion bug.
 
 **🟡 MEDIUM · production-readiness** — Mismatched TTLs let redelivery duplicate the notification
 list Dedup key 1h TTL vs. notification record 24h TTL, `consumer.py` A redelivery between 1h and 24h
@@ -227,20 +183,6 @@ elsewhere. A silent, asymmetric SCA gap relative to the other three stacks.
 
 ### 2.3 Observability pipeline
 
-**🟠 HIGH · both** — A structured "Dual-Export" section documents a feature that doesn't exist
-`docs/OTEL-PATTERNS.md:557-561` (§12, "Grafana Cloud Dual-Export") A full numbered section with its
-own architecture diagram claims Alloy "dual-exports all signals to Grafana Cloud when credentials
-are present." Local and cloud mode are mutually exclusive per `CLAUDE.md`'s own framing — there is
-no dual-export path anywhere in the live config. It's also where real AKV vault/secret naming lives
-(see the finding below).
-
-**🟠 HIGH · production-readiness** — Real employer infrastructure naming is committed as plaintext
-`Makefile:159-167`, `.env.example:60`, `docs/deployment/grafana-cloud.md`, `docs/OTEL-PATTERNS.md`,
-`scripts/fetch-grafana-cloud-conf-from-akv.sh` All hardcode the literal `grafana-mccaindev-*` AKV
-secret-name prefix. Even with values redacted, publishing the exact secret-naming convention
-unambiguously identifies the employer and environment tier. Defensible for opaque IDs; doesn't
-extend to a self-describing secret-naming convention tied to a real company.
-
 **🟡 MEDIUM · production-readiness** — The multi-window burn-rate SLO alerts never fire out of the
 box `conf.yml:137` (`slo_rules.enabled: false`); `values-cloud.yaml.tmpl:116-117`
 (`prometheusOperatorObjects` disabled) Even enabled, applying the `PrometheusRule` against Grafana
@@ -279,15 +221,6 @@ is dead configuration that a five-minute click-through would have caught.
   more signal it should be deleted, not reconciled.
 
 ### 2.4 Kubernetes / Helm / infra & security
-
-**🟠 HIGH · both** — The Mimir-endpoint footgun is confirmed still live, with a second-order
-diagnostic effect `Makefile:150-173` vs. `scripts/fetch-grafana-cloud-conf-from-akv.sh:130` and
-`values-cloud.yaml.tmpl` The legacy `make secrets-fetch-akv` still writes the OTLP-style Mimir
-endpoint (`/api/v1/otlp`) into the Secret while the canonical path requires the Prometheus
-remote_write form (`/api/prom/push`). The runbook and `CLAUDE.md` now both explicitly warn against
-running this target for this purpose — a real mitigation — but the target itself still does the
-wrong thing if anyone runs it anyway, and `scripts/debug.sh`'s remote-write reachability probe would
-still be checking a Secret carrying the wrong URL if it did.
 
 **🟡 MEDIUM · production-readiness** — `docs/operations/security.md` contradicts itself on where
 `db-secrets` comes from Its own diagram routes AKV → `make secrets-fetch-akv` → `db-secrets`. That
@@ -336,12 +269,6 @@ enforcement, which is a materially weaker claim than it sounds.
 
 ### 2.5 Testing & documentation integrity
 
-**🟠 HIGH · both** — `docs/api/grpc.md` documents an API contract that doesn't exist in code
-`docs/api/grpc.md:90` vs. `OrderGrpcService.cs`'s `GetOrdersByProject` Claims `INVALID_ARGUMENT` for
-`project_id ≤ 0`. The real implementation has no validation at all — a zero/negative value just
-returns an empty stream, and no test exercises the claimed error path. A fabricated contract: anyone
-integrating against the docs gets silently wrong results instead of the documented error.
-
 **🟡 MEDIUM · interview-signal** — Frontend's `package.json` still declares the wrong test stack
 `devDependencies` lists the unused default Karma/Jasmine scaffold; Jest — what actually runs — is
 not declared anywhere in the file, installed ad hoc into `/tmp/ng-test-deps`. Reads as an incomplete
@@ -352,7 +279,17 @@ doesn't have `.github/workflows/ci.yml:78-81`
 `npm install --prefix /tmp/ng-test-deps jest ... --legacy-peer-deps`, zero version pins, no
 lockfile. The root-owned `node_modules` problem it works around is a local-Docker-build artifact; a
 fresh GitHub Actions checkout via `actions/setup-node` + `npm ci` never has it. Porting the local
-fix into CI verbatim means test behavior can silently shift with a new Jest/TS major release.
+fix into CI verbatim means test behavior can silently shift with a new Jest/TS major release. **Not
+theoretical** — reproduced during this review's fix pass: an unpinned install picked up
+`jest-preset-angular@17.0.0`, whose own `peerDependencies` require Angular ≥18 (this project pins
+17.3), and separately renamed the `jest-preset-angular/setup-jest` import path this project's
+`setup-jest.ts` uses to `setup-env`. Pinning to a version in-range (`jest-preset-angular@14.6.2`,
+`jest@29`) restored the old import path but a different, pre-existing failure remained: every
+`ApiService`-injecting spec throws `NG0202` (invalid DI factory dependency) — reproduced identically
+against unmodified `main`, so it's not caused by any fix in this pass, but it means the frontend
+suite currently cannot be run to green in this environment at all, pinned or not. Root cause not
+diagnosed further (out of scope for this pass); worth a dedicated look, since it blocks verifying
+any future frontend change.
 
 **🟡 MEDIUM · both** — Zero integration tests for the headline scenario the whole lab exists to
 demonstrate The 5-hop cross-language trace propagation claim is validated only "manually via Jaeger
@@ -384,13 +321,13 @@ endpoint (the Mimir-endpoint footgun in §2.4) — it hard-fails on lookup too.
 
 ## 3. Verdict matrix
 
-| Domain                        | Interview / portfolio signal                                  | Production sign-off                                                                                                                                                            | Where they diverge                                                                                      |
-| ----------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| Backend services & gRPC       | Strong — outbox pattern, cursor streaming, layered validation | No — outbox relay's multi-replica race is unguarded, blanket exception→502 mapping still erases most gRPC status codes                                                         | Docs/comments describe a system slightly ahead of what actually shipped after the outbox refactor       |
-| Messaging & frontend          | Strong — correct async span semantics, tested backoff logic   | No — DLQ still conflates transient infra failure with poison messages (no retry), frontend `API_BASE_URL` knob is dead end-to-end                                              | The design vocabulary is right; the dedup docs actively describe a mechanism the code doesn't implement |
-| Observability pipeline        | Very strong, if only the local-mode path is inspected         | Conditional — correlation now ships in cloud mode, but a fabricated "Dual-Export" doc section and real employer/vault naming remain committed                                  | The sophisticated design mostly ships; the documentation and secret-naming hygiene haven't caught up    |
-| K8s / Helm / infra & security | Strong — unusually honest self-disclosed gaps                 | Conditional — the Mimir-endpoint footgun is still live in the legacy Makefile path, NetworkPolicy allows any namespace, RabbitMQ runs as `guest`                               | Self-awareness about known gaps doesn't offset the remaining unguarded legacy path                      |
-| Testing & docs integrity      | Tests: strong. Docs: weak once spot-checked                   | Conditional — `docs/api/grpc.md` still documents a validation contract the code doesn't implement, and there's still zero integration coverage for the trace-propagation claim | Real test engineering is undermined by unmaintained downstream docs                                     |
+| Domain                        | Interview / portfolio signal                                                                                         | Production sign-off                                                                                                                                                                                                  | Where they diverge                                                                                        |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Backend services & gRPC       | Strong — outbox pattern, cursor streaming, layered validation, multi-replica-safe relay (Testcontainers-verified)    | Conditional — no single blocker left, but blanket exception→502 mapping still erases most gRPC status codes and `AllowedHosts` is wildcarded with no manifest override                                               | Papercuts, not architecture problems; each is a small, scoped fix                                         |
+| Messaging & frontend          | Strong — correct async span semantics, tested backoff logic, DLQ now distinguishes transient from permanent failures | Conditional — TTL mismatch can still let a redelivery duplicate a notification, no resilience layer on the Angular HTTP client                                                                                       | The design vocabulary and the implementation now agree; what's left is defense-in-depth, not correctness  |
+| Observability pipeline        | Very strong, if only the local-mode path is inspected; cloud-mode docs now match what ships                          | Conditional — SLO alerts are wired but disabled by default and can't fire without a manual step, `project_id` is a Prometheus label with unbounded cardinality                                                       | The design is sound; a few "should be on by default" switches are still off                               |
+| K8s / Helm / infra & security | Strong — unusually honest self-disclosed gaps                                                                        | Conditional — NetworkPolicy allows any namespace (self-documented tradeoff), RabbitMQ runs as the reserved `guest` account with no purpose-named identity                                                            | Self-awareness about known gaps is real, but a couple of them are pre-prod TODOs, not just disclosed risk |
+| Testing & docs integrity      | Tests: strong (127 tests, one real Testcontainers concurrency test). Docs: much improved, still a few stale spots    | Conditional — zero integration coverage for the 5-hop trace-propagation claim the lab exists to demonstrate, and the frontend suite currently cannot run to green in this environment (root cause not yet diagnosed) | Real test engineering, undermined by one confirmed-broken toolchain path and one real coverage gap        |
 
 ---
 
@@ -403,24 +340,30 @@ that honestly name their own gaps are not things most "learning lab" projects at
 execute correctly. That's a real, defensible signal of judgment, and it would hold up well in a
 system-design conversation about async trace propagation or reliable event delivery specifically.
 
-The pattern that would cost points in the same conversation is consistent across every domain
-reviewed: **verification discipline after a refactor.** The dedup mechanism changed but the docs and
-ADR didn't catch up; the outbox refactor shipped but the trace-shape docs still describe the old
-synchronous publish; the cloud-mode Helm chart replaced the hand-rolled Alloy config but
-`docs/OTEL-PATTERNS.md` still describes a fictional "Dual-Export" feature; the legacy Makefile's
-`secrets-fetch-akv` target still writes the wrong Mimir endpoint format long after the canonical
-path moved on. None of these are hard to explain in an interview — but an interviewer who reads as
-carefully as this review did will find at least one of them within minutes, and "I didn't re-check
-the docs after the refactor" is a real deduction at the Staff bar, not a rounding error.
+The pattern that cost points across two full review-and-fix passes was the same both times:
+**verification discipline after a refactor.** Every Critical and High finding in this review — the
+dedup mechanism that changed but whose docs and ADR didn't catch up, the outbox refactor whose
+trace-shape docs still described the old synchronous publish, the cloud-mode Helm chart that
+replaced the hand-rolled Alloy config while `docs/OTEL-PATTERNS.md` kept describing a fictional
+"Dual-Export" feature, the legacy Makefile target writing the wrong Mimir endpoint format long after
+the canonical path moved on, real employer infrastructure naming sitting in plaintext across nine
+files — was this same failure mode, not a design flaw. All of it is now fixed and verified (27
+order-api tests including a real Testcontainers-based concurrency test, 26 notification-svc tests,
+50 frontend specs by count — though see the Testing row above for a caveat on actually running that
+last suite in this environment). None of it was hard to explain or hard to fix. "I didn't re-check
+the docs after the refactor" is a real deduction at the Staff bar the first time; catching and
+fixing all of it in a structured pass is itself the stronger interview story.
 
-**As something to ship:** closer, but still no. The prior blockers that were unconditional stops —
-live credential exposure, the retry/idempotency gap on order creation, and the prod overlay's
-structural inability to avoid dev's placeholder secrets — are resolved. What's left is smaller in
-scope but still real: the outbox relay's multi-replica race is unguarded, the notification DLQ still
-can't distinguish a transient Redis blip from a poison message, `docs/api/grpc.md` documents
-validation that doesn't exist, and the legacy Makefile path still ships a wrong Mimir endpoint next
-to real employer/vault naming committed in plaintext. Every one of these is a small, well-scoped fix
-— the same class of gap the first pass closed, just the next layer down.
+**As something to ship:** meaningfully closer. Every unconditional stop found across both passes —
+live credential exposure, the retry/idempotency gap on order creation, the prod overlay's structural
+inability to avoid dev's placeholder secrets, the outbox relay's multi-replica race, the DLQ
+conflating transient and permanent failures, the fabricated API contracts and doc sections, the
+plaintext employer naming — is resolved and verified against current source, not just claimed fixed.
+What remains is 22 Medium and ~30 Low/Nit items: real, worth fixing, but individually small and none
+of them a blocker on their own. The two with the most compounding risk are the disabled SLO alerts
+(good math, no evaluation path) and the frontend test suite's confirmed inability to run cleanly in
+this environment — both are "can't verify this claim is true," which is a different, more
+uncomfortable category than "this one thing is broken."
 
 **The throughline:** where the two lenses diverge, they diverge in the same direction every time:
 the design vocabulary and the hard engineering decisions are ahead of the implementation and
@@ -431,11 +374,17 @@ what it actually does" is a stronger Staff narrative than pretending the drift n
 ---
 
 _Five parallel subsystem reviews (backend/gRPC, messaging/frontend, observability pipeline,
-K8s/infra/security, testing/docs) consolidated and de-duplicated on 2026-07-08. Trimmed the same
-day: the credential-exposure incident (§1 of the original) and 15 numbered fix-list items were
-verified fixed directly against current source — not taken on the fix list's own say-so — and
-removed, along with any "also worth a look" item that turned out to be a side effect of those fixes.
-Two findings were reworded rather than dropped where the underlying fix only partially addressed
-them (the gateway's 502 mapping, now correct for `GetOrder`'s `NotFound` case only; the
-Mimir-endpoint footgun, now doc-guarded but still live in the Makefile). Lower-severity items were
-compacted into "also worth a look" lists per subsection rather than omitted._
+K8s/infra/security, testing/docs) consolidated and de-duplicated on 2026-07-08. Trimmed twice the
+same day. First pass: the credential-exposure incident (§1 of the original) and 15 numbered fix-list
+items were verified fixed directly against current source — not taken on the fix list's own say-so —
+and removed, along with any "also worth a look" item that turned out to be a side effect of those
+fixes. Two findings were reworded rather than dropped where that fix only partially addressed them.
+Second pass: the resulting 1 Critical and 9 High findings were fixed and verified in a dedicated
+working session — code changes backed by tests (including a new Testcontainers-based PostgreSQL
+concurrency test for the outbox-relay race, and two Angular unit tests for the runtime-config
+fallback), doc changes cross-checked against the actual current source rather than assumed correct
+once written. One finding (the CI Jest workaround) was strengthened rather than closed — its
+predicted failure mode was independently reproduced during the fix pass and the finding now cites
+that evidence instead of stating it as a risk. Lower-severity items were compacted into "also worth
+a look" lists per subsection rather than omitted, and are unchanged from the first pass except where
+a Critical/High fix incidentally resolved one (one such case, in §2.1)._

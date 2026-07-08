@@ -159,3 +159,50 @@ describe('ApiService', () => {
     req.flush(mockNotifications);
   });
 });
+
+// ── Runtime base URL resolution ───────────────────────────────────────────────
+//
+// Regression coverage for the API_BASE_URL Deployment env var being wired
+// end-to-end (docker-entrypoint.sh → assets/env.js → window.__ENV) but never
+// actually read — every test above already exercises the fallback path
+// implicitly (window.__ENV is unset in jsdom, so they hit environment.apiBaseUrl),
+// this exercises the runtime-value-wins path explicitly.
+describe('ApiService runtime base URL', () => {
+  const originalEnv = window.__ENV;
+
+  afterEach(() => {
+    window.__ENV = originalEnv;
+  });
+
+  it('prefers window.__ENV.API_BASE_URL over the build-time environment value', () => {
+    window.__ENV = { API_BASE_URL: 'https://runtime.example/api' };
+
+    TestBed.configureTestingModule({
+      imports: [HttpClientTestingModule],
+      providers: [ApiService],
+    });
+    const service = TestBed.inject(ApiService);
+    const http = TestBed.inject(HttpTestingController);
+
+    service.getProjects().subscribe();
+
+    http.expectOne('https://runtime.example/api/projects');
+    http.verify();
+  });
+
+  it('falls back to environment.apiBaseUrl when window.__ENV.API_BASE_URL is empty', () => {
+    window.__ENV = { API_BASE_URL: '' };
+
+    TestBed.configureTestingModule({
+      imports: [HttpClientTestingModule],
+      providers: [ApiService],
+    });
+    const service = TestBed.inject(ApiService);
+    const http = TestBed.inject(HttpTestingController);
+
+    service.getProjects().subscribe();
+
+    http.expectOne(`${environment.apiBaseUrl}/projects`);
+    http.verify();
+  });
+});

@@ -11,7 +11,11 @@ from unittest.mock import MagicMock, patch
 
 import fakeredis
 import pytest
+import redis
 from app.consumer import handle_order_created
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -45,6 +49,20 @@ def fr():
 @pytest.fixture
 def mock_instruments():
     return MagicMock(), MagicMock(), MagicMock()
+
+
+@pytest.fixture
+def captured_spans():
+    """A standalone TracerProvider + in-memory exporter, patched in as
+    app.consumer's tracer for one test, so span attributes can be asserted on
+    without touching the session-scoped provider other tests share."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+
+    with patch("app.consumer.get_tracer", return_value=tracer):
+        yield exporter
 
 
 # ── Happy path ────────────────────────────────────────────────────────────────
@@ -155,6 +173,21 @@ def test_duplicate_message_skips_storage_and_acks(fr, mock_instruments):
     assert not fr.exists("notifications:notif-42")
 
 
+def test_duplicate_message_sets_span_attribute(fr, mock_instruments, captured_spans):
+    fr.set("dedup:42", "1", ex=3600)
+    ch, method, props = _pika_args()
+
+    with (
+        patch("app.consumer.get_redis", return_value=fr),
+        patch("app.consumer._instruments", return_value=mock_instruments),
+    ):
+        handle_order_created(ch, method, props, _body(order_id=42))
+
+    spans = captured_spans.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes["notification.duplicate"] is True
+
+
 def test_duplicate_message_increments_duplicate_counter(fr, mock_instruments):
     counter, _, _ = mock_instruments
     fr.set("dedup:42", "1", ex=3600)
@@ -239,14 +272,50 @@ def test_invalid_json_increments_failed_counter(fr, mock_instruments):
     counter.add.assert_called_with(1, {"status": "failed"})
 
 
-def test_redis_failure_nacks_to_dlq(mock_instruments):
+def test_redis_failure_requeues_instead_of_dlq(mock_instruments):
+    """
+    A Redis outage (e.g. pod restart during a routine deploy) is transient,
+    not a bad message — it must be requeued for retry, not dead-lettered.
+    Dead-lettering live traffic on every Redis blip was the original bug.
+    """
     ch, method, props = _pika_args(delivery_tag=2)
     exploding_redis = MagicMock()
-    exploding_redis.set.side_effect = RuntimeError("Redis down")
+    exploding_redis.set.side_effect = redis.ConnectionError("Redis down")
 
     with (
         patch("app.consumer.get_redis", return_value=exploding_redis),
         patch("app.consumer._instruments", return_value=mock_instruments),
+    ):
+        handle_order_created(ch, method, props, _body(order_id=1))
+
+    ch.basic_nack.assert_called_once_with(delivery_tag=2, requeue=True)
+    ch.basic_ack.assert_not_called()
+
+
+def test_redis_failure_increments_transient_failure_counter(mock_instruments):
+    counter, _, _ = mock_instruments
+    ch, method, props = _pika_args()
+    exploding_redis = MagicMock()
+    exploding_redis.set.side_effect = redis.ConnectionError("Redis down")
+
+    with (
+        patch("app.consumer.get_redis", return_value=exploding_redis),
+        patch("app.consumer._instruments", return_value=mock_instruments),
+    ):
+        handle_order_created(ch, method, props, _body(order_id=1))
+
+    counter.add.assert_called_with(1, {"status": "failed_transient"})
+
+
+def test_unexpected_error_nacks_to_dlq(fr, mock_instruments):
+    """Non-Redis, non-validation errors still go to the DLQ (not requeued
+    indefinitely) since we can't assume they're safe to retry."""
+    ch, method, props = _pika_args(delivery_tag=2)
+
+    with (
+        patch("app.consumer.get_redis", return_value=fr),
+        patch("app.consumer._instruments", return_value=mock_instruments),
+        patch("app.consumer._mock_email_send", side_effect=RuntimeError("boom")),
     ):
         handle_order_created(ch, method, props, _body(order_id=1))
 

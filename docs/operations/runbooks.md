@@ -293,13 +293,15 @@ kubectl -n monitoring logs daemonset/grafana-k8s-alloy-receiver --tail=100 \
 | `connection refused` | Wrong endpoint format                                                                           | Tempo must be `host:443` (no `https://`) in `conf.yml`; the fetch script applies this adjustment automatically      |
 | `403 Forbidden`      | API key lacks scope                                                                             | Ensure scopes: `metrics:write logs:write traces:write`                                                              |
 
-> **Do not use `make secrets-fetch-akv` / `make secrets-apply` for this.** They write
-> `GRAFANA_CLOUD_MIMIR_ENDPOINT=.../api/v1/otlp` into the Secret directly, but the live cloud
-> destination ([values-cloud.yaml.tmpl](../../k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl))
-> uses Prometheus remote_write and expects `.../api/prom/push` — running those legacy targets here
-> silently breaks cloud-mode metrics instead of fixing them. Use
-> `./scripts/fetch-grafana-cloud-conf-from-akv.sh` + `./deploy-local.sh` instead — see
-> [docs/deployment/grafana-cloud.md](../deployment/grafana-cloud.md) for the full credential model.
+> **Prefer `./scripts/fetch-grafana-cloud-conf-from-akv.sh` + `./deploy-local.sh` over
+> `make secrets-fetch-akv` / `make secrets-apply` for this.** The Makefile targets are legacy — they
+> write the K8s Secret directly and drive their own `helm upgrade`, bypassing `deploy-local.sh`
+> entirely, and `secrets-apply` in particular is only as correct as whatever you put in `.env`
+> manually. `secrets-fetch-akv` writes the correct Mimir endpoint format (`.../api/prom/push`,
+> matching [values-cloud.yaml.tmpl](../../k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl)'s
+> Prometheus remote_write destination) as of this fix, but the script-based flow remains the
+> canonical path — see [docs/deployment/grafana-cloud.md](../deployment/grafana-cloud.md) for the
+> full credential model.
 
 ---
 

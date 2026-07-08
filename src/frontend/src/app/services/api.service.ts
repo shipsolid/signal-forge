@@ -33,8 +33,12 @@ export interface Notification {
 /**
  * ApiService is the single HTTP boundary between the Angular SPA and gateway-api.
  *
- * All calls go to `environment.apiBaseUrl` (default: same origin via the
- * Traefik ingress in k3d, or http://localhost:8080 in local dev).
+ * All calls go to `window.__ENV.API_BASE_URL` (injected at container startup by
+ * docker-entrypoint.sh — see assets/env.js), falling back to
+ * `environment.apiBaseUrl` for local `ng serve` where env.js is never overwritten.
+ * Same pattern as faro.ts's FARO_URL — see that file for why `||` and not `??`.
+ * This is what actually makes the Deployment's `API_BASE_URL` env var do
+ * anything; reading only `environment.apiBaseUrl` here would silently ignore it.
  *
  * Faro's `FetchInstrumentation` wraps every fetch automatically, injecting a
  * W3C `traceparent` header so browser spans are linked to backend server spans
@@ -42,7 +46,7 @@ export interface Notification {
  */
 @Injectable({ providedIn: 'root' })
 export class ApiService {
-  private base = environment.apiBaseUrl;
+  private base = window.__ENV?.API_BASE_URL || environment.apiBaseUrl;
 
   constructor(private http: HttpClient) {}
 

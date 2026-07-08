@@ -6,15 +6,29 @@
 //   • GetOrdersByProject — server-streaming: stream rows from DB
 //   • GetOrder     — unary: single row lookup
 //
-// OTel trace shape for CreateOrder (the most important call):
+// OTel trace shape for CreateOrder (the most important call), post-outbox-refactor:
 //
 //   gateway-api: orders.OrderService/CreateOrder (gRPC client, Kind=CLIENT)
 //     └─ order-api: orders.OrderService/CreateOrder (gRPC server, Kind=SERVER)
 //          └─ order-api: order.create (custom, Kind=INTERNAL)
-//               ├─ order-api: db.postgresql (EF Core INSERT via Npgsql)
-//               └─ order-api: order.publish (custom, Kind=PRODUCER)
-//                    ┄┄(async via RabbitMQ)┄┄
-//                    notification-svc: notification.process (Kind=CONSUMER)
+//               └─ order-api: db.postgresql (EF Core INSERT of Order + OutboxMessage
+//                             in one SaveChanges call — the RabbitMQ publish is NOT
+//                             in this trace; see OutboxRelayWorker.cs)
+//
+// order.publish no longer lives here. It happens later, out-of-band, when
+// OutboxRelayWorker's poll picks up the OutboxMessage row and calls
+// OrderPublisher.PublishAsync — by which point this request has already
+// returned. That call starts its own root span (outbox.relay, see
+// OutboxRelayWorker.cs), disconnected from this trace: order.publish is a
+// child of outbox.relay, not of order.create. The RabbitMQ message headers
+// still carry the *original* request's traceparent (captured from
+// Activity.Current?.Id at write time, stored on OutboxMessage.TraceParent,
+// injected directly into headers — not via Activity/Propagators.Inject on
+// this now-long-gone Activity), so notification-svc's CONSUMER span links
+// back to order.create correctly. But nothing on the order-api side ties
+// order.publish/outbox.relay back to this trace — from here, a broker
+// outage or relay failure is invisible; you'd only see it in outbox.relay's
+// own orphaned trace or in the OutboxRelayWorker pod logs.
 //
 // The gRPC server span is created automatically by AddAspNetCoreInstrumentation()
 // which hooks into the gRPC middleware.  The rpc.system, rpc.service, rpc.method
@@ -45,10 +59,13 @@ public class OrderGrpcService : Protos.OrderService.OrderServiceBase
     }
 
     // ── CreateOrder ──────────────────────────────────────────────────────────
-    // Full span chain: gRPC server → order.create (custom) → DB write → publish.
+    // Full span chain: gRPC server → order.create (custom) → DB write only.
+    // Publish is NOT part of this call anymore (see the file header comment
+    // and OutboxRelayWorker.cs) — CreateOrder returns once the Order +
+    // OutboxMessage row are committed.
     //
     // The Stopwatch here measures the time from start of the custom span to
-    // just after the RabbitMQ publish.  This value is recorded on the
+    // just after the DB write commits.  This value is recorded on the
     // orders.processing.duration histogram and (because it runs inside a
     // sampled trace) carries an exemplar linking the metric point to this trace.
     public override async Task<CreateOrderResponse> CreateOrder(
@@ -168,14 +185,17 @@ public class OrderGrpcService : Protos.OrderService.OrderServiceBase
     // Server-streaming RPC: writes each order as a separate gRPC message.
     //
     // The single gRPC server span stays open for the full streaming duration.
-    // EF Core loads all rows into memory first (ToListAsync), then we stream
-    // them.  In production with large result sets you'd use AsAsyncEnumerable()
-    // to avoid buffering, but for the lab this is clear and simple.
+    // Rows are streamed directly from the PostgreSQL cursor via AsAsyncEnumerable()
+    // below — one row fetched, written to the stream, then the next — so memory
+    // usage is O(1) regardless of result set size (see ADR-010).
     public override async Task GetOrdersByProject(
         GetOrdersByProjectRequest request,
         IServerStreamWriter<OrderResponse> responseStream,
         ServerCallContext context)
     {
+        if (request.ProjectId <= 0)
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "ProjectId must be a positive integer."));
+
         using var activity = DiagnosticsConfig.ActivitySource.StartActivity("order.get_by_project");
         activity?.SetTag("order.project_id", request.ProjectId);
 

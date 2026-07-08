@@ -131,7 +131,7 @@ logs:
 # Grafana Cloud credentials — sourced from Azure Key Vault.
 #
 # Preferred workflow (no manual credential handling):
-#   make secrets-fetch-akv   # pulls grafana-mccaindev-* from AKV, applies to cluster
+#   make secrets-fetch-akv   # pulls grafana-example-org-* from AKV, applies to cluster
 #
 # Manual fallback (fill .env first):
 #   cp .env.example .env && vi .env
@@ -141,11 +141,15 @@ logs:
 #   make secrets-show
 # =============================================================================
 
-# Pull grafana-mccaindev-* secrets from Azure Key Vault and apply directly as
+# Pull grafana-example-org-* secrets from Azure Key Vault and apply directly as
 # the grafana-cloud-secrets K8s Secret.  SP credentials are read from .env.
 # Endpoint paths are adjusted to match the Alloy exporter format:
 #   Tempo:  strip https://, append :443       (OTLP gRPC — no URL scheme)
-#   Mimir:  append /api/v1/otlp               (OTLP HTTP)
+#   Mimir:  append /api/prom/push             (Prometheus remote_write, not OTLP HTTP —
+#                                               matches values-cloud.yaml.tmpl; a prior
+#                                               version of this target wrote /api/v1/otlp,
+#                                               which the live chart-based pipeline doesn't
+#                                               speak — see docs/deployment/grafana-cloud.md)
 #   Loki:   append /loki/api/v1/push          (Loki HTTP push)
 secrets-fetch-akv:
 	@test -f .env || (echo "ERROR: .env not found. Run: cp .env.example .env and fill in ARM_* fields" && exit 1)
@@ -156,21 +160,21 @@ secrets-fetch-akv:
 	  --tenant  "$${ARM_TENANT_ID}" \
 	  --output none && \
 	KV="$${Azure_KeyVault}" && \
-	API_KEY=$$(az keyvault secret show --vault-name "$$KV" --name grafana-mccaindev-alloy-writer-mccaindev-token --query value -o tsv) && \
-	TEMPO_HOST=$$(az keyvault secret show --vault-name "$$KV" --name grafana-mccaindev-cloud-tempo-endpoint  --query value -o tsv | sed 's|https://||') && \
-	TEMPO_USER=$$(az keyvault secret show --vault-name "$$KV" --name grafana-mccaindev-cloud-tempo-username  --query value -o tsv) && \
-	MIMIR_BASE=$$(az keyvault secret show --vault-name "$$KV" --name grafana-mccaindev-cloud-mimir-endpoint  --query value -o tsv) && \
-	MIMIR_USER=$$(az keyvault secret show --vault-name "$$KV" --name grafana-mccaindev-cloud-mimir-username  --query value -o tsv) && \
-	LOKI_BASE=$$(az keyvault secret show  --vault-name "$$KV" --name grafana-mccaindev-cloud-loki-endpoint   --query value -o tsv) && \
-	LOKI_USER=$$(az keyvault secret show  --vault-name "$$KV" --name grafana-mccaindev-cloud-loki-username   --query value -o tsv) && \
-	FARO_URL=$$(az keyvault secret show   --vault-name "$$KV" --name grafana-mccaindev-faro-signal-forge-collection-url    --query value -o tsv) && \
-	FARO_KEY=$$(az keyvault secret show   --vault-name "$$KV" --name grafana-mccaindev-faro-signal-forge-sourcemap-token    --query value -o tsv) && \
+	API_KEY=$$(az keyvault secret show --vault-name "$$KV" --name grafana-example-org-alloy-writer-example-org-token --query value -o tsv) && \
+	TEMPO_HOST=$$(az keyvault secret show --vault-name "$$KV" --name grafana-example-org-cloud-tempo-endpoint  --query value -o tsv | sed 's|https://||') && \
+	TEMPO_USER=$$(az keyvault secret show --vault-name "$$KV" --name grafana-example-org-cloud-tempo-username  --query value -o tsv) && \
+	MIMIR_BASE=$$(az keyvault secret show --vault-name "$$KV" --name grafana-example-org-cloud-mimir-endpoint  --query value -o tsv) && \
+	MIMIR_USER=$$(az keyvault secret show --vault-name "$$KV" --name grafana-example-org-cloud-mimir-username  --query value -o tsv) && \
+	LOKI_BASE=$$(az keyvault secret show  --vault-name "$$KV" --name grafana-example-org-cloud-loki-endpoint   --query value -o tsv) && \
+	LOKI_USER=$$(az keyvault secret show  --vault-name "$$KV" --name grafana-example-org-cloud-loki-username   --query value -o tsv) && \
+	FARO_URL=$$(az keyvault secret show   --vault-name "$$KV" --name grafana-example-org-faro-signal-forge-collection-url    --query value -o tsv) && \
+	FARO_KEY=$$(az keyvault secret show   --vault-name "$$KV" --name grafana-example-org-faro-signal-forge-sourcemap-token    --query value -o tsv) && \
 	kubectl create secret generic grafana-cloud-secrets \
 	  --namespace $(NAMESPACE) \
 	  --from-literal=GRAFANA_CLOUD_API_KEY="$$API_KEY" \
 	  --from-literal=GRAFANA_CLOUD_TEMPO_ENDPOINT="$${TEMPO_HOST}:443" \
 	  --from-literal=GRAFANA_CLOUD_TEMPO_USER="$$TEMPO_USER" \
-	  --from-literal=GRAFANA_CLOUD_MIMIR_ENDPOINT="$${MIMIR_BASE}/api/v1/otlp" \
+	  --from-literal=GRAFANA_CLOUD_MIMIR_ENDPOINT="$${MIMIR_BASE}/api/prom/push" \
 	  --from-literal=GRAFANA_CLOUD_MIMIR_USER="$$MIMIR_USER" \
 	  --from-literal=GRAFANA_CLOUD_LOKI_ENDPOINT="$${LOKI_BASE}/loki/api/v1/push" \
 	  --from-literal=GRAFANA_CLOUD_LOKI_USER="$$LOKI_USER" \

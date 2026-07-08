@@ -16,15 +16,15 @@ Grafana Cloud Stack
   ├── Mimir (metrics)  → instance ID:  3102416   endpoint: prometheus-us-central2.grafana.net
   └── Loki  (logs)     → instance ID:  1546883   endpoint: logs-prod-037.grafana.net
 
-Shared Access Policy token (glc_...): grafana-mccaindev-alloy-writer-mccaindev-token
+Shared Access Policy token (glc_...): grafana-example-org-alloy-writer-example-org-token
   Scopes: metrics:write  logs:write  traces:write
 ```
 
-> **Important**: The Grafana Cloud API key (`grafana-mccaindev-cloud-api-key`, prefix `glsa_`) is a
-> Grafana **organisation service account token** — it authenticates with the Grafana frontend
-> (`mccaindev.grafana.net`) but is **rejected** by Mimir/Loki/Tempo data ingestion endpoints (HTTP
-> 401). Always use `grafana-mccaindev-alloy-writer-mccaindev-token` (prefix `glc_`) for data plane
-> writes.
+> **Important**: The Grafana Cloud API key (`grafana-example-org-cloud-api-key`, prefix `glsa_`) is
+> a Grafana **organisation service account token** — it authenticates with the Grafana frontend
+> (`example-org.grafana.net`) but is **rejected** by Mimir/Loki/Tempo data ingestion endpoints (HTTP
+> 401). Always use `grafana-example-org-alloy-writer-example-org-token` (prefix `glc_`) for data
+> plane writes.
 
 ---
 
@@ -54,21 +54,21 @@ expects a host:port endpoint without a URL scheme.
 
 ## Azure Key Vault integration
 
-Credentials are stored in Azure Key Vault (`mf-cc-dt-azrsrp-prd-kv`) under the `grafana-mccaindev-*`
+Credentials are stored in Azure Key Vault (`example-org-prd-kv`) under the `grafana-example-org-*`
 prefix. The AKV coordinates (tenant/subscription/RG/vault name) live in [conf.yml](../../conf.yml)
 under `monitoring.grafana_cloud.akv.*` — these are IDs/names and are safe to track in git.
 
-| AKV secret name                                  | conf.yml key     | Secret key (K8s)               | Notes                                                       |
-| ------------------------------------------------ | ---------------- | ------------------------------ | ----------------------------------------------------------- |
-| `grafana-mccaindev-alloy-writer-mccaindev-token` | `api_key`        | `GRAFANA_CLOUD_API_KEY`        | `glc_` access-policy token — required for data-plane writes |
-| `grafana-mccaindev-cloud-tempo-endpoint`         | `tempo.endpoint` | `GRAFANA_CLOUD_TEMPO_ENDPOINT` | fetch script appends `:443`                                 |
-| `grafana-mccaindev-cloud-tempo-username`         | `tempo.user`     | `GRAFANA_CLOUD_TEMPO_USER`     |                                                             |
-| `grafana-mccaindev-cloud-mimir-endpoint`         | `mimir.endpoint` | `GRAFANA_CLOUD_MIMIR_ENDPOINT` | fetch script appends `/push` if missing                     |
-| `grafana-mccaindev-cloud-mimir-username`         | `mimir.user`     | `GRAFANA_CLOUD_MIMIR_USER`     |                                                             |
-| `grafana-mccaindev-cloud-loki-endpoint`          | `loki.endpoint`  | `GRAFANA_CLOUD_LOKI_ENDPOINT`  | fetch script appends `/loki/api/v1/push` if missing         |
-| `grafana-mccaindev-cloud-loki-username`          | `loki.user`      | `GRAFANA_CLOUD_LOKI_USER`      |                                                             |
-| `grafana-mccaindev-faro-api-endpoint`            | `faro.endpoint`  | `FARO_COLLECTOR_URL`           | frontend runtime env                                        |
-| `grafana-mccaindev-faro-sourcemap-token`         | `faro.api_key`   | `FARO_API_KEY`                 | webpack build arg                                           |
+| AKV secret name                                      | conf.yml key     | Secret key (K8s)               | Notes                                                       |
+| ---------------------------------------------------- | ---------------- | ------------------------------ | ----------------------------------------------------------- |
+| `grafana-example-org-alloy-writer-example-org-token` | `api_key`        | `GRAFANA_CLOUD_API_KEY`        | `glc_` access-policy token — required for data-plane writes |
+| `grafana-example-org-cloud-tempo-endpoint`           | `tempo.endpoint` | `GRAFANA_CLOUD_TEMPO_ENDPOINT` | fetch script appends `:443`                                 |
+| `grafana-example-org-cloud-tempo-username`           | `tempo.user`     | `GRAFANA_CLOUD_TEMPO_USER`     |                                                             |
+| `grafana-example-org-cloud-mimir-endpoint`           | `mimir.endpoint` | `GRAFANA_CLOUD_MIMIR_ENDPOINT` | fetch script appends `/push` if missing                     |
+| `grafana-example-org-cloud-mimir-username`           | `mimir.user`     | `GRAFANA_CLOUD_MIMIR_USER`     |                                                             |
+| `grafana-example-org-cloud-loki-endpoint`            | `loki.endpoint`  | `GRAFANA_CLOUD_LOKI_ENDPOINT`  | fetch script appends `/loki/api/v1/push` if missing         |
+| `grafana-example-org-cloud-loki-username`            | `loki.user`      | `GRAFANA_CLOUD_LOKI_USER`      |                                                             |
+| `grafana-example-org-faro-api-endpoint`              | `faro.endpoint`  | `FARO_COLLECTOR_URL`           | frontend runtime env                                        |
+| `grafana-example-org-faro-sourcemap-token`           | `faro.api_key`   | `FARO_API_KEY`                 | webpack build arg                                           |
 
 ---
 
@@ -209,12 +209,12 @@ az login --service-principal \
   --tenant    "$ARM_TENANT_ID"
 
 # Verify SP has Key Vault Secrets User role
-az keyvault show --name mf-cc-dt-azrsrp-prd-kv \
+az keyvault show --name example-org-prd-kv \
   --query "properties.accessPolicies[?objectId=='<SP_OBJECT_ID>']"
 
 # List available secrets
-az keyvault secret list --vault-name mf-cc-dt-azrsrp-prd-kv \
-  --query "[?starts_with(name,'grafana-mccaindev')].name" -o tsv
+az keyvault secret list --vault-name example-org-prd-kv \
+  --query "[?starts_with(name,'grafana-example-org')].name" -o tsv
 ```
 
 ---
@@ -237,8 +237,8 @@ When the Grafana Cloud API key is rotated:
 1. Update the secret in AKV:
 
    ```bash
-   az keyvault secret set --vault-name mf-cc-dt-azrsrp-prd-kv \
-     --name grafana-mccaindev-cloud-api-key --value "glsa_newtoken..."
+   az keyvault secret set --vault-name example-org-prd-kv \
+     --name grafana-example-org-cloud-api-key --value "glsa_newtoken..."
    ```
 
 2. Re-fetch and apply:

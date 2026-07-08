@@ -108,15 +108,15 @@ kv_get_optional() {
 }
 
 echo "==> fetching secrets from Key Vault: ${AZURE_KEYVAULT}"
-api_key="$(kv_get grafana-mccaindev-alloy-writer-mccaindev-token)"
-tempo_host="$(kv_get grafana-mccaindev-cloud-tempo-endpoint)"
-tempo_user="$(kv_get grafana-mccaindev-cloud-tempo-username)"
-mimir_base="$(kv_get grafana-mccaindev-cloud-mimir-endpoint)"
-mimir_user="$(kv_get grafana-mccaindev-cloud-mimir-username)"
-loki_base="$(kv_get grafana-mccaindev-cloud-loki-endpoint)"
-loki_user="$(kv_get grafana-mccaindev-cloud-loki-username)"
-faro_endpoint="$(kv_get_optional grafana-mccaindev-faro-api-endpoint)"
-faro_api_key="$(kv_get_optional grafana-mccaindev-faro-sourcemap-token)"
+api_key="$(kv_get grafana-example-org-alloy-writer-example-org-token)"
+tempo_host="$(kv_get grafana-example-org-cloud-tempo-endpoint)"
+tempo_user="$(kv_get grafana-example-org-cloud-tempo-username)"
+mimir_base="$(kv_get grafana-example-org-cloud-mimir-endpoint)"
+mimir_user="$(kv_get grafana-example-org-cloud-mimir-username)"
+loki_base="$(kv_get grafana-example-org-cloud-loki-endpoint)"
+loki_user="$(kv_get grafana-example-org-cloud-loki-username)"
+faro_endpoint="$(kv_get_optional grafana-example-org-faro-api-endpoint)"
+faro_api_key="$(kv_get_optional grafana-example-org-faro-sourcemap-token)"
 
 trim_slash() { local v="$1"; printf '%s' "${v%/}"; }
 

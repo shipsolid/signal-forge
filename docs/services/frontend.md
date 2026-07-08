@@ -1,10 +1,10 @@
 # Service: frontend (Angular SPA)
 
-**Role**: Browser single-page application. Provides the user interface and instruments browser telemetry via Grafana Faro.
+**Role**: Browser single-page application. Provides the user interface and instruments browser
+telemetry via Grafana Faro.
 
-**Runtime**: Angular 17, built to static assets, served by nginx
-**Port**: 80 (nginx, cluster-internal) → exposed via Traefik ingress at `/`
-**Replicas**: 1
+**Runtime**: Angular 17, built to static assets, served by nginx **Port**: 80 (nginx,
+cluster-internal) → exposed via Traefik ingress at `/` **Replicas**: 1
 
 ---
 
@@ -46,7 +46,8 @@ initializeFaro({
 });
 ```
 
-`faroUrl` is injected at build time from `environment.ts`, which is overwritten at runtime via a Kubernetes ConfigMap or Deployment env var substitution in nginx.
+`faroUrl` is injected at build time from `environment.ts`, which is overwritten at runtime via a
+Kubernetes ConfigMap or Deployment env var substitution in nginx.
 
 ---
 
@@ -65,22 +66,26 @@ initializeFaro({
 
 ## Browser → backend trace linkage
 
-When the Angular SPA calls any API endpoint, `TracingInstrumentation` injects a `traceparent` header:
+When the Angular SPA calls any API endpoint, `TracingInstrumentation` injects a `traceparent`
+header:
 
 ```
 GET /api/projects HTTP/1.1
 traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
 ```
 
-ASP.NET Core's `AddAspNetCoreInstrumentation()` reads this header and sets the HTTP server span's parent to the browser span. The result: a single trace starting in the browser and ending in MySQL.
+ASP.NET Core's `AddAspNetCoreInstrumentation()` reads this header and sets the HTTP server span's
+parent to the browser span. The result: a single trace starting in the browser and ending in MySQL.
 
-The `propagateTraceHeaderCorsUrls` regex must match the API origin. In local development this is `http://localhost:8080`. In Kubernetes it's the ingress hostname.
+The `propagateTraceHeaderCorsUrls` regex must match the API origin. In local development this is
+`http://localhost:8080`. In Kubernetes it's the ingress hostname.
 
 ---
 
 ## nginx configuration
 
-nginx serves the Angular build and proxies `/api/*` to the gateway-api ClusterIP service. Key directives:
+nginx serves the Angular build and proxies `/api/*` to the gateway-api ClusterIP service. Key
+directives:
 
 ```nginx
 server {
@@ -103,21 +108,40 @@ server {
 }
 ```
 
-**Important**: `proxy_pass_request_headers on` ensures the `traceparent` header from the browser reaches gateway-api. If this is missing, trace propagation breaks at the nginx boundary.
+**Important**: `proxy_pass_request_headers on` ensures the `traceparent` header from the browser
+reaches gateway-api. If this is missing, trace propagation breaks at the nginx boundary.
 
 ---
 
 ## Environment variable injection
 
-The Faro receiver URL (`faroUrl`) changes between local and cloud deployments. Rather than rebuilding the image, the nginx container rewrites `environment.ts` values at startup using a ConfigMap-mounted shell script:
+`FARO_URL` and `API_BASE_URL` change between local and cloud deployments. Rather than rewriting the
+compiled bundle (`envsubst` on `main.js` would fight nginx's immutable JS caching — cache-busted by
+filename hash, so a rewritten-in-place `main.js` either gets ignored in favor of a cached copy or
+poisons the cache for everyone), `docker-entrypoint.sh` writes a small separate file,
+`assets/env.js`, before nginx starts:
 
-```bash
-# Injected via initContainer or nginx startup script
-envsubst '${FARO_URL}' < /usr/share/nginx/html/main.js > /tmp/main.js
-cp /tmp/main.js /usr/share/nginx/html/main.js
+```sh
+cat > /usr/share/nginx/html/assets/env.js << EOF
+window.__ENV = {
+  FARO_URL: "${FARO_URL}",
+  API_BASE_URL: "${API_BASE_URL}"
+};
+EOF
 ```
 
-`FARO_URL` is set in the Deployment env var. `make secrets-fetch-akv` restarts the frontend Deployment to pick up the new value.
+`index.html` loads it unconditionally via `<script src="assets/env.js"></script>`, before the
+Angular bundle. Consumers read `window.__ENV?.<KEY> || environment.<key>` — runtime value first,
+falling back to the build-time `environment.ts` value for local `ng serve` (where `env.js` is the
+checked-in placeholder in `src/assets/`, never overwritten). `faro.ts` does this for `FARO_URL`;
+`api.service.ts` does the same for `API_BASE_URL`, which is what makes the Deployment's
+`API_BASE_URL` env var actually take effect — reading only `environment.apiBaseUrl` there would
+silently ignore it. The `window.__ENV` type lives in `src/window-env.d.ts`, not inline in either
+consumer, so both (and any future one) share one declaration.
+
+Both variables are set in the Deployment; `API_BASE_URL` comes from the Deployment env directly,
+`FARO_URL` from the `grafana-cloud-secrets` Secret's `FARO_COLLECTOR_URL` key. A rollout restart of
+the frontend Deployment picks up a changed value — no rebuild needed.
 
 ---
 
@@ -135,7 +159,8 @@ ngOnInit(): void {
 }
 ```
 
-This guards against `?projectId=abc` producing `NaN`, which would be silently sent to the API and rejected as an invalid input.
+This guards against `?projectId=abc` producing `NaN`, which would be silently sent to the API and
+rejected as an invalid input.
 
 ---
 
@@ -146,4 +171,8 @@ Multi-stage build:
 1. `node:20-alpine` — `ng build --configuration production`
 2. `nginx:alpine` — copy `/dist/` output, copy custom `nginx.conf`
 
-In corporate proxy environments (e.g. Zscaler), `npm install` fails with TLS errors unless the CA cert is trusted. The `make build` target handles this automatically: it copies `/usr/local/share/ca-certificates/zcert.crt` from the host into the build context before `docker build`, and each Dockerfile stage installs it with `RUN update-ca-certificates` before any network step. The cert file is git-ignored and never committed.
+In corporate proxy environments (e.g. Zscaler), `npm install` fails with TLS errors unless the CA
+cert is trusted. The `make build` target handles this automatically: it copies
+`/usr/local/share/ca-certificates/zcert.crt` from the host into the build context before
+`docker build`, and each Dockerfile stage installs it with `RUN update-ca-certificates` before any
+network step. The cert file is git-ignored and never committed.
