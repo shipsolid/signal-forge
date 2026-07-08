@@ -18,7 +18,12 @@ public class AppDbContext : DbContext
             entity.Property(e => e.Description).HasMaxLength(500).IsRequired();
             entity.Property(e => e.Amount).HasColumnType("numeric(18,2)");
             entity.Property(e => e.Status).HasMaxLength(50).IsRequired();
+            entity.Property(e => e.IdempotencyKey).HasMaxLength(64);
             entity.HasIndex(e => e.ProjectId);
+            // Nullable + unique: NULL never equals NULL under standard SQL unique-index
+            // semantics, so any number of no-key (null) orders coexist; only a repeated
+            // non-null key collides.
+            entity.HasIndex(e => e.IdempotencyKey).IsUnique();
         });
 
         modelBuilder.Entity<OutboxMessage>(entity =>

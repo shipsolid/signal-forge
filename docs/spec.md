@@ -2,9 +2,14 @@
 
 ## 1. Purpose
 
-A multi-service application (.NET, Python, Angular) deployed on local k3d, instrumented end-to-end with OpenTelemetry and collected via **Grafana Alloy**. The goal is to validate every instrumentation pattern — traces, metrics, logs, exemplars, span metrics, cross-language propagation, sync + async communication, and frontend RUM — before rolling them into production workloads.
+A multi-service application (.NET, Python, Angular) deployed on local k3d, instrumented end-to-end
+with OpenTelemetry and collected via **Grafana Alloy**. The goal is to validate every
+instrumentation pattern — traces, metrics, logs, exemplars, span metrics, cross-language
+propagation, sync + async communication, and frontend RUM — before rolling them into production
+workloads.
 
-Dual-mode export: local observability stack for offline dev, and remote-write to Grafana Cloud for production-parity validation.
+Dual-mode export: local observability stack for offline dev, and remote-write to Grafana Cloud for
+production-parity validation.
 
 ---
 
@@ -114,7 +119,8 @@ initializeFaro({
 });
 ```
 
-Key signals from Faro: page load timing, route change spans, fetch/XHR spans (propagating `traceparent`), JavaScript errors, Web Vitals (LCP, FID, CLS).
+Key signals from Faro: page load timing, route change spans, fetch/XHR spans (propagating
+`traceparent`), JavaScript errors, Web Vitals (LCP, FID, CLS).
 
 ---
 
@@ -258,7 +264,9 @@ On `CreateOrder`, after DB write, publish to exchange `orders` with routing key 
 }
 ```
 
-**Trace propagation**: Inject W3C `traceparent` into RabbitMQ message headers using `OpenTelemetry.Instrumentation.RabbitMQ` (or manual `TextMapPropagator` injection into `IBasicProperties.Headers`). This is the critical async propagation validation point.
+**Trace propagation**: Inject W3C `traceparent` into RabbitMQ message headers using
+`OpenTelemetry.Instrumentation.RabbitMQ` (or manual `TextMapPropagator` injection into
+`IBasicProperties.Headers`). This is the critical async propagation validation point.
 
 #### OTel Packages
 
@@ -304,7 +312,10 @@ On `CreateOrder`, after DB write, publish to exchange `orders` with routing key 
 
 Listens on queue `notifications` bound to `orders` exchange with routing key `order.created`.
 
-**Trace propagation**: Extract `traceparent` from message headers using `opentelemetry-instrumentation-pika` or manual `TraceContextTextMapPropagator.extract()`. Create a `CONSUMER` span linked to the producer span. This validates **cross-language async propagation** (.NET producer → Python consumer).
+**Trace propagation**: Extract `traceparent` from message headers using
+`opentelemetry-instrumentation-pika` or manual `TraceContextTextMapPropagator.extract()`. Create a
+`CONSUMER` span linked to the producer span. This validates **cross-language async propagation**
+(.NET producer → Python consumer).
 
 #### Processing Logic
 
@@ -378,14 +389,13 @@ Grafana is pre-provisioned with datasources: Jaeger (traces), Prometheus (metric
 
 ## 5. Grafana Alloy Configuration
 
-Alloy is deployed via the `grafana/k8s-monitoring` Helm chart (v3.8.4) in the
-`monitoring` namespace. Five specialised roles replace the single general-purpose
-hand-rolled DaemonSet (`k8s/alloy/` — kept as reference, not deployed).
+Alloy is deployed via the `grafana/k8s-monitoring` Helm chart (v3.8.4) in the `monitoring`
+namespace. Five specialised roles replace the single general-purpose hand-rolled DaemonSet
+(`k8s/alloy/` — kept as reference, not deployed).
 
-The River configuration below represents the **logical pipeline** that
-`alloy-receiver` implements (the actual Helm-generated config is equivalent but
-auto-generated). It is preserved here as a readable reference for the OTel
-pipeline design.
+The River configuration below represents the **logical pipeline** that `alloy-receiver` implements
+(the actual Helm-generated config is equivalent but auto-generated). It is preserved here as a
+readable reference for the OTel pipeline design.
 
 ### 5.1 Alloy River Config — Full Pipeline
 
@@ -668,7 +678,9 @@ loki.write "local" {
 
 ### 5.2 Alloy DaemonSet RBAC
 
-Alloy needs a `ClusterRole` with read access to pods, nodes, and namespaces for `k8sattributes` enrichment and `loki.source.kubernetes` log tailing. The ServiceAccount, ClusterRole, and ClusterRoleBinding are in `k8s/alloy/rbac.yaml`.
+Alloy needs a `ClusterRole` with read access to pods, nodes, and namespaces for `k8sattributes`
+enrichment and `loki.source.kubernetes` log tailing. The ServiceAccount, ClusterRole, and
+ClusterRoleBinding are in `k8s/alloy/rbac.yaml`.
 
 ### 5.3 Exemplar Configuration
 
@@ -682,13 +694,16 @@ env:
     value: trace_based
 ```
 
-> `AddExemplarFilter(ExemplarFilterType.TraceBased)` was removed — it requires
-> opting into OTel .NET experimental APIs (SDK 1.9.x) and is not resolvable at
-> compile time without unstable package references. The env var is equivalent.
+> `AddExemplarFilter(ExemplarFilterType.TraceBased)` was removed — it requires opting into OTel .NET
+> experimental APIs (SDK 1.9.x) and is not resolvable at compile time without unstable package
+> references. The env var is equivalent.
 
-**Alloy side** — Exemplars flow through the spanmetrics connector (`exemplars.enabled = true` already set above) and are preserved through OTLP export. The Prometheus remote-write exporter forwards exemplars natively.
+**Alloy side** — Exemplars flow through the spanmetrics connector (`exemplars.enabled = true`
+already set above) and are preserved through OTLP export. The Prometheus remote-write exporter
+forwards exemplars natively.
 
-**Grafana side** — Dashboard panels must enable "Exemplars" toggle and configure a Tempo/Jaeger datasource as the trace link target.
+**Grafana side** — Dashboard panels must enable "Exemplars" toggle and configure a Tempo/Jaeger
+datasource as the trace link target.
 
 ---
 
@@ -732,9 +747,12 @@ env:
   └──────────────────────────┘
 ```
 
-**Propagation protocol**: W3C TraceContext (`traceparent` / `tracestate`) everywhere — HTTP headers, gRPC metadata, and RabbitMQ message headers.
+**Propagation protocol**: W3C TraceContext (`traceparent` / `tracestate`) everywhere — HTTP headers,
+gRPC metadata, and RabbitMQ message headers.
 
-A single "Create Order" user click should produce a trace spanning: **Browser → Gateway (.NET) → Order Service (.NET, gRPC) → RabbitMQ → Notification Service (Python)** — 5 hops, 3 runtimes, 2 communication paradigms (sync + async) in one trace.
+A single "Create Order" user click should produce a trace spanning: **Browser → Gateway (.NET) →
+Order Service (.NET, gRPC) → RabbitMQ → Notification Service (Python)** — 5 hops, 3 runtimes, 2
+communication paradigms (sync + async) in one trace.
 
 ---
 
@@ -756,7 +774,9 @@ env:
     value: "none"
 ```
 
-`OTEL_LOGS_EXPORTER=none` is intentional — we validate the **log tailing pattern** (app writes structured JSON to stdout → Alloy tails → injects trace correlation → ships to Loki) rather than direct OTLP log export. This mirrors production behavior at scale.
+`OTEL_LOGS_EXPORTER=none` is intentional — we validate the **log tailing pattern** (app writes
+structured JSON to stdout → Alloy tails → injects trace correlation → ships to Loki) rather than
+direct OTLP log export. This mirrors production behavior at scale.
 
 ---
 
@@ -828,7 +848,8 @@ kubectl apply -f k8s/loki/
 kubectl apply -f k8s/grafana/
 
 # Deploy Helm-managed Alloy stack (monitoring namespace) — required for OTLP collection
-make deploy-helm
+# (./deploy-local.sh does all of the above in one command, driven by conf.yml)
+./deploy-local.sh --skip-cluster --skip-build
 
 # 6. Deploy application
 kubectl apply -f k8s/app/gateway/
@@ -865,7 +886,8 @@ GRAFANA_CLOUD_MIMIR_ENDPOINT: "<base64-encoded-mimir-otlp-endpoint>"
 GRAFANA_CLOUD_LOKI_ENDPOINT: "<base64-encoded-loki-otlp-endpoint>"
 ```
 
-When env vars are empty/unset, the Grafana Cloud exporters fail silently and only local backends receive data. No config change needed to toggle.
+When env vars are empty/unset, the Grafana Cloud exporters fail silently and only local backends
+receive data. No config change needed to toggle.
 
 ---
 
@@ -930,17 +952,24 @@ export default function () {
 
 ### 11.1 Trace Propagation (Jaeger / Tempo)
 
-- [ ] **Frontend → Backend**: Faro-generated browser span links to `gateway-api` HTTP server span (same `traceId`)
-- [ ] **HTTP propagation**: `gateway-api` → `notification-svc` HTTP call has parent-child span relationship
-- [ ] **gRPC propagation**: `gateway-api` → `order-api` gRPC call has parent-child span relationship, with `rpc.method` and `rpc.service` attributes
-- [ ] **Async propagation (critical)**: `order-api` PRODUCER span → RabbitMQ → `notification-svc` CONSUMER span share the same trace, linked via message headers
-- [ ] **Full trace**: Single "Create Order" from Angular shows spans across Browser → Gateway → Order → RabbitMQ → Notification (5 hops)
-- [ ] **Error spans**: `/api/error` produces `otel.status_code = ERROR` with `exception.message` and `exception.stacktrace` events
+- [ ] **Frontend → Backend**: Faro-generated browser span links to `gateway-api` HTTP server span
+      (same `traceId`)
+- [ ] **HTTP propagation**: `gateway-api` → `notification-svc` HTTP call has parent-child span
+      relationship
+- [ ] **gRPC propagation**: `gateway-api` → `order-api` gRPC call has parent-child span
+      relationship, with `rpc.method` and `rpc.service` attributes
+- [ ] **Async propagation (critical)**: `order-api` PRODUCER span → RabbitMQ → `notification-svc`
+      CONSUMER span share the same trace, linked via message headers
+- [ ] **Full trace**: Single "Create Order" from Angular shows spans across Browser → Gateway →
+      Order → RabbitMQ → Notification (5 hops)
+- [ ] **Error spans**: `/api/error` produces `otel.status_code = ERROR` with `exception.message` and
+      `exception.stacktrace` events
 - [ ] **Health-check exclusion**: No `/healthz` spans appear in Jaeger
 
 ### 11.2 Span Metrics (Alloy → Prometheus/Mimir)
 
-- [ ] `traces_spanmetrics_latency_bucket` histogram present with `service.name`, `span.name`, `http.method`, `http.route` labels
+- [ ] `traces_spanmetrics_latency_bucket` histogram present with `service.name`, `span.name`,
+      `http.method`, `http.route` labels
 - [ ] `traces_spanmetrics_calls_total` counter present
 - [ ] gRPC spans produce span metrics with `rpc.method` and `rpc.service` dimensions
 - [ ] RabbitMQ spans produce span metrics with `messaging.operation` dimension
@@ -955,13 +984,15 @@ export default function () {
 
 ### 11.4 Exemplars
 
-- [ ] Click a spike on `http_server_request_duration_seconds` histogram panel in Grafana → exemplar dots visible
+- [ ] Click a spike on `http_server_request_duration_seconds` histogram panel in Grafana → exemplar
+      dots visible
 - [ ] Clicking an exemplar opens the linked trace in Jaeger/Tempo
 - [ ] Span metrics histograms also carry exemplars
 
 ### 11.5 K8s Attributes Enrichment
 
-- [ ] Every span and metric has `k8s.pod.name`, `k8s.namespace.name`, `k8s.deployment.name`, `k8s.node.name`
+- [ ] Every span and metric has `k8s.pod.name`, `k8s.namespace.name`, `k8s.deployment.name`,
+      `k8s.node.name`
 - [ ] Labels from `app.kubernetes.io/*` pod labels are attached
 
 ### 11.6 Logs & Trace Correlation
@@ -994,8 +1025,11 @@ export default function () {
 ### 11.10 Resilience / Negative Scenarios
 
 - [ ] Kill MySQL pod → gateway-api 500s → error spans + logs recorded correctly
-- [ ] Kill RabbitMQ pod → order-api publish fails → error span with exception, no message loss after recovery
-- [ ] Restart `alloy-receiver` DaemonSet (`kubectl rollout restart daemonset/grafana-k8s-alloy-receiver -n monitoring`) → data gap limited to batch window (~5s), no OOM
+- [ ] Kill RabbitMQ pod → order-api publish fails → error span with exception, no message loss after
+      recovery
+- [ ] Restart `alloy-receiver` DaemonSet
+      (`kubectl rollout restart daemonset/grafana-k8s-alloy-receiver -n monitoring`) → data gap
+      limited to batch window (~5s), no OOM
 - [ ] Scale notification-svc to 0 → messages queue up in RabbitMQ → resume processing on scale-up
 - [ ] Scale order-api to 3 replicas → trace propagation works from all pods
 
@@ -1113,7 +1147,11 @@ otel-microservices-lab/
 
 ## 13. Makefile (Developer Shortcuts)
 
-The canonical target reference is the [`Makefile`](../Makefile) at the project root. Key targets:
+`./deploy-local.sh` is the sole deploy path (cluster + builds + manifests + Helm, driven by
+`conf.yml`) — see [CLAUDE.md](../CLAUDE.md). The [`Makefile`](../Makefile) at the project root no
+longer deploys anything; it only builds images, runs tests, and fetches/applies Grafana Cloud
+credentials. Its `deploy`/`deploy-cloud`/`deploy-local`/`full` targets exist only as stubs that
+print a redirect to `./deploy-local.sh` and exit non-zero. Key targets:
 
 | Target                   | Description                                                                                                                   |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
@@ -1121,16 +1159,13 @@ The canonical target reference is the [`Makefile`](../Makefile) at the project r
 | `make cluster-down`      | Delete k3d cluster                                                                                                            |
 | `make build`             | Build all 4 Docker images; injects corporate CA cert into each build context                                                  |
 | `make import`            | `build` + import images into k3d                                                                                              |
-| `make deploy`            | Apply all k8s manifests in order: infra → datastores → monitoring → app                                                       |
-| `make deploy-helm`       | Install/upgrade `grafana/k8s-monitoring` v3.8.4 into `monitoring` namespace                                                   |
-| `make full-helm`         | `cluster-up` + `import` + `deploy` + `deploy-helm` in one step                                                                |
 | `make teardown`          | Delete `otel-lab` namespace                                                                                                   |
-| `make teardown-helm`     | Uninstall Helm release, delete `monitoring` namespace                                                                         |
 | `make validate`          | Smoke-test all endpoints with curl                                                                                            |
 | `make test`              | Run k6 load-test Job                                                                                                          |
 | `make logs`              | Stream logs from all app pods                                                                                                 |
 | `make secrets-fetch-akv` | Pull Grafana Cloud credentials from Azure Key Vault, apply as K8s Secret, upgrade Helm with cloud destinations                |
 | `make secrets-apply`     | Apply credentials from `.env` manually (AKV fallback)                                                                         |
+| `make secrets-show`      | Print the currently stored Grafana Cloud secret values (API key redacted)                                                     |
 | `make secrets-show`      | Print stored secret values (API keys redacted)                                                                                |
 
 ---

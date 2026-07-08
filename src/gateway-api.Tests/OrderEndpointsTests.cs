@@ -109,6 +109,57 @@ public class OrderEndpointsTests : IClassFixture<CustomWebApplicationFactory>
         Assert.Equal(HttpStatusCode.BadGateway, resp.StatusCode);
     }
 
+    // ── GET /api/orders/{id} ──────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetOrder_ExistingId_Returns200()
+    {
+        _factory.MockOrderClient
+            .Setup(c => c.GetOrderAsync(
+                It.IsAny<GetOrderRequest>(),
+                It.IsAny<Grpc.Core.Metadata>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(new Grpc.Core.AsyncUnaryCall<OrderResponse>(
+                Task.FromResult(new OrderResponse
+                {
+                    Id = 7,
+                    ProjectId = 1,
+                    Description = "Widget",
+                    Amount = 49.99,
+                    Status = "Created",
+                    CreatedAt = "2026-01-15T10:30:00Z"
+                }),
+                Task.FromResult(new Grpc.Core.Metadata()),
+                () => Grpc.Core.Status.DefaultSuccess,
+                () => new Grpc.Core.Metadata(),
+                () => { }));
+
+        var resp = await _client.GetAsync("/api/orders/7");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(7, body.GetProperty("id").GetInt32());
+        Assert.Equal("Widget", body.GetProperty("description").GetString());
+    }
+
+    [Fact]
+    public async Task GetOrder_NonExistentId_Returns404()
+    {
+        _factory.MockOrderClient
+            .Setup(c => c.GetOrderAsync(
+                It.IsAny<GetOrderRequest>(),
+                It.IsAny<Grpc.Core.Metadata>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<CancellationToken>()))
+            .Throws(new Grpc.Core.RpcException(
+                new Grpc.Core.Status(Grpc.Core.StatusCode.NotFound, "Order 999 not found")));
+
+        var resp = await _client.GetAsync("/api/orders/999");
+
+        Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
+    }
+
     // ── GET /api/notifications ────────────────────────────────────────────────
 
     [Fact]

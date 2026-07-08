@@ -1,3 +1,12 @@
+# ./deploy-local.sh is the sole deploy path (cluster + builds + manifests + Helm,
+# driven entirely by conf.yml). This Makefile only builds images, runs tests, and
+# fetches/applies Grafana Cloud credentials — it no longer deploys anything itself.
+# The deploy/deploy-cloud/deploy-local/full/helm-repo/helm-render/deploy-helm/
+# deploy-helm-cloud/teardown-helm/full-helm targets that used to live here were
+# retired: three independent, partially-broken Helm-values pipelines (this
+# Makefile's Jinja2-based one, this Makefile's legacy kubectl-apply one, and
+# deploy-local.sh's) is two too many for one responsibility, and deploy-cloud's
+# `k8s/monitoring/grafana/grafana-cloud/` target directory didn't even exist.
 CLUSTER        := otel-lab
 NAMESPACE      := otel-lab
 HELM_NAMESPACE := monitoring
@@ -6,10 +15,10 @@ HELM_CHART     := grafana/k8s-monitoring
 HELM_VERSION   := 3.8.4
 IMAGES         := otel-frontend gateway-api order-api notification-svc
 
-.PHONY: cluster-up cluster-down build import deploy deploy-cloud deploy-local teardown test logs full validate \
-        helm-repo helm-render deploy-helm teardown-helm full-helm \
+.PHONY: cluster-up cluster-down build import teardown test logs validate \
         secrets-fetch-akv secrets-apply secrets-show \
-        test-unit test-dotnet test-python test-frontend
+        test-unit test-dotnet test-python test-frontend \
+        deploy deploy-cloud deploy-local full
 
 cluster-up:
 	k3d cluster create $(CLUSTER) \
@@ -69,30 +78,13 @@ build:
 import: build
 	k3d image import $(addsuffix :local,$(IMAGES)) -c $(CLUSTER)
 
-deploy: deploy-cloud
-
-# Deploy with Grafana Cloud as the collector backend.
-# Requires grafana-cloud-secrets to be populated first: make secrets-fetch-akv
-deploy-cloud:
-	kubectl apply -f k8s/infra/namespace.yaml
-	kubectl apply -f k8s/infra/secrets.yaml
-	kubectl apply -f k8s/datastores/mysql/ -f k8s/datastores/postgres/ -f k8s/datastores/redis/ -f k8s/datastores/rabbitmq/
-	kubectl -n $(NAMESPACE) wait --for=condition=ready pod -l tier=datastore --timeout=180s
-	kubectl apply -f k8s/monitoring/grafana/ -f k8s/monitoring/grafana/grafana-cloud/
-	kubectl apply -f k8s/app/gateway/ -f k8s/app/order/ -f k8s/app/notification/ -f k8s/app/frontend/
-	kubectl apply -f k8s/infra/ingress.yaml
-
-# Deploy with local backends (Jaeger, Prometheus, Loki, Grafana) as the collector backend.
-# No cloud credentials required.
-deploy-local:
-	kubectl apply -f k8s/infra/namespace.yaml
-	kubectl apply -f k8s/infra/secrets.yaml
-	kubectl apply -f k8s/datastores/mysql/ -f k8s/datastores/postgres/ -f k8s/datastores/redis/ -f k8s/datastores/rabbitmq/
-	kubectl -n $(NAMESPACE) wait --for=condition=ready pod -l tier=datastore --timeout=180s
-	kubectl apply -f k8s/monitoring/grafana/ -f k8s/monitoring/grafana/local/ -f k8s/monitoring/local/jaeger/ -f k8s/monitoring/local/prometheus/ -f k8s/monitoring/local/loki/
-	kubectl apply -f k8s/monitoring/local/grafana/
-	kubectl apply -f k8s/app/gateway/ -f k8s/app/order/ -f k8s/app/notification/ -f k8s/app/frontend/
-	kubectl apply -f k8s/infra/ingress.yaml
+# Explicit stubs for the retired deploy targets: without these, `make deploy-local`
+# falls through to GNU Make's built-in `%: %.sh` suffix rule (deploy-local.sh exists
+# on disk) and silently creates a useless `deploy-local` copy instead of erroring —
+# a confusing failure mode for anyone still muscle-memory typing the old command.
+deploy deploy-cloud deploy-local full:
+	@echo "make $@ was retired — deploy with ./deploy-local.sh instead (see CLAUDE.md)." >&2
+	@exit 1
 
 teardown:
 	kubectl delete namespace $(NAMESPACE) --ignore-not-found
@@ -256,82 +248,3 @@ validate:
 	@echo "=== Prometheus ===" && curl -sfI http://localhost:9090 | head -3
 	@echo "=== RabbitMQ ===" && curl -sfI http://localhost:15672 | head -3
 
-full: cluster-up import deploy-cloud
-	@echo ""
-	@echo "Lab is up! Collector → Grafana Cloud (run make secrets-fetch-akv first)"
-	@echo "  Frontend:   http://localhost:8080"
-	@echo "  Grafana:    http://localhost:3000  (admin/admin)"
-	@echo "  Jaeger:     http://localhost:16686"
-	@echo "  Prometheus: http://localhost:9090"
-	@echo "  RabbitMQ:   http://localhost:15672 (guest/guest)"
-
-# =============================================================================
-# Helm-based cluster monitoring (grafana/k8s-monitoring v$(HELM_VERSION))
-# Incorporates the production-grade Alloy collector pipeline from
-# f-observability/09-grafana-k8s, adapted for the local k3d stack.
-#
-# Deployment modes:
-#   make deploy-helm          — local k3d (Prometheus + Loki + Jaeger as backends)
-#   GC_API_TOKEN=<t> make helm-render && make deploy-helm-cloud
-#                             — dual-export: local + Grafana Cloud
-#
-# Five Alloy collector roles deployed:
-#   alloy-metrics    (StatefulSet)  — infra metrics scraping
-#   alloy-singleton  (Deployment)   — cluster-scoped collection (events, KSM)
-#   alloy-logs       (DaemonSet)    — pod + node log tailing
-#   alloy-receiver   (DaemonSet)    — OTLP push receiver from apps
-#   alloy-profiles   (DaemonSet)    — disabled (no local Pyroscope)
-# =============================================================================
-
-# Add Grafana Helm repo (idempotent — safe to run multiple times).
-helm-repo:
-	helm repo add grafana https://grafana.github.io/helm-charts
-	helm repo update
-
-# Render Jinja2 template → Helm values for all clusters in k8s/monitoring/grafana-helm/values.yaml.
-# Requires: pip install jinja2 pyyaml
-# For cloud export set GC_API_TOKEN first; for local-only the token is optional.
-helm-render:
-	python3 k8s/monitoring/grafana-helm/render.py
-
-# Deploy using local values (no Grafana Cloud credentials needed).
-# Prerequisites: make deploy must have run first so Prometheus/Loki/Jaeger exist.
-deploy-helm: helm-repo
-	helm upgrade --install $(HELM_RELEASE) $(HELM_CHART) \
-	  --version $(HELM_VERSION) \
-	  -n $(HELM_NAMESPACE) --create-namespace \
-	  -f k8s/monitoring/grafana-helm/values-local.yaml
-	@echo ""
-	@echo "Helm monitoring stack deployed to namespace: $(HELM_NAMESPACE)"
-	@echo "Check status: kubectl get pods -n $(HELM_NAMESPACE)"
-	@echo ""
-	@echo "Alloy agents:"
-	@echo "  alloy-metrics   — scraping cluster infra metrics → Prometheus"
-	@echo "  alloy-singleton — cluster events, kube-state-metrics → Loki/Prometheus"
-	@echo "  alloy-logs      — pod + node log tailing → Loki"
-	@echo "  alloy-receiver  — OTLP push receiver (port 4317/4318) → Jaeger"
-
-# Deploy using rendered cloud values (requires helm-render to have run first).
-# GC_API_TOKEN must have been set when running helm-render.
-deploy-helm-cloud:
-	helm upgrade --install $(HELM_RELEASE) $(HELM_CHART) \
-	  --version $(HELM_VERSION) \
-	  -n $(HELM_NAMESPACE) --create-namespace \
-	  -f k8s/monitoring/grafana-helm/generated/signal-forge-local-otel-lab.yml
-
-# Remove the Helm monitoring stack (leaves otel-lab app namespace intact).
-teardown-helm:
-	helm uninstall $(HELM_RELEASE) -n $(HELM_NAMESPACE) --ignore-not-found
-	kubectl delete namespace $(HELM_NAMESPACE) --ignore-not-found
-
-# Full lab + Helm monitoring in one command.
-full-helm: cluster-up import deploy deploy-helm
-	@echo ""
-	@echo "Lab is up with full Helm-managed monitoring!"
-	@echo "  Frontend:   http://localhost:8080"
-	@echo "  Grafana:    http://localhost:3000  (admin/admin)"
-	@echo "  Jaeger:     http://localhost:16686"
-	@echo "  Prometheus: http://localhost:9090"
-	@echo "  RabbitMQ:   http://localhost:15672 (guest/guest)"
-	@echo ""
-	@echo "Helm monitoring: kubectl get pods -n $(HELM_NAMESPACE)"

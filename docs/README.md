@@ -61,6 +61,12 @@ End-to-end technical and production-grade documentation for the SignalForge OTel
 | [REST API](api/rest.md) | Endpoints, request/response schemas                 |
 | [gRPC API](api/grpc.md) | Proto definitions, error codes, streaming behaviour |
 
+### Reviews & audits
+
+| Section                                                                           | Description                                                                                                      |
+| --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| [2026-07-08 Principal/Staff review](reviews/2026-07-08-principal-staff-review.md) | Full-stack audit — architecture, infra, observability, and docs-drift review, plus a critical credential finding |
+
 ## Quick orientation
 
 ```

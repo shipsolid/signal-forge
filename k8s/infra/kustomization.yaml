@@ -6,3 +6,10 @@ resources:
   - pdb.yaml
   - network-policies.yaml
   - ingress.yaml
+  # cert-manager-issuer.yaml is deliberately NOT listed here — see
+  # docs/infrastructure/kustomize.md for why it can't safely join this
+  # resource list (k8s/base sets a blanket `namespace: otel-lab`, and
+  # Kustomize's namespace transformer doesn't know `ClusterIssuer` is
+  # cluster-scoped; it silently reassigns the CA `Certificate`'s explicit
+  # `namespace: cert-manager` to `otel-lab` too, breaking cert-manager's CA
+  # bootstrap chain). GitOps consumers must apply it as a separate step.

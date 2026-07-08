@@ -70,13 +70,35 @@ public class OrderGrpcService : Protos.OrderService.OrderServiceBase
         activity?.SetTag("order.project_id", request.ProjectId);
         activity?.SetTag("order.amount", request.Amount);
 
+        // Empty proto string ("unset") maps to null so legacy/direct callers that don't send a
+        // key never collide with each other under the unique index below (see AppDbContext).
+        var idempotencyKey = string.IsNullOrEmpty(request.IdempotencyKey) ? null : request.IdempotencyKey;
+
+        if (idempotencyKey is not null)
+        {
+            // Fast path: a resilience-handler retry after the first attempt already committed
+            // (e.g. client saw a connection reset post-commit) replays the same key. Checking
+            // first covers the common sequential-retry case directly; the unique index +
+            // catch below is the defense-in-depth backstop for a genuine concurrent race.
+            var replay = await _db.Orders.FirstOrDefaultAsync(
+                o => o.IdempotencyKey == idempotencyKey, context.CancellationToken);
+            if (replay is not null)
+            {
+                _logger.LogInformation(
+                    "CreateOrder replay detected for idempotency key {IdempotencyKey} — returning existing order {OrderId}.",
+                    idempotencyKey, replay.Id);
+                return new CreateOrderResponse { OrderId = replay.Id, Status = replay.Status };
+            }
+        }
+
         var order = new Order
         {
             ProjectId = request.ProjectId,
             Description = request.Description,
             Amount = (decimal)request.Amount,
             Status = OrderStatusCreated,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            IdempotencyKey = idempotencyKey
         };
 
         // Write order + outbox message in a single SaveChanges call (one DB transaction).
@@ -94,9 +116,28 @@ public class OrderGrpcService : Protos.OrderService.OrderServiceBase
         };
         _db.OutboxMessages.Add(outboxMsg);
 
-        // SaveChangesAsync emits an EF Core span (child of order.create) that
-        // contains the INSERT SQL and its execution time.
-        await _db.SaveChangesAsync(context.CancellationToken);
+        try
+        {
+            // SaveChangesAsync emits an EF Core span (child of order.create) that
+            // contains the INSERT SQL and its execution time.
+            await _db.SaveChangesAsync(context.CancellationToken);
+        }
+        catch (DbUpdateException) when (idempotencyKey is not null)
+        {
+            // A resilience-handler retry landed here after the first attempt already
+            // committed (e.g. the client saw a connection reset post-commit). Detach the
+            // entities this attempt tried to add and replay the original result instead of
+            // creating a duplicate order.
+            _db.Entry(order).State = EntityState.Detached;
+            _db.Entry(outboxMsg).State = EntityState.Detached;
+
+            var existing = await _db.Orders.SingleAsync(
+                o => o.IdempotencyKey == idempotencyKey, context.CancellationToken);
+            _logger.LogInformation(
+                "CreateOrder replay detected for idempotency key {IdempotencyKey} — returning existing order {OrderId}.",
+                idempotencyKey, existing.Id);
+            return new CreateOrderResponse { OrderId = existing.Id, Status = existing.Status };
+        }
 
         // Set the generated ID on the span after the DB write assigns it.
         activity?.SetTag("order.id", order.Id);

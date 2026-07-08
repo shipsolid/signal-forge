@@ -78,6 +78,20 @@ _proc_hist = None
 _email_hist = None
 _instruments_lock = threading.Lock()
 
+# Readiness state: True only while start_consumer() is actively inside
+# channel.start_consuming(). Read by main.py's /readyz probe — a stuck or
+# backed-off consumer (see _consumer_loop's retry wrapper) must not report ready.
+_connected = False
+
+
+def is_connected() -> bool:
+    return _connected
+
+
+def _set_connected(value: bool) -> None:
+    global _connected
+    _connected = value
+
 
 def _instruments():
     """Lazily initialise metric instruments (requires MeterProvider to be set)."""
@@ -179,9 +193,14 @@ def handle_order_created(ch, method, properties, body: bytes) -> None:
             # The Redis instrumentation (RedisInstrumentation().instrument())
             # called in redis_client.py automatically creates child spans for
             # every Redis command with db.system=redis, db.statement=<command>.
+            #
+            # SET ... NX is atomic: only one of two near-simultaneous deliveries of the
+            # same order_id can win the key. A prior version used a separate exists()
+            # check followed by set() later — a TOCTOU window where both deliveries could
+            # pass the check before either set the key.
             r = get_redis()
             dedup_key = f"dedup:{event.order_id}"
-            if r.exists(dedup_key):
+            if not r.set(dedup_key, "1", nx=True, ex=3600):  # 1h dedup window
                 logger.info("Duplicate notification skipped for order %d", event.order_id)
                 counter.add(1, {"status": "duplicate"})
                 ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -210,7 +229,6 @@ def handle_order_created(ch, method, properties, body: bytes) -> None:
                 },
             )
             r.expire(f"notifications:{notification_id}", 86400)  # 24h TTL
-            r.set(dedup_key, "1", ex=3600)  # 1h dedup window
 
             # Maintain a capped list of recent notification IDs.
             # LPUSH + LTRIM = O(1) insert + O(N) trim, but with N=1000 and
@@ -324,4 +342,11 @@ def start_consumer() -> None:
     channel.basic_consume(QUEUE, on_message_callback=handle_order_created)
 
     logger.info("RabbitMQ consumer started on queue '%s'", QUEUE)
-    channel.start_consuming()
+    _set_connected(True)
+    try:
+        channel.start_consuming()
+    finally:
+        # Runs whether start_consuming() exits via exception (connection drop,
+        # broker restart) or, unexpectedly, cleanly — either way this thread is
+        # no longer actively consuming until _consumer_loop reconnects.
+        _set_connected(False)

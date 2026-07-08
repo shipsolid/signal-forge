@@ -1,8 +1,7 @@
 # OTEL-PATTERNS.md — SignalForge Instrumentation Reference
 
-This document explains every instrumentation decision in the lab: _what_ is
-configured, _why_ it was chosen over alternatives, and _what you should see_
-when the pattern works correctly.
+This document explains every instrumentation decision in the lab: _what_ is configured, _why_ it was
+chosen over alternatives, and _what you should see_ when the pattern works correctly.
 
 ---
 
@@ -60,20 +59,19 @@ Angular Faro ──HTTP (Faro) ─ (via alloy-receiver) │    ├─ tail_sampl
                                                          └────────────┘  └─────────────────┘
 ```
 
-All OTel signal types (traces, metrics) flow through `alloy-receiver`.
-Logs are tailed at the node level by `alloy-logs` (not OTLP export from apps).
-Infra metrics are collected by `alloy-metrics`.
+All OTel signal types (traces, metrics) flow through `alloy-receiver`. Logs are tailed at the node
+level by `alloy-logs` (not OTLP export from apps). Infra metrics are collected by `alloy-metrics`.
 
-The `monitoring` namespace is managed by the `grafana/k8s-monitoring` v3.8.4
-Helm chart (five specialised Alloy roles). The hand-rolled DaemonSet in
-`k8s/alloy/` is kept as reference only — **not deployed**.
+The `monitoring` namespace is managed by the `grafana/k8s-monitoring` v3.8.4 Helm chart (five
+specialised Alloy roles). The hand-rolled DaemonSet in `k8s/alloy/` is kept as reference only —
+**not deployed**.
 
 ---
 
 ## 2. Trace Propagation Chain
 
-A single "Create Order" click in the Angular SPA produces a trace spanning
-five hops across three runtimes and two communication paradigms:
+A single "Create Order" click in the Angular SPA produces a trace spanning five hops across three
+runtimes and two communication paradigms:
 
 ```text
 Browser (Faro)
@@ -103,9 +101,9 @@ notification-svc (Python)   ← CONSUMER span (linked, same traceId)
 | gRPC (gateway → order-api)       | gRPC metadata           | `AddGrpcClientInstrumentation()` injects automatically |
 | RabbitMQ (order-api → notif-svc) | Message headers (bytes) | Manual `Propagators.DefaultTextMapPropagator.Inject()` |
 
-The RabbitMQ hop is manual because the `opentelemetry-instrumentation-pika`
-library does not reliably extract incoming context in all pika versions.
-Manual extraction is explicit and version-independent.
+The RabbitMQ hop is manual because the `opentelemetry-instrumentation-pika` library does not
+reliably extract incoming context in all pika versions. Manual extraction is explicit and
+version-independent.
 
 ---
 
@@ -117,23 +115,21 @@ This is the most technically interesting instrumentation in the lab.
 
 OTel semantic conventions for messaging define two relationship types:
 
-- **Parent-child**: used when the consumer processes the message _synchronously
-  as part of the same logical operation_ as the producer. The consumer span's
-  `parentSpanId` = producer span's `spanId`.
-- **SpanLink**: used when the consumer processes the message _asynchronously_
-  — potentially much later, possibly in a different service instance or after
-  a retry. The consumer span has its own `traceId` context but _links_ to the
-  producer span's context.
+- **Parent-child**: used when the consumer processes the message _synchronously as part of the same
+  logical operation_ as the producer. The consumer span's `parentSpanId` = producer span's `spanId`.
+- **SpanLink**: used when the consumer processes the message _asynchronously_ — potentially much
+  later, possibly in a different service instance or after a retry. The consumer span has its own
+  `traceId` context but _links_ to the producer span's context.
 
 We use **SpanLink** here because:
 
 1. The notification-svc consumer runs in a separate process on a different pod.
 2. There is a temporal gap between publish and consume.
-3. Messages may be redelivered (NACK + dead-letter), producing multiple
-   consumer spans for one producer span.
+3. Messages may be redelivered (NACK + dead-letter), producing multiple consumer spans for one
+   producer span.
 
-In Jaeger, a linked span appears as a dashed arrow on the trace timeline,
-visually distinct from the solid parent-child lines.
+In Jaeger, a linked span appears as a dashed arrow on the trace timeline, visually distinct from the
+solid parent-child lines.
 
 ### .NET producer side (`OrderPublisher.cs`)
 
@@ -182,8 +178,8 @@ Search for a `CreateOrder` trace. The timeline shows:
 - Solid lines: Browser → gateway → order-api (synchronous chain)
 - Dashed arrow: order-api `order.publish` → notification-svc `notification.process`
 
-The dashed arrow represents the SpanLink across the RabbitMQ boundary.
-Both spans share the same `traceId` (the 32-char hex ID is identical).
+The dashed arrow represents the SpanLink across the RabbitMQ boundary. Both spans share the same
+`traceId` (the 32-char hex ID is identical).
 
 ---
 
@@ -197,9 +193,8 @@ Both spans share the same `traceId` (the 32-char hex ID is identical).
 | `CONSUMER` | `notification.process`                 | Span wraps async message processing            |
 | `INTERNAL` | `order.create`, `gateway.fanout`, etc. | Business-logic spans with no network I/O       |
 
-The `gateway.fanout` span is `INTERNAL` — it exists purely to group the
-parallel downstream calls (gRPC + HTTP) under a single parent so the trace
-waterfall shows the fan-out structure clearly.
+The `gateway.fanout` span is `INTERNAL` — it exists purely to group the parallel downstream calls
+(gRPC + HTTP) under a single parent so the trace waterfall shows the fan-out structure clearly.
 
 ---
 
@@ -219,19 +214,17 @@ Attributes beyond the OTel semantic conventions, specific to this domain:
 
 ### Best practices followed
 
-1. **Set attributes before the risky operation** (DB call, network call).
-   If the operation throws, the attribute is still on the span before it's
-   ended as an error span.
+1. **Set attributes before the risky operation** (DB call, network call). If the operation throws,
+   the attribute is still on the span before it's ended as an error span.
 
-2. **Use `SetStatus(ActivityStatusCode.Error, ...)` explicitly** for
-   business errors (404 not found, duplicate, etc.) that don't throw
-   exceptions. Auto-instrumentation only marks spans as errors when an
-   exception propagates.
+2. **Use `SetStatus(ActivityStatusCode.Error, ...)` explicitly** for business errors (404 not found,
+   duplicate, etc.) that don't throw exceptions. Auto-instrumentation only marks spans as errors
+   when an exception propagates.
 
-3. **Use `RecordException(ex)`** to attach `exception.type`,
-   `exception.message`, and `exception.stacktrace` as span events.
-   This is done in `Program.cs` via `opts.RecordException = true` for
-   ASP.NET Core spans, and manually in catch blocks for custom spans.
+3. **Use `RecordException(ex)`** to attach `exception.type`, `exception.message`, and
+   `exception.stacktrace` as span events. This is done in `Program.cs` via
+   `opts.RecordException = true` for ASP.NET Core spans, and manually in catch blocks for custom
+   spans.
 
 ---
 
@@ -282,30 +275,30 @@ Grafana (exemplars toggle enabled on panel)
 
 **Configuration checklist for exemplars to work:**
 
-- [ ] `OTEL_METRICS_EXEMPLAR_FILTER=trace_based` env var on each app Deployment (replaces the removed SDK `AddExemplarFilter` experimental API)
+- [ ] `OTEL_METRICS_EXEMPLAR_FILTER=trace_based` env var on each app Deployment (replaces the
+      removed SDK `AddExemplarFilter` experimental API)
 - [ ] `--enable-feature=exemplar-storage` on Prometheus (set in `prometheus/deployment.yaml`)
 - [ ] `--web.enable-remote-write-receiver` on Prometheus (set in `prometheus/deployment.yaml`)
 - [ ] `exemplars { enabled = true }` in Alloy spanmetrics connector
 - [ ] Grafana panel: enable "Exemplars" toggle + set "Data links" to Jaeger datasource
 
-> **Why env var instead of SDK call?** `AddExemplarFilter(ExemplarFilterType.TraceBased)` is
-> behind an experimental flag in OTel .NET SDK 1.9.x and cannot be resolved without opting into
-> unstable APIs. The `OTEL_METRICS_EXEMPLAR_FILTER=trace_based` env var achieves the same
-> result without compile-time dependencies on experimental code.
+> **Why env var instead of SDK call?** `AddExemplarFilter(ExemplarFilterType.TraceBased)` is behind
+> an experimental flag in OTel .NET SDK 1.9.x and cannot be resolved without opting into unstable
+> APIs. The `OTEL_METRICS_EXEMPLAR_FILTER=trace_based` env var achieves the same result without
+> compile-time dependencies on experimental code.
 
 ---
 
 ## 7. Span Metrics Connector
 
-The Alloy `otelcol.connector.spanmetrics` component auto-generates RED
-(Rate / Error / Duration) metrics from traces **before tail sampling**.
+The Alloy `otelcol.connector.spanmetrics` component auto-generates RED (Rate / Error / Duration)
+metrics from traces **before tail sampling**.
 
 ### Why before sampling?
 
-If span metrics were generated _after_ sampling, only 25% of traces would
-contribute to counters — your request rate metric would read 25% of reality.
-By placing `spanmetrics` in the pipeline _before_ `tail_sampling`, every
-span is counted regardless of whether the trace is kept:
+If span metrics were generated _after_ sampling, only 25% of traces would contribute to counters —
+your request rate metric would read 25% of reality. By placing `spanmetrics` in the pipeline
+_before_ `tail_sampling`, every span is counted regardless of whether the trace is kept:
 
 ```text
 filter → spanmetrics (counts ALL spans)
@@ -317,8 +310,7 @@ filter → spanmetrics (counts ALL spans)
 
 ### Metric dimensions
 
-Dimensions are span attribute names that become Prometheus label keys.
-Configured dimensions:
+Dimensions are span attribute names that become Prometheus label keys. Configured dimensions:
 
 | Dimension             | Populated by                                    |
 | --------------------- | ----------------------------------------------- |
@@ -329,8 +321,8 @@ Configured dimensions:
 | `rpc.service`         | gRPC client/server instrumentation              |
 | `messaging.operation` | RabbitMQ PRODUCER/CONSUMER spans (manually set) |
 
-Spans that don't have a dimension's attribute simply don't include that label
-on the resulting metric point — no `http.method=""` pollution.
+Spans that don't have a dimension's attribute simply don't include that label on the resulting
+metric point — no `http.method=""` pollution.
 
 ### PromQL examples
 
@@ -373,8 +365,8 @@ With the k6 load test running (`make test`):
 
 1. **Error traces**: call `GET /api/error` — every call should appear in Jaeger
 2. **Slow traces**: call `GET /api/slow` — every call (2-5s delay) should appear
-3. **Normal traces**: create projects/orders — check Jaeger and expect ~25% of
-   k6 requests to appear as traces
+3. **Normal traces**: create projects/orders — check Jaeger and expect ~25% of k6 requests to appear
+   as traces
 
 The span metrics connector provides the pre-sampling baseline:
 
@@ -387,12 +379,12 @@ Compare this to the rate of traces arriving in Jaeger to validate the ~25% rate.
 
 ### Trade-off: 10s decision window
 
-`decision_wait = "10s"` means Alloy buffers all spans for a trace for up to 10
-seconds before making a sampling decision. This introduces up to a 10s delay
-between a request completing and its trace appearing in Jaeger.
+`decision_wait = "10s"` means Alloy buffers all spans for a trace for up to 10 seconds before making
+a sampling decision. This introduces up to a 10s delay between a request completing and its trace
+appearing in Jaeger.
 
-For the lab this is fine. For production you'd tune based on p99 trace duration
-(set `decision_wait` to at least your p99 trace duration to avoid partial traces).
+For the lab this is fine. For production you'd tune based on p99 trace duration (set `decision_wait`
+to at least your p99 trace duration to avoid partial traces).
 
 ---
 
@@ -402,15 +394,15 @@ For the lab this is fine. For production you'd tune based on p99 trace duration
 
 `OTEL_LOGS_EXPORTER=none` is set on all services. Reasons:
 
-1. **Production fidelity**: At scale, shipping logs via a node-level agent
-   (Alloy/Fluentd/Promtail) is more reliable than per-process OTLP export.
-   Log volume spikes don't consume SDK/process resources.
+1. **Production fidelity**: At scale, shipping logs via a node-level agent (Alloy/Fluentd/Promtail)
+   is more reliable than per-process OTLP export. Log volume spikes don't consume SDK/process
+   resources.
 
-2. **Simpler application code**: Services just write to stdout. No log
-   pipeline configuration in the application.
+2. **Simpler application code**: Services just write to stdout. No log pipeline configuration in the
+   application.
 
-3. **Validates a distinct OTel pattern**: The lab validates log-to-trace
-   correlation via metadata extraction, not just OTLP log shipping.
+3. **Validates a distinct OTel pattern**: The lab validates log-to-trace correlation via metadata
+   extraction, not just OTLP log shipping.
 
 ### How trace IDs reach Loki
 
@@ -437,8 +429,8 @@ Grafana Jaeger datasource:
 
 ### .NET vs Python field name mismatch
 
-The Alloy River config's `stage.json` extracts `.TraceId` (the .NET field name).
-The Python `LoggingInstrumentation` injects `otelTraceID`. To handle both:
+The Alloy River config's `stage.json` extracts `.TraceId` (the .NET field name). The Python
+`LoggingInstrumentation` injects `otelTraceID`. To handle both:
 
 ```river
 stage.json {
@@ -455,8 +447,8 @@ stage.json {
 //  field names in the apps to both use "TraceId"/"SpanId".)
 ```
 
-For this lab, the Python logger format string can be updated to match the
-.NET field names by setting the key in the JsonFormatter:
+For this lab, the Python logger format string can be updated to match the .NET field names by
+setting the key in the JsonFormatter:
 
 ```python
 # In main.py, change to output "TraceId" and "SpanId" keys:
@@ -470,13 +462,13 @@ handler.setFormatter(jsonlogger.JsonFormatter(
 
 ## 10. K8s Attribute Enrichment
 
-The `otelcol.processor.k8sattributes` component adds Kubernetes context to
-every signal without any application-side code changes.
+The `otelcol.processor.k8sattributes` component adds Kubernetes context to every signal without any
+application-side code changes.
 
 ### How it resolves the pod
 
-Alloy uses the source IP address of the incoming OTLP connection to look up
-the pod in the Kubernetes API:
+Alloy uses the source IP address of the incoming OTLP connection to look up the pod in the
+Kubernetes API:
 
 ```river
 pod_association {
@@ -484,13 +476,12 @@ pod_association {
 }
 ```
 
-The OTLP gRPC connection source IP matches the pod's IP (not the node IP)
-because pods in k3d have their own network namespace.
+The OTLP gRPC connection source IP matches the pod's IP (not the node IP) because pods in k3d have
+their own network namespace.
 
 ### Attributes added
 
-All of these appear on every span exported from the lab, regardless of
-which service sent it:
+All of these appear on every span exported from the lab, regardless of which service sent it:
 
 | Attribute                     | Example value              | Purpose                 |
 | ----------------------------- | -------------------------- | ----------------------- |
@@ -505,9 +496,8 @@ which service sent it:
 
 ### RBAC requirement
 
-Alloy needs ClusterRole with `get/list/watch` on `pods` and `nodes`.
-See `k8s/alloy/rbac.yaml`. Without this, the processor logs errors and passes
-signals through without K8s attributes.
+Alloy needs ClusterRole with `get/list/watch` on `pods` and `nodes`. See `k8s/alloy/rbac.yaml`.
+Without this, the processor logs errors and passes signals through without K8s attributes.
 
 ---
 
@@ -543,28 +533,26 @@ initializeFaro({
 
 ### Browser → Backend trace linkage
 
-When the Angular SPA calls `GET /api/projects`, Faro injects a `traceparent`
-header matching the current browser span's context. ASP.NET Core's
-`AddAspNetCoreInstrumentation()` reads this header and makes the HTTP server
-span a **child** of the browser span.
+When the Angular SPA calls `GET /api/projects`, Faro injects a `traceparent` header matching the
+current browser span's context. ASP.NET Core's `AddAspNetCoreInstrumentation()` reads this header
+and makes the HTTP server span a **child** of the browser span.
 
-Result in Jaeger: the same `traceId` appears in both the browser-side Faro
-span and the server-side gateway-api span — a single trace starting in
-the browser and ending in the MySQL database.
+Result in Jaeger: the same `traceId` appears in both the browser-side Faro span and the server-side
+gateway-api span — a single trace starting in the browser and ending in the MySQL database.
 
 ---
 
 ## 12. Grafana Cloud Dual-Export
 
-Alloy dual-exports all signals to Grafana Cloud when credentials are present.
-When env vars are empty the exporters log a configuration error and become
-no-ops — the local pipeline (Jaeger / Prometheus / Loki) is unaffected.
+Alloy dual-exports all signals to Grafana Cloud when credentials are present. When env vars are
+empty the exporters log a configuration error and become no-ops — the local pipeline (Jaeger /
+Prometheus / Loki) is unaffected.
 
 ### Credential architecture
 
-Grafana Cloud issues a **separate numeric instance ID per signal type**.
-This is different from a single "username" — each data source (Tempo, Mimir,
-Loki) has its own ID. One shared API key is used as the password for all three.
+Grafana Cloud issues a **separate numeric instance ID per signal type**. This is different from a
+single "username" — each data source (Tempo, Mimir, Loki) has its own ID. One shared API key is used
+as the password for all three.
 
 ```text
 Azure Key Vault (mf-cc-dt-azrsrp-prd-kv)
@@ -645,8 +633,8 @@ curl -s http://localhost:8080/api/projects   # generates a trace
 
 ### graceful degradation
 
-`optional: true` on every `secretKeyRef` means Alloy pods start even when
-the secret is absent. Missing env vars cause the cloud exporters to log:
+`optional: true` on every `secretKeyRef` means Alloy pods start even when the secret is absent.
+Missing env vars cause the cloud exporters to log:
 
 ```text
 level=error msg="failed to export" exporter=grafana_cloud_traces err="endpoint is empty"
@@ -723,29 +711,28 @@ otelcol.processor.filter "healthz" {
 }
 ```
 
-Catches any health-check span that slipped through (e.g. from the Python
-FastAPI service where the SDK filter is configured differently).
+Catches any health-check span that slipped through (e.g. from the Python FastAPI service where the
+SDK filter is configured differently).
 
 Both levels are needed because:
 
 - The Python service configures `excluded_urls="/healthz"` in
-  `FastAPIInstrumentation().instrument_app()`, which prevents span creation.
-  But belt-and-suspenders at the collector is cheap.
-- The collector filter also handles future services added to the lab that
-  might not implement SDK-level filtering.
+  `FastAPIInstrumentation().instrument_app()`, which prevents span creation. But belt-and-suspenders
+  at the collector is cheap.
+- The collector filter also handles future services added to the lab that might not implement
+  SDK-level filtering.
 
 ---
 
 ## 15. Helm-Based Monitoring (Required)
 
-The `grafana/k8s-monitoring` Helm chart (v3.8.4) is the **canonical collector
-stack** for this lab. The hand-rolled `k8s/alloy/` DaemonSet is kept as a
-reference artifact but is **not deployed** — it was removed to eliminate the
-duplicate Alloy collector that was causing CrashLoopBackOff.
+The `grafana/k8s-monitoring` Helm chart (v3.8.4) is the **canonical collector stack** for this lab.
+The hand-rolled `k8s/alloy/` DaemonSet is kept as a reference artifact but is **not deployed** — it
+was removed to eliminate the duplicate Alloy collector that was causing CrashLoopBackOff.
 
 App services send OTLP to `grafana-k8s-alloy-receiver.monitoring.svc.cluster.local:4317`.
-`make full` alone is not sufficient; `make full-helm` (or `make deploy-helm`
-after `make full`) is required.
+`./deploy-local.sh` installs the Helm chart unconditionally in `mode: cloud`; in `mode: local`, pass
+`--with-helm` or the chart is skipped and this endpoint has nothing listening.
 
 ### Role comparison
 
@@ -760,7 +747,7 @@ after `make full`) is required.
 ### What the Helm stack covers
 
 ```text
-Helm grafana/k8s-monitoring  (make deploy-helm)
+Helm grafana/k8s-monitoring  (installed by ./deploy-local.sh)
   ✓ App traces + span metrics + tail sampling  (alloy-receiver)
   ✓ App metrics (OTLP push)                    (alloy-receiver)
   ✓ Faro RUM receiver                          (alloy-receiver, :12347)
@@ -781,8 +768,8 @@ The Helm-managed `alloy-receiver` fully covers the application OTel pipeline.
 
 ### Helm values file
 
-[`k8s/monitoring/grafana-helm/values-local.yaml`](k8s/monitoring/grafana-helm/values-local.yaml) configures the chart for
-local k3d. Key differences from the production `09-grafana-k8s` config:
+[`k8s/monitoring/grafana-helm/values-local.yaml`](k8s/monitoring/grafana-helm/values-local.yaml)
+configures the chart for local k3d. Key differences from the production `09-grafana-k8s` config:
 
 - Destinations point to in-cluster services (`otel-lab` namespace) not Grafana Cloud
 - OpenCost disabled (no cloud billing APIs)
@@ -794,14 +781,14 @@ local k3d. Key differences from the production `09-grafana-k8s` config:
 ### Deploy
 
 ```bash
-make deploy-helm          # installs to "monitoring" namespace
-kubectl get pods -n monitoring   # watch all 4 active roles come up
+./deploy-local.sh --skip-cluster --skip-build   # installs/upgrades the Helm release
+kubectl get pods -n monitoring                  # watch active roles come up
 ```
 
 ### Annotation autodiscovery
 
-Add these annotations to any app pod template to have `alloy-metrics` scrape
-its `/metrics` endpoint automatically — no ServiceMonitor needed:
+Add these annotations to any app pod template to have `alloy-metrics` scrape its `/metrics` endpoint
+automatically — no ServiceMonitor needed:
 
 ```yaml
 annotations:
@@ -824,24 +811,23 @@ annotations:
 
 1. Check Prometheus has remote-write receiver enabled:
    `kubectl -n otel-lab exec deploy/prometheus -- /bin/prometheus --help | grep remote-write`
-2. Check Alloy `prometheus.remote_write` target:
-   Open Alloy UI at `kubectl port-forward svc/alloy 12345 -n otel-lab` → `http://localhost:12345`
+2. Check Alloy `prometheus.remote_write` target: Open Alloy UI at
+   `kubectl port-forward svc/alloy 12345 -n otel-lab` → `http://localhost:12345`
 3. Verify `--enable-feature=exemplar-storage` is set for exemplars
 
 ### Async propagation not working (CONSUMER span has different traceId)
 
-1. Check the RabbitMQ message headers contain `traceparent`:
-   Enable RabbitMQ Management UI → queue `notifications` → Get Message → inspect headers
-2. Check the Python `HeadersGetter.get()` correctly decodes bytes:
-   Add `logger.debug("headers: %s", headers)` in `handle_order_created`
+1. Check the RabbitMQ message headers contain `traceparent`: Enable RabbitMQ Management UI → queue
+   `notifications` → Get Message → inspect headers
+2. Check the Python `HeadersGetter.get()` correctly decodes bytes: Add
+   `logger.debug("headers: %s", headers)` in `handle_order_created`
 3. Verify `opentelemetry-instrumentation-pika` is NOT also running and overwriting the context
 
 ### Logs not appearing in Loki with trace correlation
 
 1. Check the app writes JSON to stdout (not plain text)
 2. Verify Alloy has host path mounts for `/var/log` and `/var/lib/docker/containers`
-3. Check `loki.source.kubernetes` targets:
-   `kubectl -n otel-lab logs daemonset/alloy | grep loki`
+3. Check `loki.source.kubernetes` targets: `kubectl -n otel-lab logs daemonset/alloy | grep loki`
 4. Query Loki directly to see if logs arrive at all:
    `kubectl port-forward svc/loki 3100 -n otel-lab`
    `curl "http://localhost:3100/loki/api/v1/query?query={namespace=\"otel-lab\"}&limit=10"`
@@ -853,22 +839,20 @@ annotations:
 2. Add a "Data links" entry pointing to the Jaeger datasource with `${__value.raw}` as URL
 3. Verify `--enable-feature=exemplar-storage` is on Prometheus
 4. Verify `ExemplarFilterType.TraceBased` is set in the .NET service
-5. Check that the histogram observation happens INSIDE a sampled span
-   (use `/api/slow` which always has a span active during the recording)
+5. Check that the histogram observation happens INSIDE a sampled span (use `/api/slow` which always
+   has a span active during the recording)
 
 ### K8s attributes missing from spans
 
 1. Verify the Alloy ServiceAccount has the ClusterRole:
    `kubectl get clusterrolebinding alloy -o yaml`
-2. Check Alloy can reach the K8s API:
-   `kubectl -n otel-lab logs daemonset/alloy | grep k8sattr`
-3. Verify `pod_association { source { from = "connection" } }` is set — other
-   association modes (resource attribute) require the app to set pod name attributes
+2. Check Alloy can reach the K8s API: `kubectl -n otel-lab logs daemonset/alloy | grep k8sattr`
+3. Verify `pod_association { source { from = "connection" } }` is set — other association modes
+   (resource attribute) require the app to set pod name attributes
 
 ### Grafana Cloud export not working
 
-1. Verify the K8s Secret was applied:
-   `make secrets-show` — all 7 fields should be non-empty
+1. Verify the K8s Secret was applied: `make secrets-show` — all 7 fields should be non-empty
 
 2. Check Alloy is reading the env vars:
    `kubectl -n otel-lab exec daemonset/alloy -- env | grep GRAFANA`
@@ -884,16 +868,14 @@ annotations:
 
    - Tempo: must be `host:443` with **no** `https://` prefix (gRPC transport)
    - Mimir: must be `https://host/api/v1/otlp` (not `/api/prom/push`)
-   - Loki: must be `https://host/loki/api/v1/push`
-     Run `make secrets-show` and compare against these formats.
+   - Loki: must be `https://host/loki/api/v1/push` Run `make secrets-show` and compare against these
+     formats.
 
-5. Re-pull from AKV if credentials were rotated:
-   `make secrets-fetch-akv`
+5. Re-pull from AKV if credentials were rotated: `make secrets-fetch-akv`
 
 ### AKV authentication failing (`secrets-fetch-akv` errors)
 
-1. Verify `.env` has all ARM fields set:
-   `grep ARM_ .env`
+1. Verify `.env` has all ARM fields set: `grep ARM_ .env`
 
 2. Test SP login manually:
 

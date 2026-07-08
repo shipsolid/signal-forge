@@ -2,10 +2,10 @@
 
 ## Namespaces
 
-| Namespace    | Purpose                                                          | Managed by                          |
-| ------------ | ---------------------------------------------------------------- | ----------------------------------- |
-| `otel-lab`   | Application services + datastores + local observability backends | `kubectl apply` (`make deploy`)     |
-| `monitoring` | Helm-managed Grafana Alloy stack (5 roles)                       | `helm upgrade` (`make deploy-helm`) |
+| Namespace    | Purpose                                                          | Managed by                                                                 |
+| ------------ | ---------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `otel-lab`   | Application services + datastores + local observability backends | `kubectl apply` (`./deploy-local.sh`)                                      |
+| `monitoring` | Helm-managed Grafana Alloy stack (up to 5 roles)                 | `helm upgrade` (`./deploy-local.sh`, see [helm.md](../deployment/helm.md)) |
 
 ---
 
@@ -55,7 +55,9 @@ k8s/
     └── script.js                    — k6 script
 ```
 
-Every subdirectory referenced by `deploy-local.sh`'s apply stages has its own `kustomization.yaml`, so `kubectl apply -k <dir>` works for ArgoCD / Flux / Rancher Fleet. See [kustomize.md](kustomize.md) for the base + overlays layout and the env patch strategy.
+Every subdirectory referenced by `deploy-local.sh`'s apply stages has its own `kustomization.yaml`,
+so `kubectl apply -k <dir>` works for ArgoCD / Flux / Rancher Fleet. See
+[kustomize.md](kustomize.md) for the base + overlays layout and the env patch strategy.
 
 ---
 
@@ -78,7 +80,10 @@ Applied from `k8s/infra/secrets.yaml`.
 
 ### grafana-cloud-secrets (Grafana Cloud credentials)
 
-Materialized by `deploy-local.sh` from `conf.yml`'s `monitoring.grafana_cloud.*` block. The secret name is configurable via `monitoring.secret_name` (default `grafana-cloud-secrets`). In cloud mode the script also **mirrors** this secret into the Helm release's namespace (`monitoring`), because the k8s-monitoring chart's Alloy agents live there and reference the secret by name.
+Materialized by `deploy-local.sh` from `conf.yml`'s `monitoring.grafana_cloud.*` block. The secret
+name is configurable via `monitoring.secret_name` (default `grafana-cloud-secrets`). In cloud mode
+the script also **mirrors** this secret into the Helm release's namespace (`monitoring`), because
+the k8s-monitoring chart's Alloy agents live there and reference the secret by name.
 
 | Key                            | Contents                                                             | Consumed by                                              |
 | ------------------------------ | -------------------------------------------------------------------- | -------------------------------------------------------- |
@@ -92,9 +97,14 @@ Materialized by `deploy-local.sh` from `conf.yml`'s `monitoring.grafana_cloud.*`
 | `FARO_COLLECTOR_URL`           | Browser RUM endpoint                                                 | frontend container (via `env:`)                          |
 | `FARO_API_KEY`                 | Source-map upload token (build-time)                                 | webpack FaroSourceMapUploader (via docker `--build-arg`) |
 
-Grafana Cloud secrets are optional at the consumer: `optional: true` on the frontend's `FARO_COLLECTOR_URL` secretKeyRef, and `secret.create: false` on the Alloy destinations (they fail-closed if the secret is absent, but the chart Helm install succeeds regardless).
+Grafana Cloud secrets are optional at the consumer: `optional: true` on the frontend's
+`FARO_COLLECTOR_URL` secretKeyRef, and `secret.create: false` on the Alloy destinations (they
+fail-closed if the secret is absent, but the chart Helm install succeeds regardless).
 
-The **secret-key contract** between `conf.yml` → Secret → `values-cloud.yaml.tmpl` is validated at deploy time: `deploy-local.sh` asserts that every `usernameKey` / `passwordKey` referenced by the rendered Helm values file exists in the Secret. A rename on either side fails `helm upgrade` before it runs.
+The **secret-key contract** between `conf.yml` → Secret → `values-cloud.yaml.tmpl` is validated at
+deploy time: `deploy-local.sh` asserts that every `usernameKey` / `passwordKey` referenced by the
+rendered Helm values file exists in the Secret. A rename on either side fails `helm upgrade` before
+it runs.
 
 ### Applying secrets
 
@@ -181,7 +191,8 @@ Alloy needs `get/list/watch` on `pods` and `nodes` for:
 - `otelcol.processor.k8sattributes` — pod IP → pod metadata lookup
 - `loki.source.kubernetes` — pod log discovery
 
-Defined in `k8s/monitoring/grafana/rbac.yaml` (hand-rolled DaemonSet reference; ServiceAccount in `otel-lab`):
+Defined in `k8s/monitoring/grafana/rbac.yaml` (hand-rolled DaemonSet reference; ServiceAccount in
+`otel-lab`):
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -210,9 +221,13 @@ subjects:
     namespace: otel-lab   # hand-rolled DaemonSet SA (otel-lab)
 ```
 
-> **Helm-managed Alloy** (the deployed stack) creates its own ServiceAccount in the `monitoring` namespace and its own ClusterRole automatically via the `grafana/k8s-monitoring` chart. The RBAC above applies only to the hand-rolled reference DaemonSet (`k8s/monitoring/grafana/`) which is not deployed.
+> **Helm-managed Alloy** (the deployed stack) creates its own ServiceAccount in the `monitoring`
+> namespace and its own ClusterRole automatically via the `grafana/k8s-monitoring` chart. The RBAC
+> above applies only to the hand-rolled reference DaemonSet (`k8s/monitoring/grafana/`) which is not
+> deployed.
 
-Without a ClusterRole granting `get/list/watch` on pods/nodes/namespaces, the k8sattributes processor logs errors and passes signals through without K8s attributes.
+Without a ClusterRole granting `get/list/watch` on pods/nodes/namespaces, the k8sattributes
+processor logs errors and passes signals through without K8s attributes.
 
 ---
 
@@ -241,15 +256,19 @@ rules:
                 number: 80
 ```
 
-Port 8080 on the host maps to port 80 on the k3d loadbalancer (k3d cluster creation flag: `-p "8080:80@loadbalancer"`).
+Port 8080 on the host maps to port 80 on the k3d loadbalancer (k3d cluster creation flag:
+`-p "8080:80@loadbalancer"`).
 
 ---
 
 ## Health probes
 
-All application deployments have liveness and readiness probes at `/healthz`. Probes fire every 15 seconds with a 30-second initial delay to allow for startup time (EF Core migrations, RabbitMQ connection).
+All application deployments have liveness and readiness probes at `/healthz`. Probes fire every 15
+seconds with a 30-second initial delay to allow for startup time (EF Core migrations, RabbitMQ
+connection).
 
-`/healthz` spans are excluded at both the SDK level and the Alloy collector level to prevent health-check traffic from flooding traces and span metrics.
+`/healthz` spans are excluded at both the SDK level and the Alloy collector level to prevent
+health-check traffic from flooding traces and span metrics.
 
 ---
 
@@ -265,4 +284,4 @@ infra/ (namespace, secrets)
             → infra/ingress.yaml
 ```
 
-Enforced by `make deploy` (→ `make deploy-cloud`) and `make deploy-local`.
+Enforced by `./deploy-local.sh`'s `apply_stage` sequencing, regardless of `monitoring.mode`.

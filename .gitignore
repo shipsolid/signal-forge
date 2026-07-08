@@ -29,3 +29,9 @@ src/**/.venv/
 
 zcert.crt
 .env
+
+# Real prod DB credentials for k8s/overlays/prod's secretGenerator. Never commit —
+# ship only prod.secrets.env.example. Missing this file makes
+# `kubectl kustomize k8s/overlays/prod` fail loudly instead of silently inheriting
+# base's dev placeholder credentials.
+k8s/overlays/prod/prod.secrets.env

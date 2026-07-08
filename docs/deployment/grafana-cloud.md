@@ -1,12 +1,14 @@
 # Grafana Cloud Deployment
 
-Alloy exports all signals to Grafana Cloud (Tempo, Mimir, Loki) when credentials are configured. When credentials are absent, cloud exporters are no-ops — local backends are unaffected.
+Alloy exports all signals to Grafana Cloud (Tempo, Mimir, Loki) when credentials are configured.
+When credentials are absent, cloud exporters are no-ops — local backends are unaffected.
 
 ---
 
 ## Credential architecture
 
-Grafana Cloud uses **per-signal instance IDs** as Basic Auth usernames. A single shared API key is the password for all three signals.
+Grafana Cloud uses **per-signal instance IDs** as Basic Auth usernames. A single shared API key is
+the password for all three signals.
 
 ```
 Grafana Cloud Stack
@@ -18,7 +20,11 @@ Shared Access Policy token (glc_...): grafana-mccaindev-alloy-writer-mccaindev-t
   Scopes: metrics:write  logs:write  traces:write
 ```
 
-> **Important**: The Grafana Cloud API key (`grafana-mccaindev-cloud-api-key`, prefix `glsa_`) is a Grafana **organisation service account token** — it authenticates with the Grafana frontend (`mccaindev.grafana.net`) but is **rejected** by Mimir/Loki/Tempo data ingestion endpoints (HTTP 401). Always use `grafana-mccaindev-alloy-writer-mccaindev-token` (prefix `glc_`) for data plane writes.
+> **Important**: The Grafana Cloud API key (`grafana-mccaindev-cloud-api-key`, prefix `glsa_`) is a
+> Grafana **organisation service account token** — it authenticates with the Grafana frontend
+> (`mccaindev.grafana.net`) but is **rejected** by Mimir/Loki/Tempo data ingestion endpoints (HTTP
+> 401). Always use `grafana-mccaindev-alloy-writer-mccaindev-token` (prefix `glc_`) for data plane
+> writes.
 
 ---
 
@@ -32,17 +38,25 @@ The raw Grafana Cloud endpoint URLs require path/format adjustments before they 
 | Metrics (Prometheus remote_write) | `https://prometheus-us-central2.grafana.net/api/prom` | `https://prometheus-us-central2.grafana.net/api/prom/push` — append `/push` |
 | Logs (Loki push)                  | `https://logs-prod-037.grafana.net`                   | `https://logs-prod-037.grafana.net/loki/api/v1/push`                        |
 
-**Why Prometheus remote_write, not OTLP HTTP, for metrics?** The Helm chart's Alloy destinations use `type: prometheus`, which speaks Prometheus remote_write. App OTLP metrics arriving at `alloy-receiver` are converted OTLP → Prometheus inside Alloy before shipping. This gives a single ingestion path for scraped infra metrics and converted app metrics, and matches Grafana Cloud's dashboard/query UX.
+**Why Prometheus remote_write, not OTLP HTTP, for metrics?** The Helm chart's Alloy destinations use
+`type: prometheus`, which speaks Prometheus remote_write. App OTLP metrics arriving at
+`alloy-receiver` are converted OTLP → Prometheus inside Alloy before shipping. This gives a single
+ingestion path for scraped infra metrics and converted app metrics, and matches Grafana Cloud's
+dashboard/query UX.
 
-**Why the difference for Tempo?** gRPC uses HTTP/2 transport. Alloy's `otelcol.exporter.otlp` expects a host:port endpoint without a URL scheme.
+**Why the difference for Tempo?** gRPC uses HTTP/2 transport. Alloy's `otelcol.exporter.otlp`
+expects a host:port endpoint without a URL scheme.
 
-`scripts/fetch-grafana-cloud-conf-from-akv.sh` applies these adjustments automatically — append `/push` to the Mimir URL if missing, append `/loki/api/v1/push` to Loki, append `:443` to Tempo.
+`scripts/fetch-grafana-cloud-conf-from-akv.sh` applies these adjustments automatically — append
+`/push` to the Mimir URL if missing, append `/loki/api/v1/push` to Loki, append `:443` to Tempo.
 
 ---
 
 ## Azure Key Vault integration
 
-Credentials are stored in Azure Key Vault (`mf-cc-dt-azrsrp-prd-kv`) under the `grafana-mccaindev-*` prefix. The AKV coordinates (tenant/subscription/RG/vault name) live in [conf.yml](../../conf.yml) under `monitoring.grafana_cloud.akv.*` — these are IDs/names and are safe to track in git.
+Credentials are stored in Azure Key Vault (`mf-cc-dt-azrsrp-prd-kv`) under the `grafana-mccaindev-*`
+prefix. The AKV coordinates (tenant/subscription/RG/vault name) live in [conf.yml](../../conf.yml)
+under `monitoring.grafana_cloud.akv.*` — these are IDs/names and are safe to track in git.
 
 | AKV secret name                                  | conf.yml key     | Secret key (K8s)               | Notes                                                       |
 | ------------------------------------------------ | ---------------- | ------------------------------ | ----------------------------------------------------------- |
@@ -69,7 +83,8 @@ The fetch script uses whatever `az` session is active. Either:
 az login
 ```
 
-Or export a service-principal before running the script (no .env file loading — export them in the shell):
+Or export a service-principal before running the script (no .env file loading — export them in the
+shell):
 
 ```bash
 export ARM_CLIENT_ID=<sp-app-id>
@@ -87,7 +102,11 @@ export ARM_CLIENT_SECRET=<sp-password>
 ./scripts/fetch-grafana-cloud-conf-from-akv.sh
 ```
 
-The script updates **only** the nine leaf fields in `monitoring.grafana_cloud.{api_key, tempo.*, mimir.*, loki.*, faro.*}`. Comments, ordering, and every other field in conf.yml are preserved — see [smoke-test-conf-updater.sh](../../scripts/smoke-test-conf-updater.sh) for the regression test that enforces this.
+The script updates **only** the nine leaf fields in
+`monitoring.grafana_cloud.{api_key, tempo.*, mimir.*, loki.*, faro.*}`. Comments, ordering, and
+every other field in conf.yml are preserved — see
+[smoke-test-conf-updater.sh](../../scripts/smoke-test-conf-updater.sh) for the regression test that
+enforces this.
 
 ### 3. Deploy (re-materialises the Secret)
 
@@ -95,20 +114,22 @@ The script updates **only** the nine leaf fields in `monitoring.grafana_cloud.{a
 ./deploy-local.sh --skip-cluster --skip-build
 ```
 
-`deploy-local.sh` writes the `grafana-cloud-secrets` K8s Secret into both `otel-lab` (apps/FARO consumers) and `monitoring` (Helm chart's Alloy). Before `helm upgrade`, a contract validator asserts every key referenced by the rendered values file is present in the Secret — rename on either side fails fast.
+`deploy-local.sh` writes the `grafana-cloud-secrets` K8s Secret into both `otel-lab` (apps/FARO
+consumers) and `monitoring` (Helm chart's Alloy). Before `helm upgrade`, a contract validator
+asserts every key referenced by the rendered values file is present in the Secret — rename on either
+side fails fast.
 
 Where the nine leaf values come from is gated by `monitoring.grafana_cloud.use_env`:
 
-- `false` (default) — read straight from `monitoring.grafana_cloud.{api_key, tempo.*, mimir.*, loki.*, faro.*}` in conf.yml, i.e. whatever step 2 last wrote.
-- `true` — `deploy-local.sh` sources `.env` (repo root) instead and ignores the conf.yml fields above, reading `GRAFANA_CLOUD_API_KEY` / `GRAFANA_CLOUD_TEMPO_ENDPOINT` / `GRAFANA_CLOUD_TEMPO_USER` / `GRAFANA_CLOUD_MIMIR_ENDPOINT` / `GRAFANA_CLOUD_MIMIR_USER` / `GRAFANA_CLOUD_LOKI_ENDPOINT` / `GRAFANA_CLOUD_LOKI_USER` / `FARO_COLLECTOR_URL` / `FARO_API_KEY` — the same keys the legacy Makefile flow uses. Useful if you already keep `.env` current and want to skip step 2 entirely.
-
-### 4. Deploy with cloud configmap
-
-```bash
-make deploy-cloud   # or: make deploy
-```
-
-This applies `k8s/monitoring/grafana/grafana-cloud/configmap.yaml` and restarts the Alloy DaemonSet in the `monitoring` namespace to reload it.
+- `false` (default) — read straight from
+  `monitoring.grafana_cloud.{api_key, tempo.*, mimir.*, loki.*, faro.*}` in conf.yml, i.e. whatever
+  step 2 last wrote.
+- `true` — `deploy-local.sh` sources `.env` (repo root) instead and ignores the conf.yml fields
+  above, reading `GRAFANA_CLOUD_API_KEY` / `GRAFANA_CLOUD_TEMPO_ENDPOINT` /
+  `GRAFANA_CLOUD_TEMPO_USER` / `GRAFANA_CLOUD_MIMIR_ENDPOINT` / `GRAFANA_CLOUD_MIMIR_USER` /
+  `GRAFANA_CLOUD_LOKI_ENDPOINT` / `GRAFANA_CLOUD_LOKI_USER` / `FARO_COLLECTOR_URL` / `FARO_API_KEY`
+  — the same keys the legacy Makefile flow uses. Useful if you already keep `.env` current and want
+  to skip step 2 entirely.
 
 ---
 
@@ -162,11 +183,13 @@ Wrong API key or wrong instance ID for that signal type.
 make secrets-show   # verify all 7 values are non-empty and correct
 ```
 
-Each signal type has its own instance ID. Using the Tempo ID for Mimir (or vice versa) causes 401 errors on that signal only.
+Each signal type has its own instance ID. Using the Tempo ID for Mimir (or vice versa) causes 401
+errors on that signal only.
 
 ### "connection refused" for Tempo
 
-Tempo endpoint must be `host:443` without `https://`. If it includes `https://` the gRPC transport fails.
+Tempo endpoint must be `host:443` without `https://`. If it includes `https://` the gRPC transport
+fails.
 
 ```bash
 make secrets-show

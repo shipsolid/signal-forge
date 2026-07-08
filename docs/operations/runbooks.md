@@ -116,7 +116,9 @@ In RabbitMQ Management (`http://localhost:15672`):
 3. Inspect the Properties → Headers
 4. Should contain key `traceparent` with value `00-<32 hex chars>-<16 hex chars>-01`
 
-If missing: the order-api publisher is not injecting the header. Check `OrderPublisher.cs` — `Propagators.DefaultTextMapPropagator.Inject()` must run while `Activity.Current` is non-null (inside an active span).
+If missing: the order-api publisher is not injecting the header. Check `OrderPublisher.cs` —
+`Propagators.DefaultTextMapPropagator.Inject()` must run while `Activity.Current` is non-null
+(inside an active span).
 
 **Step 2: Verify the consumer extracts it correctly**
 
@@ -132,7 +134,9 @@ logger.debug("headers: %s", properties.headers)
 
 **Step 3: Check for pika instrumentation conflict**
 
-If `opentelemetry-instrumentation-pika` is also running, it may overwrite the extracted context. Verify `requirements.txt` — `opentelemetry-instrumentation-pika` should not be present (we use manual extraction).
+If `opentelemetry-instrumentation-pika` is also running, it may overwrite the extracted context.
+Verify `requirements.txt` — `opentelemetry-instrumentation-pika` should not be present (we use
+manual extraction).
 
 ---
 
@@ -197,7 +201,8 @@ kubectl -n otel-lab exec statefulset/loki -- cat /etc/loki/config.yaml | grep al
 ### Diagnosis checklist (must ALL be true)
 
 - [ ] Panel → Edit → Query → "Exemplars" toggle is ON
-- [ ] Panel → Options → Data links has an entry pointing to Jaeger datasource, URL field = `${__value.raw}`
+- [ ] Panel → Options → Data links has an entry pointing to Jaeger datasource, URL field =
+      `${__value.raw}`
 - [ ] Prometheus has `--enable-feature=exemplar-storage`:
 
   ```bash
@@ -210,7 +215,8 @@ kubectl -n otel-lab exec statefulset/loki -- cat /etc/loki/config.yaml | grep al
   kubectl -n otel-lab exec deploy/gateway-api -- env | grep EXEMPLAR
   ```
 
-- [ ] The histogram observation happens inside a sampled span. Use `/api/slow` (always sampled) to test.
+- [ ] The histogram observation happens inside a sampled span. Use `/api/slow` (always sampled) to
+      test.
 
 **Force an exemplar-generating request:**
 
@@ -247,7 +253,10 @@ kubectl -n monitoring logs daemonset/grafana-k8s-alloy-receiver --tail=100 \
 
 **Step 3: Verify pod association mode**
 
-The configmap uses `source { from = "connection" }` — it resolves the pod from the OTLP connection source IP. This works when pods have their own network namespace (standard in k3d). If pods share the node network namespace, use `source { from = "resource_attribute" }` instead and set `k8s.pod.name` in the app's `OTEL_RESOURCE_ATTRIBUTES`.
+The configmap uses `source { from = "connection" }` — it resolves the pod from the OTLP connection
+source IP. This works when pods have their own network namespace (standard in k3d). If pods share
+the node network namespace, use `source { from = "resource_attribute" }` instead and set
+`k8s.pod.name` in the app's `OTEL_RESOURCE_ATTRIBUTES`.
 
 ---
 
@@ -261,8 +270,13 @@ The configmap uses `source { from = "connection" }` — it resolves the pod from
 ### Diagnosis
 
 ```bash
+# Mode-aware triage: conf.yml values, pod state, Alloy exporter counters,
+# remote-write reachability probe, alloy-receiver endpoint check — start here.
+./scripts/debug.sh
+
 # Check the secret exists and is populated
-make secrets-show
+kubectl -n monitoring get secret grafana-cloud-secrets -o json \
+  | python3 -c 'import json,sys,base64; d=json.load(sys.stdin)["data"]; [print(f"{k}: {base64.b64decode(v).decode()[:4]}****") for k,v in d.items()]'
 
 # Check Alloy is reading the env vars
 kubectl -n monitoring exec daemonset/grafana-k8s-alloy-receiver -- env | grep GRAFANA
@@ -272,12 +286,20 @@ kubectl -n monitoring logs daemonset/grafana-k8s-alloy-receiver --tail=100 \
   | grep -E "grafana_cloud|export.*fail|endpoint.*empty|401|403"
 ```
 
-| Error                | Cause                                     | Fix                                                                       |
-| -------------------- | ----------------------------------------- | ------------------------------------------------------------------------- |
-| `endpoint is empty`  | Secret not applied or Alloy not restarted | `make secrets-fetch-akv` + rollout restart                                |
-| `401 Unauthorized`   | Wrong API key or wrong instance ID        | Verify `make secrets-show`, check Grafana Cloud Access Policies           |
-| `connection refused` | Wrong endpoint format                     | Tempo must be `host:443` (no `https://`); re-run `make secrets-fetch-akv` |
-| `403 Forbidden`      | API key lacks scope                       | Ensure scopes: `metrics:write logs:write traces:write`                    |
+| Error                | Cause                                                                                           | Fix                                                                                                                 |
+| -------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `endpoint is empty`  | `conf.yml`'s `monitoring.grafana_cloud.*` is unset, or Alloy wasn't redeployed after it changed | Populate via `./scripts/fetch-grafana-cloud-conf-from-akv.sh`, then `./deploy-local.sh --skip-cluster --skip-build` |
+| `401 Unauthorized`   | Wrong API key or wrong instance ID                                                              | Re-check with `./scripts/fetch-grafana-cloud-conf-from-akv.sh --dry-run`; verify Grafana Cloud Access Policies      |
+| `connection refused` | Wrong endpoint format                                                                           | Tempo must be `host:443` (no `https://`) in `conf.yml`; the fetch script applies this adjustment automatically      |
+| `403 Forbidden`      | API key lacks scope                                                                             | Ensure scopes: `metrics:write logs:write traces:write`                                                              |
+
+> **Do not use `make secrets-fetch-akv` / `make secrets-apply` for this.** They write
+> `GRAFANA_CLOUD_MIMIR_ENDPOINT=.../api/v1/otlp` into the Secret directly, but the live cloud
+> destination ([values-cloud.yaml.tmpl](../../k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl))
+> uses Prometheus remote_write and expects `.../api/prom/push` — running those legacy targets here
+> silently breaks cloud-mode metrics instead of fixing them. Use
+> `./scripts/fetch-grafana-cloud-conf-from-akv.sh` + `./deploy-local.sh` instead — see
+> [docs/deployment/grafana-cloud.md](../deployment/grafana-cloud.md) for the full credential model.
 
 ---
 
@@ -335,7 +357,9 @@ kubectl -n otel-lab exec deploy/notification-svc -- python3 -c \
   "import redis; r=redis.Redis(host='redis.otel-lab'); print(r.ping())"
 ```
 
-If Redis has restarted, all notification state is lost (ephemeral Deployment, no PVC). Consumer will re-process messages from RabbitMQ on the next delivery, and new notifications will be stored correctly.
+If Redis has restarted, all notification state is lost (ephemeral Deployment, no PVC). Consumer will
+re-process messages from RabbitMQ on the next delivery, and new notifications will be stored
+correctly.
 
 ---
 

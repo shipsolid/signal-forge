@@ -169,6 +169,47 @@ def test_duplicate_message_increments_duplicate_counter(fr, mock_instruments):
     counter.add.assert_called_with(1, {"status": "duplicate"})
 
 
+def test_dedup_uses_atomic_set_nx_not_exists(mock_instruments):
+    """
+    Regression guard for the TOCTOU race: dedup must be a single `SET ... NX` call,
+    not a separate exists() check followed by a later set(). Two near-simultaneous
+    deliveries of the same order_id can both pass a non-atomic exists() check before
+    either sets the key; SET NX closes that window by making the check-and-set one
+    round trip Redis serializes.
+    """
+    mock_redis = MagicMock()
+    mock_redis.set.return_value = True  # NX succeeds — not a duplicate
+    ch, method, props = _pika_args()
+
+    with (
+        patch("app.consumer.get_redis", return_value=mock_redis),
+        patch("app.consumer._instruments", return_value=mock_instruments),
+        patch("app.consumer._mock_email_send"),
+    ):
+        handle_order_created(ch, method, props, _body(order_id=77))
+
+    mock_redis.exists.assert_not_called()
+    mock_redis.set.assert_any_call("dedup:77", "1", nx=True, ex=3600)
+
+
+def test_second_of_two_rapid_deliveries_is_deduped(fr, mock_instruments):
+    ch1, method1, props1 = _pika_args(delivery_tag=1)
+    ch2, method2, props2 = _pika_args(delivery_tag=2)
+
+    with (
+        patch("app.consumer.get_redis", return_value=fr),
+        patch("app.consumer._instruments", return_value=mock_instruments),
+        patch("app.consumer._mock_email_send"),
+    ):
+        handle_order_created(ch1, method1, props1, _body(order_id=88))
+        handle_order_created(ch2, method2, props2, _body(order_id=88))
+
+    ch1.basic_ack.assert_called_once_with(delivery_tag=1)
+    ch2.basic_ack.assert_called_once_with(delivery_tag=2)
+    # Only the first delivery's write should have happened.
+    assert fr.hget("notifications:notif-88", "status") == "sent"
+
+
 # ── Error handling ────────────────────────────────────────────────────────────
 
 
@@ -201,7 +242,7 @@ def test_invalid_json_increments_failed_counter(fr, mock_instruments):
 def test_redis_failure_nacks_to_dlq(mock_instruments):
     ch, method, props = _pika_args(delivery_tag=2)
     exploding_redis = MagicMock()
-    exploding_redis.exists.side_effect = RuntimeError("Redis down")
+    exploding_redis.set.side_effect = RuntimeError("Redis down")
 
     with (
         patch("app.consumer.get_redis", return_value=exploding_redis),

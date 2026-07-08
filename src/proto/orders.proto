@@ -34,6 +34,10 @@ message CreateOrderRequest {
   string description = 2;
   // amount must be in range (0, 999_999.99]. INVALID_ARGUMENT if outside range.
   double amount = 3;
+  // idempotency_key is generated once per logical client attempt (before retries) so a
+  // retried CreateOrder after a connection reset replays the same order instead of
+  // duplicating it. Empty is treated as "no dedup" (legacy/direct callers).
+  string idempotency_key = 4;
 }
 
 // CreateOrderResponse is returned after a successful CreateOrder call.

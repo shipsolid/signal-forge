@@ -12,6 +12,21 @@ labels:
   - pairs:
       signal-forge.environment: prod
 
+# Fail-closed override of base's db-secrets: base ships the placeholder dev
+# credentials from k8s/infra/secrets.yaml (gateway_pw, root_pw, ...) with no
+# structural gate stopping prod from silently inheriting them. prod.secrets.env
+# is gitignored (ship only prod.secrets.env.example) — without a real one in
+# place, `kubectl kustomize`/`apply -k k8s/overlays/prod` fails outright instead
+# of deploying prod-sized replicas with dev-grade secrets. `behavior: replace`
+# + Kustomize's default hash suffix means every secretKeyRef: {name: db-secrets}
+# elsewhere in the build gets automatically repointed at the new hashed name.
+secretGenerator:
+  - name: db-secrets
+    namespace: otel-lab
+    behavior: replace
+    envs:
+      - prod.secrets.env
+
 # Prod-sized replica counts + resource asks.
 patches:
   - target: { kind: Deployment, name: gateway-api }

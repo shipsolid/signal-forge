@@ -147,6 +147,42 @@ podLogs:
       }
     }
 
+    # Log↔trace correlation — mirrors k8s/monitoring/grafana/local/configmap.yaml's
+    # loki.process "trace_correlation" stage. Without this, cloud mode's Loki logs have
+    # no trace_id/span_id structured metadata and "Logs for this span" in Grafana Explore
+    # returns nothing, even though the trace side of correlation (Tempo) works fine.
+    stage.json {
+      expressions = {
+        dotnet_trace = "TraceId",
+        dotnet_span  = "SpanId",
+        python_trace = "otelTraceID",
+        python_span  = "otelSpanID",
+      }
+    }
+
+    # NOTE: the chart runs Helm's tpl function on extraLogProcessingStages (see
+    # feature-pod-logs/templates/_common_log_processing.alloy.tpl), so literal Go-template
+    # delimiters below — meant for Alloy's own template evaluation at log-processing time,
+    # not Helm's chart-render time — are escaped (wrapped in a quoted string inside a Helm
+    # action) so Helm emits them as plain text instead of evaluating them immediately
+    # against its own, unrelated template context (which would silently render as empty).
+    stage.template {
+      source   = "trace_id"
+      template = "{{"{{"}} if .dotnet_trace {{"}}"}}{{"{{"}} .dotnet_trace {{"}}"}}{{"{{"}} else {{"}}"}}{{"{{"}} .python_trace {{"}}"}}{{"{{"}} end {{"}}"}}"
+    }
+
+    stage.template {
+      source   = "span_id"
+      template = "{{"{{"}} if .dotnet_span {{"}}"}}{{"{{"}} .dotnet_span {{"}}"}}{{"{{"}} else {{"}}"}}{{"{{"}} .python_span {{"}}"}}{{"{{"}} end {{"}}"}}"
+    }
+
+    stage.structured_metadata {
+      values = {
+        trace_id = "trace_id",
+        span_id  = "span_id",
+      }
+    }
+
 # ── Application Observability ──────────────────────────────────────────────────
 # alloy-receiver is the SOLE OTLP ingress. Apps push to:
 #   grafana-k8s-alloy-receiver.monitoring.svc.cluster.local:4317

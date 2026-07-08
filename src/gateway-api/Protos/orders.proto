@@ -14,6 +14,7 @@ message CreateOrderRequest {
   int32 project_id = 1;
   string description = 2;
   double amount = 3;
+  string idempotency_key = 4;
 }
 
 message CreateOrderResponse {

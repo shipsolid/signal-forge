@@ -142,6 +142,66 @@ public class OrderGrpcServiceTests
         Assert.True(resp.OrderId > 0);
     }
 
+    // ── CreateOrder — idempotency key ────────────────────────────────────────
+
+    [Fact]
+    public async Task CreateOrder_RepeatedIdempotencyKey_ReturnsOriginalOrder()
+    {
+        var db = BuildDb(nameof(CreateOrder_RepeatedIdempotencyKey_ReturnsOriginalOrder));
+        var svc = BuildService(db);
+        var req = new CreateOrderRequest
+        {
+            ProjectId = 1,
+            Description = "Retry me",
+            Amount = 15,
+            IdempotencyKey = "retry-key-1"
+        };
+
+        var first = await svc.CreateOrder(req, TestServerCallContext.Create());
+        // Second attempt with the same key simulates a resilience-handler retry after the
+        // first attempt already committed — must replay, not duplicate.
+        var second = await svc.CreateOrder(req, TestServerCallContext.Create());
+
+        Assert.Equal(first.OrderId, second.OrderId);
+        Assert.Equal(1, await db.Orders.CountAsync());
+    }
+
+    [Fact]
+    public async Task CreateOrder_DifferentIdempotencyKeys_CreatesSeparateOrders()
+    {
+        var db = BuildDb(nameof(CreateOrder_DifferentIdempotencyKeys_CreatesSeparateOrders));
+        var svc = BuildService(db);
+
+        var first = await svc.CreateOrder(
+            new CreateOrderRequest { ProjectId = 1, Description = "One", Amount = 15, IdempotencyKey = "key-a" },
+            TestServerCallContext.Create());
+        var second = await svc.CreateOrder(
+            new CreateOrderRequest { ProjectId = 1, Description = "Two", Amount = 15, IdempotencyKey = "key-b" },
+            TestServerCallContext.Create());
+
+        Assert.NotEqual(first.OrderId, second.OrderId);
+        Assert.Equal(2, await db.Orders.CountAsync());
+    }
+
+    [Fact]
+    public async Task CreateOrder_NoIdempotencyKey_AllowsMultipleOrders()
+    {
+        // Legacy/direct callers that omit the key (proto3 default "") must not collide with
+        // each other via the unique index — each maps to a null IdempotencyKey.
+        var db = BuildDb(nameof(CreateOrder_NoIdempotencyKey_AllowsMultipleOrders));
+        var svc = BuildService(db);
+
+        var first = await svc.CreateOrder(
+            new CreateOrderRequest { ProjectId = 1, Description = "One", Amount = 15 },
+            TestServerCallContext.Create());
+        var second = await svc.CreateOrder(
+            new CreateOrderRequest { ProjectId = 1, Description = "Two", Amount = 15 },
+            TestServerCallContext.Create());
+
+        Assert.NotEqual(first.OrderId, second.OrderId);
+        Assert.Equal(2, await db.Orders.CountAsync());
+    }
+
     // ── GetOrder ──────────────────────────────────────────────────────────────
 
     [Fact]

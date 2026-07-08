@@ -1,8 +1,20 @@
 # Log-to-Trace Correlation
 
+> **Local vs. cloud mode implementation.** The pipeline below (`loki.process "trace_correlation"` as
+> a named River component) is local mode's hand-authored implementation
+> (`k8s/monitoring/grafana/local/configmap.yaml`). Cloud mode achieves the same outcome — trace_id
+> and span_id as Loki structured metadata — through a different mechanism: the same JSON-extraction
+> and template logic is injected via the `grafana/k8s-monitoring` Helm chart's
+> `podLogs.extraLogProcessingStages` hook in
+> [`values-cloud.yaml.tmpl`](../../k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl), since the
+> chart doesn't expose named custom components the way a hand-rolled config does. See
+> [pipeline.md's Cloud mode pipeline section](pipeline.md#cloud-mode-pipeline) for that mechanism.
+> The field names, coalesce logic, and structured-metadata rationale below apply to both.
+
 ## Architecture
 
-Logs are not shipped via OTLP. Applications write structured JSON to stdout; `alloy-logs` (a DaemonSet) tails pod stdout at the node level and extracts trace IDs for Loki structured metadata.
+Logs are not shipped via OTLP. Applications write structured JSON to stdout; `alloy-logs` (a
+DaemonSet) tails pod stdout at the node level and extracts trace IDs for Loki structured metadata.
 
 ```
 .NET service → stdout (JSON, TraceId/SpanId fields)
@@ -24,13 +36,15 @@ Python service → stdout (JSON, otelTraceID/otelSpanID fields)
 
 ## Why node-level tailing instead of OTLP log push
 
-See [ADR-001](../architecture/decisions.md#adr-001-log-tailing-instead-of-otlp-log-export). Short version: production-parity, simpler application code, independent reliability.
+See [ADR-001](../architecture/decisions.md#adr-001-log-tailing-instead-of-otlp-log-export). Short
+version: production-parity, simpler application code, independent reliability.
 
 ## Log formats
 
 ### .NET (gateway-api, order-api)
 
-Serilog with JSON formatter. OTel `LoggingInstrumentation` injects `TraceId` and `SpanId` automatically:
+Serilog with JSON formatter. OTel `LoggingInstrumentation` injects `TraceId` and `SpanId`
+automatically:
 
 ```json
 {
@@ -112,13 +126,15 @@ loki.process "trace_correlation" {
 
 ### Why structured metadata, not stream labels
 
-Loki stream labels must be low-cardinality (namespace, pod, container, app, level). `trace_id` has the same cardinality as the number of traces — millions per day. Using it as a stream label would:
+Loki stream labels must be low-cardinality (namespace, pod, container, app, level). `trace_id` has
+the same cardinality as the number of traces — millions per day. Using it as a stream label would:
 
 - Fragment the log stream into billions of per-trace streams
 - Destroy Loki's compression efficiency
 - Break chunk creation (each chunk would contain one log line)
 
-Structured metadata is indexed differently — it is queryable with `{trace_id="<id>"}` but does not create new streams.
+Structured metadata is indexed differently — it is queryable with `{trace_id="<id>"}` but does not
+create new streams.
 
 ## Grafana configuration for "Logs for this span"
 
@@ -141,7 +157,8 @@ When viewing a trace in Grafana, clicking "Logs for this span" runs:
 {namespace="otel-lab"} | trace_id = "<traceId>"
 ```
 
-This works because `trace_id` is stored as Loki structured metadata, which supports label-filter queries.
+This works because `trace_id` is stored as Loki structured metadata, which supports label-filter
+queries.
 
 ## Verifying correlation works
 
@@ -180,14 +197,18 @@ curl "http://localhost:3100/loki/api/v1/query_range" \
    kubectl -n monitoring logs daemonset/grafana-k8s-alloy-logs | grep -i loki
    ```
 
-3. Check the `stage.json` field names match. .NET uses `TraceId`; Python uses `otelTraceID`. The coalesce template handles both but fails if neither field is present.
+3. Check the `stage.json` field names match. .NET uses `TraceId`; Python uses `otelTraceID`. The
+   coalesce template handles both but fails if neither field is present.
 
-4. Verify `structured_metadata` is enabled in your Loki version. This requires Loki 2.9+ with `limits_config.allow_structured_metadata: true`.
+4. Verify `structured_metadata` is enabled in your Loki version. This requires Loki 2.9+ with
+   `limits_config.allow_structured_metadata: true`.
 
 ### Level label missing
 
-Check the Python service `levelname` field exists. If using a custom log formatter that renames this field, update `python_level` in the `stage.json` expressions to match.
+Check the Python service `levelname` field exists. If using a custom log formatter that renames this
+field, update `python_level` in the `stage.json` expressions to match.
 
 ### .NET and Python trace IDs don't match format
 
-Both runtimes produce 32-character lowercase hex trace IDs (W3C TraceContext format). If a service uses a different format, the Loki query will not find matching logs.
+Both runtimes produce 32-character lowercase hex trace IDs (W3C TraceContext format). If a service
+uses a different format, the Loki query will not find matching logs.

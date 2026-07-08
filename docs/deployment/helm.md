@@ -1,18 +1,26 @@
 # Helm Monitoring Stack
 
-The observability collector stack uses the `grafana/k8s-monitoring` Helm chart (v3.8.4). It deploys five specialised Grafana Alloy roles into the `monitoring` namespace.
+The observability collector stack uses the `grafana/k8s-monitoring` Helm chart (v3.8.4). It deploys
+up to five specialised Grafana Alloy roles into the `monitoring` namespace. **`./deploy-local.sh` is
+the only supported way to install it** — see [local.md](local.md) and
+[grafana-cloud.md](grafana-cloud.md). The Makefile-driven `make deploy-helm` / `make helm-render` /
+`make deploy-helm-cloud` flow described in earlier versions of this doc has been retired: it was a
+second, parallel Helm-values pipeline (Jinja2-templated, `k8s/monitoring/grafana-helm/render.py` +
+`config.yaml.j2`) that hardcoded real production Grafana Cloud stack IDs and AKS namespace names
+left over from a copy-paste, and it duplicated what `deploy-local.sh` already does from `conf.yml`
+directly. Those files are deleted; `make deploy-helm*`/`make helm-render`/`make full-helm` now fail
+with a message pointing at `./deploy-local.sh`.
 
 ---
 
 ## Why Helm instead of raw manifests
 
-The hand-rolled Alloy DaemonSet (`k8s/monitoring/grafana/`) is kept as a reference artifact but is **not deployed**. Running both caused:
-
-- Duplicate spans in Jaeger and Prometheus
-- Version mismatches between the pinned image and Helm chart expectations
-- CrashLoopBackOff from River config incompatibilities
-
-The Helm chart manages RBAC, ServiceAccounts, versioned upgrades, and multi-role coordination. See [ADR-004](../architecture/decisions.md#adr-004-helm-managed-alloy-stack-grafanaks-monitoring).
+The hand-rolled Alloy DaemonSet (`k8s/monitoring/grafana/local/`) is the local-mode alternative —
+see [local.md](local.md). Running both the Helm chart and the hand-rolled DaemonSet against the same
+cluster causes duplicate spans, version mismatches, and CrashLoopBackOff from River config
+incompatibilities, so `deploy-local.sh` only ever installs one collector path per `monitoring.mode`.
+The Helm chart manages RBAC, ServiceAccounts, versioned upgrades, and multi-role coordination. See
+[ADR-004](../architecture/decisions.md#adr-004-helm-managed-alloy-stack-grafanaks-monitoring).
 
 ---
 
@@ -28,53 +36,52 @@ The Helm chart manages RBAC, ServiceAccounts, versioned upgrades, and multi-role
 
 ---
 
-## Values file (`k8s/monitoring/grafana-helm/values-local.yaml`)
+## Values files
 
-Key local overrides compared to the production `09-grafana-k8s` config:
+`deploy-local.sh` selects the values file via `monitoring.helm.values_file_by_mode.<mode>` in
+`conf.yml`:
 
-| Setting                     | Local value                              | Production value | Reason                                    |
-| --------------------------- | ---------------------------------------- | ---------------- | ----------------------------------------- |
-| `destinations`              | In-cluster services (otel-lab namespace) | Grafana Cloud    | No cloud for offline dev                  |
-| `opencost.enabled`          | `false`                                  | `true`           | No cloud billing APIs                     |
-| `kepler.enabled`            | `false`                                  | `true`           | eBPF energy metrics unreliable on WSL2/VM |
-| `alloy-profiles.enabled`    | `false`                                  | `true`           | No local Pyroscope                        |
-| `prometheusOperatorObjects` | disabled                                 | enabled          | No CRDs installed in k3d                  |
-| `remoteConfig.enabled`      | `false` (all agents)                     | `true`           | Prevents Fleet Management override        |
+- **local mode** — `k8s/monitoring/grafana-helm/values-local.yaml`, destinations point at in-cluster
+  Jaeger/Prometheus/Loki.
+- **cloud mode** — `k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl`, rendered by
+  `deploy-local.sh` with `${...}` placeholders substituted from `conf.yml`'s
+  `monitoring.grafana_cloud` block; destinations point at Grafana Cloud Mimir/Loki/Tempo.
+
+| Setting                     | Local value                              | Cloud value   | Reason                                    |
+| --------------------------- | ---------------------------------------- | ------------- | ----------------------------------------- |
+| `destinations`              | In-cluster services (otel-lab namespace) | Grafana Cloud | No cloud for offline dev                  |
+| `opencost.enabled`          | `false`                                  | `false`       | No cloud billing APIs wired up in the lab |
+| `kepler.enabled`            | `false`                                  | `false`       | eBPF energy metrics unreliable on WSL2/VM |
+| `alloy-profiles.enabled`    | `false`                                  | `false`       | No Pyroscope backend in either mode       |
+| `prometheusOperatorObjects` | disabled                                 | disabled      | No Prometheus-Operator CRDs in the lab    |
+| `remoteConfig.enabled`      | `false` (all agents)                     | `false`       | Prevents Fleet Management override        |
+
+`k8s/monitoring/grafana-helm/gen-cloud-overlay.py` is a separate, still-live script used only by the
+legacy `make secrets-fetch-akv`/`make secrets-apply` targets (see
+[grafana-cloud.md](grafana-cloud.md)) — it is not part of the `deploy-local.sh` path.
 
 ---
 
 ## Deploy
 
-### Add Helm repo (once)
-
 ```bash
-make helm-repo
-# = helm repo add grafana https://grafana.github.io/helm-charts && helm repo update
+./deploy-local.sh                              # full: cluster + builds + apply + helm install
+./deploy-local.sh --skip-cluster --skip-build  # manifests + helm only, <1 min
+./deploy-local.sh --with-helm                  # local mode: install the Helm chart too (unconditional in cloud mode)
 ```
 
-### Install / upgrade
-
-```bash
-make deploy-helm
-# = helm upgrade --install grafana-k8s-monitoring grafana/k8s-monitoring \
-#     --version 3.8.4 \
-#     --namespace monitoring --create-namespace \
-#     -f k8s/monitoring/grafana-helm/values-local.yaml
-```
-
-### Watch pods come up
+Watch pods come up:
 
 ```bash
 kubectl get pods -n monitoring -w
 ```
 
-All four active roles should reach `Running` within 60-90 seconds.
+Active roles should reach `Running` within 60-90 seconds.
 
-### Tear down
+Tear down:
 
 ```bash
-make teardown-helm
-# = helm uninstall grafana-k8s-monitoring -n monitoring && kubectl delete namespace monitoring
+./deploy-local.sh --teardown
 ```
 
 ---
@@ -87,9 +94,10 @@ Application services send OTLP to:
 http://grafana-k8s-alloy-receiver.monitoring.svc.cluster.local:4317
 ```
 
-This is the ClusterIP DNS name for the `alloy-receiver` DaemonSet's Service. It is set in all application Deployment env vars as `OTEL_EXPORTER_OTLP_ENDPOINT`.
-
-If `make full` is run without `make deploy-helm`, applications send to this endpoint but nothing listens — all telemetry is lost. Always run `make full-helm` or follow `make full` with `make deploy-helm`.
+This is the ClusterIP DNS name for the `alloy-receiver` DaemonSet's Service. It is set in all
+application Deployment env vars as `OTEL_EXPORTER_OTLP_ENDPOINT`. If the Helm chart isn't installed
+(e.g. local mode run without `--with-helm`), applications send to this endpoint but nothing listens
+— all telemetry is silently lost. `./scripts/debug.sh` checks this reachability.
 
 ---
 
@@ -110,7 +118,8 @@ open http://localhost:12345
 
 ## Annotation-based metrics scraping
 
-`alloy-metrics` supports automatic scraping of any pod with these annotations (no ServiceMonitor required):
+`alloy-metrics` supports automatic scraping of any pod with these annotations (no ServiceMonitor
+required):
 
 ```yaml
 metadata:
@@ -119,32 +128,16 @@ metadata:
     k8s.grafana.com/metrics.portNumber: "8080"   # adjust to actual metrics port
 ```
 
-Add these to any application pod template to have its Prometheus metrics endpoint scraped automatically.
-
----
-
-## Cloud overlay (optional)
-
-For production-parity testing with Grafana Cloud destinations:
-
-```bash
-# Render Jinja2 template with cloud credentials
-make helm-render
-
-# Deploy with cloud values
-make deploy-helm-cloud
-# = helm upgrade --install ... -f k8s/monitoring/grafana-helm/values-local.yaml -f k8s/monitoring/grafana-helm/generated/values-cloud.yaml
-```
-
-The cloud overlay (`k8s/monitoring/grafana-helm/generated/`) is git-ignored. It is generated from `k8s/monitoring/grafana-helm/config.yaml.j2` by `k8s/monitoring/grafana-helm/render.py`.
+Add these to any application pod template to have its Prometheus metrics endpoint scraped
+automatically.
 
 ---
 
 ## Chart version pinning
 
-The chart is pinned to v3.8.4 in the Makefile. To upgrade:
+The chart version is pinned in `conf.yml`'s `monitoring.helm.version` (currently 3.8.4). To upgrade:
 
-1. Update `HELM_CHART_VERSION` in the Makefile
-2. Review the chart changelog for breaking changes
-3. Run `make deploy-helm` — Helm performs a rolling upgrade
-4. Verify all five roles come up and telemetry continues to flow
+1. Update `monitoring.helm.version` in `conf.yml`.
+2. Review the chart changelog for breaking changes.
+3. Re-run `./deploy-local.sh --skip-cluster --skip-build` — Helm performs a rolling upgrade.
+4. Verify all active roles come up and telemetry continues to flow.

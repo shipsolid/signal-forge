@@ -422,8 +422,8 @@ python -m pytest src/notification-svc/tests/ -v --tb=short
 # See .github/workflows/ci.yml for the /tmp/ng-test-deps workaround
 ```
 
-CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on `workflow_dispatch` (push/PR
-triggers are commented out — path-scoped to this sub-directory for monorepo use):
+CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on `push`/`pull_request` to `main`
+and on manual `workflow_dispatch`:
 
 - `.NET` + Python + Angular unit tests
 - `pip-audit` + `dotnet list package --vulnerable` for known CVEs
@@ -528,22 +528,23 @@ For any step beyond local lab, the following controls are already implemented:
 
 ## Make Targets Reference
 
-The Makefile predates `./deploy-local.sh` and lives alongside it. Targets below still work, but the
-flow is **not** kept in sync with the `conf.yml` refactor. Prefer the equivalent `./deploy-local.sh`
-/ `./scripts/*` commands where available.
+`./deploy-local.sh` is the sole deploy path. The Makefile no longer deploys anything — it only
+builds images, runs tests, and fetches/applies Grafana Cloud credentials. Its former
+`deploy`/`deploy-cloud`/`deploy-local`/`full`/`helm-repo`/`helm-render`/`deploy-helm`/
+`deploy-helm-cloud`/`teardown-helm`/`full-helm` targets (a second, parallel Jinja2-based Helm-values
+pipeline plus a legacy `kubectl apply -f` flow, both superseded by `deploy-local.sh`) were retired;
+`make deploy`/`deploy-cloud`/`deploy-local`/`full` now just print a redirect to `./deploy-local.sh`
+and exit non-zero, so old muscle memory fails loudly instead of silently doing the wrong thing.
 
 ### Cluster lifecycle
 
-| Target              | Description                                    | Equivalent                                                          |
-| ------------------- | ---------------------------------------------- | ------------------------------------------------------------------- |
-| `make cluster-up`   | Create k3d cluster with port mappings          | `./deploy-local.sh` (builds + deploys too)                          |
-| `make cluster-down` | Delete k3d cluster                             | `./deploy-local.sh --teardown`                                      |
-| `make build`        | Build all 4 Docker images locally              | implicit in `./deploy-local.sh`                                     |
-| `make import`       | Build + import images into k3d                 | implicit                                                            |
-| `make deploy`       | Apply all k8s manifests                        | `./deploy-local.sh --skip-cluster --skip-build`                     |
-| `make teardown`     | Delete the `otel-lab` namespace                | use `./deploy-local.sh --teardown` to drop the whole cluster        |
-| `make full`         | `cluster-up` + `import` + `deploy` in one step | `./deploy-local.sh`                                                 |
-| `make full-helm`    | `full` + `deploy-helm` in one step             | `./deploy-local.sh` (Helm install is unconditional in `cloud` mode) |
+| Target              | Description                           | Equivalent                                                   |
+| ------------------- | ------------------------------------- | ------------------------------------------------------------ |
+| `make cluster-up`   | Create k3d cluster with port mappings | `./deploy-local.sh` (builds + deploys too)                   |
+| `make cluster-down` | Delete k3d cluster                    | `./deploy-local.sh --teardown`                               |
+| `make build`        | Build all 4 Docker images locally     | implicit in `./deploy-local.sh`                              |
+| `make import`       | Build + import images into k3d        | implicit                                                     |
+| `make teardown`     | Delete the `otel-lab` namespace       | use `./deploy-local.sh --teardown` to drop the whole cluster |
 
 ### Testing & ops
 
@@ -571,17 +572,13 @@ flow is **not** kept in sync with the `conf.yml` refactor. Prefer the equivalent
 
 ### Helm monitoring
 
-| Target                   | Description                                                                                                                                      |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `make helm-repo`         | Add and update `grafana` Helm repo                                                                                                               |
-| `make helm-render`       | Render [config.yaml.j2](k8s/monitoring/grafana-helm/config.yaml.j2) → `k8s/monitoring/grafana-helm/generated/` via Jinja2 (multi-cluster render) |
-| `make deploy-helm`       | Install/upgrade `grafana/k8s-monitoring` with local values                                                                                       |
-| `make deploy-helm-cloud` | Install using cloud-rendered values (after `helm-render`)                                                                                        |
-| `make teardown-helm`     | Uninstall Helm release, delete `monitoring` namespace                                                                                            |
-
-Note: `./deploy-local.sh` handles the Helm install inline and renders
+There's no separate `make *-helm` step anymore — `./deploy-local.sh` handles the Helm install
+inline, adding the `grafana` repo itself and rendering
 [values-cloud.yaml.tmpl](k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl) directly from
-`conf.yml`. No separate `helm-render` step is needed when using the script.
+`conf.yml` (see [docs/deployment/helm.md](docs/deployment/helm.md)). The Jinja2-based render
+pipeline this table used to document (`render.py` + `config.yaml.j2`, real prod Grafana Cloud
+fingerprints left over from a copy-paste) has been deleted along with the Makefile targets that
+drove it.
 
 ---
 

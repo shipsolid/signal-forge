@@ -13,9 +13,7 @@
 
 ## MySQL 8
 
-**Owner**: gateway-api
-**Database**: `gatewaydb`
-**Tables**: `Projects`
+**Owner**: gateway-api **Database**: `gatewaydb` **Tables**: `Projects`
 
 ### Kubernetes resources
 
@@ -31,7 +29,8 @@ GRANT ALL PRIVILEGES ON gatewaydb.* TO 'gateway'@'%';
 
 ### Credentials
 
-`MYSQL_ROOT_PASSWORD` is injected from `db-secrets` Secret via `secretKeyRef`. No plaintext passwords in manifests.
+`MYSQL_ROOT_PASSWORD` is injected from `db-secrets` Secret via `secretKeyRef`. No plaintext
+passwords in manifests.
 
 The full connection string is stored as a base64-encoded value in `db-secrets`:
 
@@ -41,7 +40,8 @@ GATEWAY_DB_CONNECTION: Server=mysql;Database=gatewaydb;User=gateway;Password=gat
 
 ### OTel instrumentation
 
-`OpenTelemetry.Instrumentation.MySqlData` instruments all MySQL queries via `AddMySqlDataInstrumentation()`. Spans include:
+`OpenTelemetry.Instrumentation.MySqlData` instruments all MySQL queries via
+`AddMySqlDataInstrumentation()`. Spans include:
 
 - `db.system = mysql`
 - `db.name = gatewaydb`
@@ -52,9 +52,7 @@ GATEWAY_DB_CONNECTION: Server=mysql;Database=gatewaydb;User=gateway;Password=gat
 
 ## PostgreSQL 16
 
-**Owner**: order-api
-**Database**: `orderdb`
-**Tables**: `Orders`
+**Owner**: order-api **Database**: `orderdb` **Tables**: `Orders`
 
 ### Kubernetes resources
 
@@ -77,7 +75,8 @@ Host=postgres;Database=orderdb;Username=orderuser;Password=order_pw;
 
 ### OTel instrumentation
 
-`Npgsql.OpenTelemetry` instruments PostgreSQL queries via `UseNpgsql(connStr, opts => opts.UseOpenTelemetry())`. Spans include:
+`Npgsql.OpenTelemetry` instruments PostgreSQL queries via
+`UseNpgsql(connStr, opts => opts.UseOpenTelemetry())`. Spans include:
 
 - `db.system = postgresql`
 - `db.name = orderdb`
@@ -87,10 +86,12 @@ Host=postgres;Database=orderdb;Username=orderuser;Password=order_pw;
 
 ## Redis 7
 
-**Owner**: notification-svc
-**Use**: notification state (`notifications:{order_id}` hash), idempotency dedup
+**Owner**: notification-svc **Use**: notification state (`notifications:{order_id}` hash),
+idempotency dedup
 
-Redis is deployed without a PVC because notification state is ephemeral for the lab — losing Redis state means notifications are re-processed from RabbitMQ history, which is acceptable. In production, use a Redis PVC or managed Redis with persistence.
+Redis is deployed without a PVC because notification state is ephemeral for the lab — losing Redis
+state means notifications are re-processed from RabbitMQ history, which is acceptable. In
+production, use a Redis PVC or managed Redis with persistence.
 
 ### Kubernetes resources
 
@@ -121,14 +122,16 @@ TTL: 86400s (24 hours)
 
 ### Connection resilience
 
-The Redis client (`redis_client.py`) pings before use and reconnects automatically on `ConnectionError`. Connection parameters include `socket_connect_timeout=5`, `socket_keepalive=True`, `health_check_interval=30` for reliability in Kubernetes where pod IPs change on restarts.
+The Redis client (`redis_client.py`) pings before use and reconnects automatically on
+`ConnectionError`. Connection parameters include `socket_connect_timeout=5`,
+`socket_keepalive=True`, `health_check_interval=30` for reliability in Kubernetes where pod IPs
+change on restarts.
 
 ---
 
 ## RabbitMQ 3.13
 
-**Publisher**: order-api
-**Consumer**: notification-svc
+**Publisher**: order-api **Consumer**: notification-svc
 
 ### Kubernetes resources
 
@@ -149,7 +152,8 @@ Exchange: orders.dlq      (fanout, durable)
   → Queue: notifications.dlq (durable)
 ```
 
-The DLQ is declared by notification-svc at consumer startup. Messages NACKed with `requeue=False` are routed there automatically by RabbitMQ.
+The DLQ is declared by notification-svc at consumer startup. Messages NACKed with `requeue=False`
+are routed there automatically by RabbitMQ.
 
 ### Message format
 
@@ -173,7 +177,8 @@ traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
 
 ### Credentials
 
-Default credentials: `guest/guest`. In production, change these and store in the `db-secrets` Secret.
+Default credentials: `guest/guest`. In production, change these and store in the `db-secrets`
+Secret.
 
 ### Inspecting message flow
 
@@ -202,4 +207,5 @@ kubectl apply -f k8s/app/gateway/
 ...
 ```
 
-`make deploy` enforces this order automatically.
+`./deploy-local.sh` enforces this order automatically (`apply_stage datastores` waits for readiness
+before `apply_stage app` runs).

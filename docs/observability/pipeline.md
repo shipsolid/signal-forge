@@ -1,15 +1,25 @@
 # Observability Pipeline
 
-Grafana Alloy is the collector for all signals. The pipeline runs in `alloy-receiver` (a DaemonSet in the `monitoring` namespace, managed by the `grafana/k8s-monitoring` Helm chart).
+Grafana Alloy is the collector for all signals, always installed by `./deploy-local.sh` via the
+`grafana/k8s-monitoring` Helm chart (`alloy-receiver` DaemonSet in the `monitoring` namespace, plus
+`alloy-logs`/`alloy-metrics`/`alloy-singleton`). **Local and cloud mode are two structurally
+different implementations, not two configmaps for the same pipeline:**
 
-Two configmaps implement the same logical pipeline for different export destinations:
-
-- `k8s/monitoring/grafana/grafana-cloud/configmap.yaml` — cloud exporters (default)
-- `k8s/monitoring/grafana/local/configmap.yaml` — local backends
+- **Local mode** (`monitoring.mode: local`) — a hand-authored River pipeline in
+  `k8s/monitoring/grafana/local/configmap.yaml`, applied directly by `deploy-local.sh` alongside the
+  Helm chart. Every stage below (receivers, k8sattributes, env-label, healthz filter, spanmetrics,
+  tail sampling, batch, exporters) is custom code in that file.
+- **Cloud mode** (`monitoring.mode: cloud`, default) — entirely the Helm chart's own
+  `applicationObservability` feature, configured declaratively via
+  `k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl`. There is no equivalent hand-authored
+  configmap — the chart generates its own fixed internal pipeline from those values. See
+  [Cloud mode pipeline](#cloud-mode-pipeline) below; it does **not** have the same stages as local
+  mode, and that's a real, documented capability gap (see
+  [Known gaps in cloud mode](#known-gaps-in-cloud-mode)), not a doc-only difference.
 
 ---
 
-## Pipeline stages
+## Local mode pipeline
 
 ### Stage 1: Receivers
 
@@ -38,12 +48,13 @@ faro.receiver "frontend" {
   }
   output {
     traces = [otelcol.processor.k8sattributes.default.input]
-    logs   = [loki.write.cloud.receiver]   // logs bypass OTel pipeline → direct to Loki
+    logs   = [loki.write.local.receiver]   // logs bypass OTel pipeline → direct to Loki
   }
 }
 ```
 
-Note: Faro logs go directly to `loki.write` (bypassing the OTel batch processor) because they are already structured for Loki and do not need OTLP processing.
+Note: Faro logs go directly to `loki.write` (bypassing the OTel batch processor) because they are
+already structured for Loki and do not need OTLP processing.
 
 ---
 
@@ -75,8 +86,6 @@ Attributes added to every span and metric point (regardless of which service sen
 - `k8s.namespace.name`, `k8s.pod.name`, `k8s.deployment.name`, `k8s.node.name`, `k8s.container.name`
 - Any pod label matching `app.kubernetes.io/*` (e.g. `app.kubernetes.io/name=gateway-api`)
 
-Requires ClusterRole with `get/list/watch` on `pods` and `nodes`. Defined in `k8s/monitoring/grafana/rbac.yaml`.
-
 ---
 
 ### Stage 3: Environment label
@@ -94,7 +103,9 @@ otelcol.processor.transform "env_label" {
 }
 ```
 
-Stamps `deployment.environment = signal-forge-dev` as a resource attribute on any signal that doesn't already have it. This enables environment-based filtering in Grafana without requiring every service to set the attribute explicitly.
+Stamps `deployment.environment = signal-forge-dev` as a resource attribute on any signal that
+doesn't already have it. This enables environment-based filtering in Grafana without requiring every
+service to set the attribute explicitly.
 
 ---
 
@@ -118,9 +129,13 @@ otelcol.processor.filter "healthz" {
 }
 ```
 
-Drops `/healthz` spans before they reach spanmetrics or the sampler. K8s liveness probes fire every 15 seconds across all pods — without this filter they would dominate trace count and span metrics.
+Drops `/healthz` spans before they reach spanmetrics or the sampler. K8s liveness probes fire every
+15 seconds across all pods — without this filter they would dominate trace count and span metrics.
 
-Belt-and-suspenders design: the SDK-level filter (`opts.Filter = ctx => ctx.Request.Path != "/healthz"`) prevents spans from being created at all for .NET services. The collector filter catches anything that slips through from Python or future services.
+Belt-and-suspenders design: the SDK-level filter
+(`opts.Filter = ctx => ctx.Request.Path != "/healthz"`) prevents spans from being created at all for
+.NET services. The collector filter catches anything that slips through from Python or future
+services.
 
 ---
 
@@ -170,7 +185,9 @@ otelcol.processor.tail_sampling "default" {
 }
 ```
 
-See [Tail-Based Sampling](sampling.md) for policy rationale and validation approach.
+See [Tail-Based Sampling](sampling.md) for policy rationale and validation approach. **This
+processor has no equivalent in cloud mode** — see
+[Known gaps in cloud mode](#known-gaps-in-cloud-mode).
 
 ---
 
@@ -183,46 +200,12 @@ otelcol.processor.batch "default" {
 }
 ```
 
-Buffers up to 1024 signals or 5 seconds, whichever comes first, before flushing to exporters. Reduces exporter connections and amortises network round trips.
+Buffers up to 1024 signals or 5 seconds, whichever comes first, before flushing to exporters.
+Reduces exporter connections and amortises network round trips.
 
 ---
 
 ### Stage 8: Exporters
-
-#### Cloud mode (`grafana-cloud/configmap.yaml`)
-
-```river
-// Traces → Grafana Cloud Tempo (OTLP gRPC, :443)
-otelcol.exporter.otlp "grafana_cloud_traces" {
-  client {
-    endpoint = env("GRAFANA_CLOUD_TEMPO_ENDPOINT")   // host:443, no https://
-    auth     = otelcol.auth.basic.grafana_cloud_tempo.handler
-  }
-}
-
-// Metrics → Grafana Cloud Mimir (OTLP HTTP)
-otelcol.exporter.otlphttp "grafana_cloud_metrics" {
-  client {
-    endpoint = env("GRAFANA_CLOUD_MIMIR_ENDPOINT")   // https://host/api/v1/otlp
-    auth     = otelcol.auth.basic.grafana_cloud_mimir.handler
-  }
-}
-
-// OTLP logs → Grafana Cloud Loki (OTLP HTTP)
-otelcol.exporter.otlphttp "grafana_cloud_logs" {
-  client {
-    endpoint = env("GRAFANA_CLOUD_LOKI_ENDPOINT")    // https://host/loki/api/v1/push
-    auth     = otelcol.auth.basic.grafana_cloud_loki.handler
-  }
-}
-
-// Separate auth blocks — each signal type has its own instance ID
-otelcol.auth.basic "grafana_cloud_tempo"  { username = env("GRAFANA_CLOUD_TEMPO_USER");  password = env("GRAFANA_CLOUD_API_KEY") }
-otelcol.auth.basic "grafana_cloud_mimir" { username = env("GRAFANA_CLOUD_MIMIR_USER");  password = env("GRAFANA_CLOUD_API_KEY") }
-otelcol.auth.basic "grafana_cloud_loki"  { username = env("GRAFANA_CLOUD_LOKI_USER");   password = env("GRAFANA_CLOUD_API_KEY") }
-```
-
-#### Local mode (`local/configmap.yaml`)
 
 ```river
 // Traces → Jaeger (OTLP gRPC, insecure)
@@ -246,9 +229,10 @@ prometheus.remote_write "local" {
 
 ---
 
-### Log tailing pipeline (both modes)
+### Log tailing pipeline
 
-This pipeline runs independently from the OTLP pipeline. It tails pod stdout from the `otel-lab` namespace.
+This pipeline runs independently from the OTLP pipeline. It tails pod stdout from the `otel-lab`
+namespace.
 
 ```river
 discovery.kubernetes "pods" {
@@ -270,7 +254,8 @@ loki.source.kubernetes "pod_logs" {
 }
 ```
 
-The `trace_correlation` processor extracts trace IDs from JSON log lines of both .NET and Python services:
+The `trace_correlation` processor extracts trace IDs from JSON log lines of both .NET and Python
+services:
 
 ```river
 loki.process "trace_correlation" {
@@ -289,17 +274,19 @@ loki.process "trace_correlation" {
   stage.template { source = "level";    template = "{{ if .dotnet_level }}{{ .dotnet_level }}{{ else }}{{ .python_level }}{{ end }}" }
   stage.labels           { values = { level = "" } }
   stage.structured_metadata { values = { trace_id = "trace_id", span_id = "span_id" } }
-  forward_to = [loki.write.cloud.receiver]
+  forward_to = [loki.write.local.receiver]
 }
 ```
 
-`trace_id` and `span_id` are stored as Loki **structured metadata** (not stream labels) because trace IDs are high-cardinality — using them as stream labels would cause label explosion in Loki.
+`trace_id` and `span_id` are stored as Loki **structured metadata** (not stream labels) because
+trace IDs are high-cardinality — using them as stream labels would cause label explosion in Loki.
 
-Grafana's Jaeger datasource `tracesToLogsV2` config queries Loki for `{trace_id="<id>"}` to provide "Logs for this span" in the trace view.
+Grafana's Jaeger datasource `tracesToLogsV2` config queries Loki for `{trace_id="<id>"}` to provide
+"Logs for this span" in the trace view.
 
 ---
 
-## Full pipeline data flow
+### Full local-mode data flow
 
 ```
 OTLP gRPC :4317 ──┐
@@ -310,3 +297,48 @@ Faro HTTP :12347 ─┘   (pod metadata)  (env stamp)  │                      
 
 Pod stdout ── loki.source.kubernetes ── trace_correlation ── loki.write ── Loki
 ```
+
+---
+
+## Cloud mode pipeline
+
+Cloud mode has no hand-authored River config at all. `deploy-local.sh` renders
+[`values-cloud.yaml.tmpl`](../../k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl) (substituting
+`${...}` placeholders from `conf.yml`) and passes it to `helm upgrade` for the
+`grafana/k8s-monitoring` chart. The chart's `applicationObservability` feature generates its own
+**fixed, templated pipeline** from those values — not something this repo controls stage-by-stage
+the way local mode's configmap does:
+
+```text
+OTLP gRPC :4317 ──┐
+OTLP HTTP :4318 ──┴── resourcedetection ── k8sattributes ── transform ── batch ── destinations
+                                                                            (Mimir / Loki / Tempo)
+```
+
+There is no spanmetrics connector, healthz filter, or tail-sampling stage enabled in this repo's
+cloud config — `values-cloud.yaml.tmpl` only sets `destinations`, `applicationObservability.enabled`
+and `receivers.otlp`, `clusterMetrics`, `clusterEvents`, and `nodeLogs`/`podLogs` processing stages.
+
+### Log↔trace correlation (cloud mode)
+
+`podLogs.extraLogProcessingStages` in `values-cloud.yaml.tmpl` carries the same JSON-extraction +
+structured-metadata logic as local mode's `trace_correlation` stage above, ported through the
+chart's raw-River-snippet hook (the same mechanism already used there for ANSI-stripping and
+kube-system log-level dropping). The Helm chart runs `tpl` on this value, so the Go-template
+delimiters inside it are escaped (`{{"{{"}}` / `{{"}}"}}`) to survive Helm's render pass intact —
+see the comment in the values file for why.
+
+---
+
+## Known gaps in cloud mode
+
+**No sampling of any kind.** The `grafana/k8s-monitoring` chart's `applicationObservability` feature
+has no tail-sampling or probabilistic-sampling processor anywhere in its values schema (verified by
+reading every processor/connector option in the chart's `feature-application-observability`
+subchart, v3.8.4) — head-based or tail-based. Adding one would require forking the chart's
+templates, which this repo deliberately doesn't do (no vendored chart copy). Cloud mode sends **100%
+of trace volume** to Tempo today. This is a real cost/cardinality tradeoff worth naming explicitly
+rather than leaving silent: acceptable at this lab's traffic volume, but would need revisiting
+(either accepting the cost, or forking the chart) before treating cloud mode as
+production-representative at higher volume. See [sampling.md](sampling.md) for the local-mode
+reference implementation this doesn't have an equivalent for.

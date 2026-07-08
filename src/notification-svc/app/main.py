@@ -27,7 +27,7 @@ from fastapi import FastAPI, HTTPException
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pythonjsonlogger import jsonlogger
 
-from app.consumer import start_consumer
+from app.consumer import is_connected, start_consumer
 from app.redis_client import get_redis
 from app.telemetry import setup_telemetry
 
@@ -131,8 +131,34 @@ FastAPIInstrumentor().instrument_app(app, excluded_urls="/healthz")
 
 @app.get("/healthz", include_in_schema=False)
 def health():
-    """Liveness/readiness probe — no OTel span, no Loki log."""
+    """
+    Liveness probe — no OTel span, no Loki log.
+
+    Deliberately just "is the process alive": a k8s liveness failure restarts the
+    pod, which is the wrong response to "RabbitMQ is unreachable" or "Redis is
+    down" — those are readiness concerns (see /readyz), not process-health ones.
+    """
     return {"status": "healthy"}
+
+
+@app.get("/readyz", include_in_schema=False)
+def ready():
+    """
+    Readiness probe — reflects actual consumer/Redis state, unlike /healthz.
+
+    A stuck consumer (backed off after repeated RabbitMQ connection failures,
+    see consumer.py's _consumer_loop) or an unreachable Redis previously still
+    reported healthy on both probes, so k8s kept routing traffic to a pod doing
+    no useful work. Failing readiness here pulls the pod from service rotation
+    without restarting it — restarting wouldn't fix an external dependency outage.
+    """
+    if not is_connected():
+        raise HTTPException(status_code=503, detail="RabbitMQ consumer not connected")
+    try:
+        get_redis().ping()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Redis unreachable") from exc
+    return {"status": "ready"}
 
 
 @app.get("/notifications")

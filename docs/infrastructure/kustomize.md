@@ -55,6 +55,13 @@ spec:
     targetRevision: main
 ```
 
+**Prerequisite for TLS:** the Ingress in this layout references a `ClusterIssuer`
+(`cert-manager.io/cluster-issuer: signal-forge-ca`) that this Kustomize tree does **not**
+create — see the `cert-manager-issuer.yaml` gotcha below. Apply
+[k8s/infra/cert-manager-issuer.yaml](../../k8s/infra/cert-manager-issuer.yaml) with cert-manager
+already installed in the target cluster before or alongside your GitOps sync, or certs never
+provision and the Ingress silently sits without TLS.
+
 ## What each overlay changes vs. base
 
 ### dev
@@ -107,6 +114,19 @@ The `op: replace` form is JSON Patch RFC 6902, not strategic merge — it's expl
 
 ## Gotchas
 
+- **`cert-manager-issuer.yaml` is deliberately not in `k8s/infra/kustomization.yaml`'s
+  resource list**, even though the Ingress it backs _is_ part of this tree.
+  `k8s/base/kustomization.yaml` sets a blanket `namespace: otel-lab`, and Kustomize's
+  namespace transformer has no idea `ClusterIssuer` is a cluster-scoped CRD kind — it
+  stamps `namespace: otel-lab` onto it anyway (harmless, ignored by the API server for a
+  cluster-scoped object) but, worse, it also **overwrites** the CA-bootstrap
+  `Certificate`'s explicit `namespace: cert-manager` with `otel-lab`, which silently
+  breaks cert-manager's CA chain (the `ClusterIssuer`'s `ca.secretName` reference expects
+  that Secret in cert-manager's own namespace). `deploy-local.sh` already applies this
+  file as a separate, ungated-by-Kustomize step (`install_cert_manager`, gated by
+  `security.tls.enabled`) — GitOps consumers need to do the same: `kubectl apply -f
+  k8s/infra/cert-manager-issuer.yaml` once cert-manager is installed, outside the
+  `kubectl apply -k` sync.
 - **`commonLabels` is deprecated.** This repo uses the replacement `labels:` block with `pairs:`. Kustomize ≥ 5.0 nags on `commonLabels`.
 - **`--load-restrictor=LoadRestrictionsNone` is not required.** The sub-kustomization layout means every file loaded by a kustomization.yaml is in its own directory tree. Running `kustomize build` without extra flags should always succeed.
 - **ConfigMap generators.** Not used anywhere. The `signal-forge-app-env` ConfigMap is rendered by `deploy-local.sh` from a template (`k8s/infra/app-env.yaml.tmpl`) rather than via Kustomize's `configMapGenerator`, because its values come from `conf.yml` (Kustomize can't read arbitrary YAML). If you want a ConfigMap generator, wire it in the overlay.

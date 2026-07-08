@@ -53,15 +53,50 @@ spec:
     matchLabels:
       app: otel-frontend
 ---
+# One PDB per datastore, not a single PDB shared across the tier: a shared
+# minAvailable:1 selector spanning all four is satisfied by the pool (e.g. mysql +
+# postgres + rabbitmq could all be evicted simultaneously while only redis remains,
+# legally satisfying "1 available"). Each store needs its own budget.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: datastores
+  name: mysql
   namespace: otel-lab
 spec:
-  # Single-replica stateful stores — block any voluntary eviction.
-  # On k3d this matters less (1 node), but catches ops errors on real clusters.
   minAvailable: 1
   selector:
     matchLabels:
-      tier: datastore
+      app: mysql
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: postgres
+  namespace: otel-lab
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: postgres
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis
+  namespace: otel-lab
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: redis
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rabbitmq
+  namespace: otel-lab
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: rabbitmq

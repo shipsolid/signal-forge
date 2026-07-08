@@ -78,12 +78,17 @@ spec:
               cpu: 300m
               memory: 256Mi
           readinessProbe:
+            # /readyz reflects actual consumer/Redis state — a backed-off consumer or
+            # unreachable Redis pulls this pod from service rotation instead of
+            # reporting healthy while doing no useful work.
             httpGet:
-              path: /healthz
+              path: /readyz
               port: 8000
             initialDelaySeconds: 15
             periodSeconds: 10
           livenessProbe:
+            # Deliberately the simpler /healthz (process alive only) — restarting the
+            # pod is the wrong response to an external dependency outage.
             httpGet:
               path: /healthz
               port: 8000

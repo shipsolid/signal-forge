@@ -3,6 +3,8 @@ Route tests for notification-svc FastAPI endpoints.
 Uses fakeredis so no real Redis connection is needed.
 """
 
+from unittest.mock import patch
+
 import pytest
 
 
@@ -10,6 +12,30 @@ def test_health_returns_200(client):
     resp = client.get("/healthz")
     assert resp.status_code == 200
     assert resp.json() == {"status": "healthy"}
+
+
+def test_ready_when_consumer_connected_and_redis_up(client):
+    with patch("app.main.is_connected", return_value=True):
+        resp = client.get("/readyz")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ready"}
+
+
+def test_not_ready_when_consumer_disconnected(client):
+    with patch("app.main.is_connected", return_value=False):
+        resp = client.get("/readyz")
+    assert resp.status_code == 503
+    assert "consumer" in resp.json()["detail"].lower()
+
+
+def test_not_ready_when_redis_unreachable(client):
+    with (
+        patch("app.main.is_connected", return_value=True),
+        patch("app.main.get_redis", side_effect=ConnectionError("down")),
+    ):
+        resp = client.get("/readyz")
+    assert resp.status_code == 503
+    assert "redis" in resp.json()["detail"].lower()
 
 
 def test_list_notifications_empty(client):
