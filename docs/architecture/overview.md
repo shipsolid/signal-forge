@@ -114,7 +114,9 @@ sequenceDiagram
     Notif->>Redis: Redis child: db.redis
 ```
 
-The RabbitMQ hop uses a **SpanLink** (not parent-child) because message processing is asynchronous and may involve retries. Both spans share the same `traceId`. In Jaeger this renders as a dashed arrow.
+The RabbitMQ hop uses a **SpanLink** (not parent-child) because message processing is asynchronous
+and may involve retries. Both spans share the same `traceId`. In Jaeger this renders as a dashed
+arrow.
 
 ## Signal flow by type
 
@@ -159,7 +161,8 @@ flowchart LR
     lokiwrite3 --> dest3["Loki (local) or<br/>Grafana Cloud Loki"]
 ```
 
-Note: `OTEL_LOGS_EXPORTER=none` is set on all services. Logs travel via node-level tailing, not OTLP push. This is the production pattern for high-volume log shipping.
+Note: `OTEL_LOGS_EXPORTER=none` is set on all services. Logs travel via node-level tailing, not OTLP
+push. This is the production pattern for high-volume log shipping.
 
 ### Browser RUM
 
@@ -172,17 +175,19 @@ flowchart LR
 
 ## Deployment modes
 
-| Mode            | Command                                                                    | Backends                                     | Use case                                  |
-| --------------- | -------------------------------------------------------------------------- | -------------------------------------------- | ----------------------------------------- |
-| Local (default) | `./deploy-local.sh`                                                        | Jaeger, Prometheus, Loki, Grafana in-cluster | Default — no cloud credentials needed     |
-| Cloud (opt-in)  | `./scripts/fetch-grafana-cloud-conf-from-akv.sh` then `./deploy-local.sh`  | Grafana Cloud Tempo/Mimir/Loki               | End-to-end validation with remote storage |
+| Mode            | Command                                                                   | Backends                                     | Use case                                  |
+| --------------- | ------------------------------------------------------------------------- | -------------------------------------------- | ----------------------------------------- |
+| Local (default) | `./deploy-local.sh`                                                       | Jaeger, Prometheus, Loki, Grafana in-cluster | Default — no cloud credentials needed     |
+| Cloud (opt-in)  | `./scripts/fetch-grafana-cloud-conf-from-akv.sh` then `./deploy-local.sh` | Grafana Cloud Tempo/Mimir/Loki               | End-to-end validation with remote storage |
 
 The Alloy collector configuration is separate per mode:
 
-- Cloud: `k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl` (Helm values rendered by `deploy-local.sh`)
+- Cloud: `k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl` (Helm values rendered by
+  `deploy-local.sh`)
 - Local: `k8s/monitoring/grafana/local/configmap.yaml` (hand-rolled DaemonSet — reference artifact)
 
-See [CLAUDE.md](../../CLAUDE.md) for the full command reference and safety checks built into `deploy-local.sh`.
+See [CLAUDE.md](../../CLAUDE.md) for the full command reference and safety checks built into
+`deploy-local.sh`.
 
 ## Port map (after `./deploy-local.sh`)
 
