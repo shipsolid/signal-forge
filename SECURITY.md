@@ -3,7 +3,8 @@
 SignalForge is a personal lab / portfolio project (single owner, no production deployment, no
 SLA — see [README.md § Ownership Boundary](README.md#ownership-boundary)). This page covers how to
 report a vulnerability. For the threat model, secrets lifecycle, and hardening controls, see
-[docs/operations/security.md](docs/operations/security.md).
+[Security](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/operations/security/)
+in the docs.
 
 ## Scope
 

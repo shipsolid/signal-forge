@@ -13,7 +13,8 @@ namespace IntegrationTests;
 // plus order-api and notification-svc built from their actual Dockerfiles (not
 // project references) — the same two images deploy-local.sh builds for k3d,
 // built here instead for a real broker + a real second-language consumer to
-// exercise, without needing a cluster. See docs/testing.md for how to invoke
+// exercise, without needing a cluster. See
+// https://shipsolid.github.io/notes/shipsolid/app-signal-forge/testing/ for how to invoke
 // this project; it is NOT part of the default `dotnet test` run (no Docker
 // dependency assumed there).
 public sealed class CrossLanguageTraceFixture : IAsyncLifetime

@@ -21,7 +21,8 @@ namespace IntegrationTests;
 // OutboxRelayWorker.PublishAndMarkAsync for the fix this test also verifies.
 //
 // Not part of the fast default suite — needs Docker to build two real service
-// images and run five containers. See docs/testing.md for how to run this
+// images and run five containers. See
+// https://shipsolid.github.io/notes/shipsolid/app-signal-forge/testing/ for how to run this
 // explicitly; expect it to take real time (image builds + container startups).
 [Trait("Category", "Integration")]
 [Collection("CrossLanguageTrace")]

@@ -102,7 +102,7 @@ The K8s `securityContext.runAsUser` **must** match the Dockerfile's `USER`. `run
 refuses mismatches at schedule time.
 
 Frontend is the documented exception to `readOnlyRootFilesystem: true` — see
-[docs/infrastructure/hardening.md](docs/infrastructure/hardening.md) for why.
+[Container hardening](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/infrastructure/hardening/) for why.
 
 ## Commands
 
@@ -138,7 +138,7 @@ Auth: either `az login` first, or export `ARM_CLIENT_ID` + `ARM_CLIENT_SECRET` i
 `.env` loading).
 
 `push-slo-rules-to-mimir.sh` is the mode=cloud counterpart to `observability.slo_rules` — see
-[docs/observability/slos.md](docs/observability/slos.md#where-the-alerts-are-evaluated).
+[SLOs & burn-rate alerts](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/observability/slos/#where-the-alerts-are-evaluated).
 mode=local needs no manual step; `deploy-local.sh` loads the same rules file automatically.
 
 ### Tests / CI
@@ -221,18 +221,21 @@ kubectl apply -k k8s/overlays/dev           # apply dev overlay
 
 ## Docs map
 
-See [docs/README.md](docs/README.md) for the index. The most load-bearing pages:
+Full docs for this app have moved to the ShipSolid platform notes site — `docs/` in this repo is
+now just a one-line pointer (`docs/README.md`), it no longer holds content.
 
-- [docs/infrastructure/hardening.md](docs/infrastructure/hardening.md) — per-image UID table,
-  Dockerfile conventions, frontend readOnly exception
-- [docs/infrastructure/kustomize.md](docs/infrastructure/kustomize.md) — base + overlays layout, how
-  deploy-local.sh consumes it
-- [docs/infrastructure/datastore-ha.md](docs/infrastructure/datastore-ha.md) — operator migration
-  (CNPG / MySQL Operator / RabbitMQ Operator / Redis Sentinel) when graduating beyond single-replica
-- [docs/operations/networking.md](docs/operations/networking.md) — NetworkPolicy model + flannel
-  caveat + cert-manager flow
-- [docs/operations/supply-chain.md](docs/operations/supply-chain.md) — CI scan/SBOM/sign
-- [docs/observability/slos.md](docs/observability/slos.md) — SLI recording rules + multi-window burn
-  alerts
-- [docs/deployment/grafana-cloud.md](docs/deployment/grafana-cloud.md) — full AKV → conf.yml →
-  Secret credential model
+- **Canonical source** — read this absolute path directly with the `Read` tool, regardless of your
+  current working directory:
+  `/home/amit/repos/shipsolid--architect-learning-lab/_shipsolid.github.io/src/content/notes/shipsolid/app-signal-forge/`
+  Start at `app-signal-forge/README.md` for the full index; the most load-bearing pages are:
+  - `infrastructure/hardening.md` — per-image UID table, Dockerfile conventions, frontend readOnly
+    exception
+  - `infrastructure/kustomize.md` — base + overlays layout, how deploy-local.sh consumes it
+  - `infrastructure/datastore-ha.md` — operator migration (CNPG / MySQL Operator / RabbitMQ
+    Operator / Redis Sentinel) when graduating beyond single-replica
+  - `operations/networking.md` — NetworkPolicy model + flannel caveat + cert-manager flow
+  - `operations/supply-chain.md` — CI scan/SBOM/sign
+  - `observability/slos.md` — SLI recording rules + multi-window burn alerts
+  - `deployment/grafana-cloud.md` — full AKV → conf.yml → Secret credential model
+  - `architecture/adrs/` — 10 ADRs for every non-obvious design choice
+- **Published**: <https://shipsolid.github.io/notes/shipsolid/app-signal-forge/>

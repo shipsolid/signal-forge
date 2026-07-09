@@ -382,7 +382,8 @@ jobs:
       # Signatures were produced but never verified anywhere downstream —
       # "we sign our images" provided audit value only, zero enforcement.
       # This doesn't add admission-time enforcement (still a cluster-scoped
-      # decision — see docs/operations/security.md and supply-chain.md) but
+      # decision — see https://shipsolid.github.io/notes/shipsolid/app-signal-forge/operations/security/
+      # and operations/supply-chain.md) but
       # it does mean the sign→verify round-trip is actually exercised on
       # every push to main, catching config drift in the signing step itself
       # instead of only ever being checked manually, if at all.

@@ -3,8 +3,9 @@
 # highest-volume downstream). CPU utilization only — a real SLO-burn-rate-
 # driven HPA needs a custom-metrics adapter (e.g. prometheus-adapter) reading
 # the burn-rate recording rules in k8s/monitoring/slo-rules.yaml, which isn't
-# wired up here (see docs/operations/reliability.md's "what this doesn't
-# cover"). Requires metrics-server in the target cluster — not installed by
+# wired up here (see operations/reliability's "what this doesn't cover" at
+# https://shipsolid.github.io/notes/shipsolid/app-signal-forge/operations/reliability/).
+# Requires metrics-server in the target cluster — not installed by
 # deploy-local.sh, since k3d/local dev has no need for autoscaling.
 #
 # minReplicas matches this overlay's static replica patch in
