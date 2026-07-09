@@ -160,6 +160,33 @@ CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs all four test sta
 `dotnet list package --vulnerable` + Trivy scan (HIGH/CRITICAL, fixed-only) + Syft SBOM
 (CycloneDX) + cosign keyless sign on `main` push.
 
+### Pre-commit hooks
+
+One-time local setup:
+
+```bash
+make hooks-install
+# equivalent to: pip install pre-commit && pre-commit install
+```
+
+After that, hooks run automatically on every `git commit`. To run the same checks CI runs, on
+demand, against the whole tree:
+
+```bash
+pre-commit run --all-files
+```
+
+Covers: gitleaks (secret scanning, reuses root `.gitleaks.toml`), `ruff format`/`ruff check` for
+`src/notification-svc/`, `prettier --check` for `src/frontend/`, `dotnet format --verify-no-changes`
+per .NET project, `yamllint` for `k8s/**/*.yaml` + `conf.yml`, a `kubectl kustomize` build check for
+`k8s/base` and every `k8s/overlays/*`, and standard hygiene (trailing whitespace, EOF newline,
+merge-conflict markers, large-file guard, YAML/JSON/TOML syntax). ESLint for the frontend and
+Ruff's full lint rule catalogue are intentionally deferred — see `.pre-commit-config.yaml`'s header
+comment for why.
+
+CI runs `pre-commit run --all-files` in its own job (`workflow_dispatch`-only, like the rest of
+`ci.yml`).
+
 ### Kustomize
 
 ```bash

@@ -18,7 +18,7 @@ IMAGES         := otel-frontend gateway-api order-api notification-svc
 .PHONY: cluster-up cluster-down build import teardown test logs validate \
         secrets-fetch-akv secrets-apply secrets-show \
         test-unit test-dotnet test-python test-frontend \
-        deploy deploy-cloud deploy-local full
+        deploy deploy-cloud deploy-local full hooks-install
 
 cluster-up:
 	k3d cluster create $(CLUSTER) \
@@ -88,6 +88,14 @@ deploy deploy-cloud deploy-local full:
 
 teardown:
 	kubectl delete namespace $(NAMESPACE) --ignore-not-found
+
+# One-time local dev setup — installs pre-commit and wires up the git hook.
+# Safe to re-run. See CLAUDE.md's "Pre-commit hooks" section.
+hooks-install:
+	pip install --quiet --upgrade pre-commit
+	pre-commit install
+	@echo "pre-commit installed — hooks now run on every 'git commit'."
+	@echo "Run 'pre-commit run --all-files' to check the whole tree on demand."
 
 # Run all unit/integration tests locally — no cluster required.
 test-unit: test-dotnet test-python test-frontend
@@ -250,4 +258,3 @@ validate:
 	@echo "=== Grafana ===" && curl -sfI http://localhost:3000 | head -3
 	@echo "=== Prometheus ===" && curl -sfI http://localhost:9090 | head -3
 	@echo "=== RabbitMQ ===" && curl -sfI http://localhost:15672 | head -3
-

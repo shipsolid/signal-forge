@@ -1,0 +1,143 @@
+# See CLAUDE.md's "Pre-commit hooks" section for one-time setup
+# (`make hooks-install`, or `pip install pre-commit && pre-commit install`)
+# and what each hook covers.
+#
+# Scope notes (deliberately conservative for a first adoption on a codebase
+# that has never run a formatter or linter):
+#   - Python (src/notification-svc/): ruff format + ruff check, using ruff's
+#     own conservative default lint rule set — see
+#     src/notification-svc/pyproject.toml.
+#   - Frontend (src/frontend/): prettier only. ESLint is intentionally
+#     deferred — it needs @angular-eslint schematics plus a real triage pass
+#     of an unknown number of pre-existing violations; that's its own
+#     follow-up change, not bundled here.
+#   - .NET: dotnet format --verify-no-changes, one hook per project (no
+#     shared .sln exists). Whitespace-only in practice — no .editorconfig
+#     severities are set for style/analyzer categories, so those stay
+#     silent/no-op by default.
+#   - K8s: yamllint (hygiene/syntax only, see .yamllint) plus a
+#     kustomize-build smoke test. Helm chart itself isn't vendored here
+#     (only values files, which yamllint already covers), so no helm
+#     lint/template step.
+#   - Secrets: gitleaks, reusing the existing root .gitleaks.toml — it's
+#     auto-discovered (gitleaks checks `<target>/.gitleaks.toml` by default
+#     when no --config is passed; pre-commit always runs from the repo
+#     root), no explicit --config arg needed.
+
+exclude: |
+  (?x)^(
+    src/frontend/node_modules/.*|
+    src/frontend/package-lock\.json|
+    src/frontend/(dist|coverage|\.angular|out-tsc)/.*|
+    src/.*/(bin|obj)/.*|
+    src/notification-svc/(\.venv|\.pytest_cache)/.*|
+    k8s/monitoring/grafana-helm/generated/.*
+  )
+
+fail_fast: false
+
+repos:
+  # ── General hygiene ───────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-json
+      - id: check-toml
+      - id: detect-private-key
+
+  # ── Secret scanning ───────────────────────────────────────────────────
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  # ── Python (src/notification-svc/) ───────────────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff-check
+        files: ^src/notification-svc/
+        args: [--fix]
+      - id: ruff-format
+        files: ^src/notification-svc/
+
+  # ── K8s YAML hygiene ──────────────────────────────────────────────────
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        files: ^(k8s/.*\.yaml|conf\.yml)$
+
+  # ── Frontend formatting (src/frontend/) ──────────────────────────────
+  # Local hook, not pre-commit/mirrors-prettier: that mirror's newest
+  # *stable* tag is v3.1.0 (Nov 2023) — everything since is v4 alphas — so
+  # it's meaningfully behind real prettier (3.9.x as of this writing).
+  # Using the frontend's own npm-installed prettier keeps one source of
+  # truth for the version (src/frontend/package.json), shared with the
+  # `npm run format` script.
+  - repo: local
+    hooks:
+      - id: prettier-frontend
+        name: prettier (frontend)
+        # --no-install: fail loudly if `npm ci` hasn't run yet, instead of
+        # npx silently trying to fetch prettier over the network (see
+        # CLAUDE.md's Zscaler note for why that's its own can of worms).
+        entry: bash -c 'cd src/frontend && npx --no-install prettier --check .'
+        language: system
+        files: ^src/frontend/.*\.(ts|html|css|json|js)$
+        exclude: ^src/frontend/(node_modules|dist|coverage|\.angular|out-tsc)/
+        pass_filenames: false
+
+  # ── .NET formatting — one hook per project; no shared .sln exists ────
+  - repo: local
+    hooks:
+      - id: dotnet-format-order-api
+        name: dotnet format (order-api)
+        entry: dotnet format src/order-api/order-api.csproj --no-restore --verify-no-changes
+        language: system
+        files: ^(src/order-api/.*\.cs|src/proto/OrderValidation\.cs)$
+        pass_filenames: false
+      - id: dotnet-format-order-api-tests
+        name: dotnet format (order-api.Tests)
+        entry: dotnet format src/order-api.Tests/order-api.Tests.csproj --no-restore --verify-no-changes
+        language: system
+        files: ^src/order-api\.Tests/.*\.cs$
+        pass_filenames: false
+      - id: dotnet-format-gateway-api
+        name: dotnet format (gateway-api)
+        entry: dotnet format src/gateway-api/gateway-api.csproj --no-restore --verify-no-changes
+        language: system
+        files: ^(src/gateway-api/.*\.cs|src/proto/OrderValidation\.cs)$
+        pass_filenames: false
+      - id: dotnet-format-gateway-api-tests
+        name: dotnet format (gateway-api.Tests)
+        entry: dotnet format src/gateway-api.Tests/gateway-api.Tests.csproj --no-restore --verify-no-changes
+        language: system
+        files: ^src/gateway-api\.Tests/.*\.cs$
+        pass_filenames: false
+      - id: dotnet-format-integration-tests
+        name: dotnet format (integration-tests)
+        entry: dotnet format src/integration-tests/integration-tests.csproj --no-restore --verify-no-changes
+        language: system
+        files: ^src/integration-tests/.*\.cs$
+        pass_filenames: false
+
+  # ── K8s manifest sanity ───────────────────────────────────────────────
+  - repo: local
+    hooks:
+      - id: kustomize-build
+        name: kustomize build (base + overlays)
+        entry: scripts/pre-commit/validate-kustomize-build.sh
+        language: script
+        files: ^k8s/.*\.yaml$
+        pass_filenames: false

@@ -26,6 +26,64 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # ── Pre-commit hooks (formatting/lint/hygiene/manifest sanity) ─────────────
+  # Mirrors what `pre-commit install` runs locally on every commit — see
+  # .pre-commit-config.yaml and CLAUDE.md's "Pre-commit hooks" section.
+  # Stays workflow_dispatch-only, consistent with the rest of this file.
+  #
+  # SKIP=gitleaks: the gitleaks hook's default entry scans `git diff --staged`
+  # (built for the local commit-time hook) — that's empty on a fresh CI
+  # checkout, so it would trivially report "no leaks found" without actually
+  # scanning anything. Full-history secret scanning is already covered by
+  # the secret-scan job above (gitleaks-action, fetch-depth 0); no need to
+  # duplicate it here with a check that can't actually catch anything.
+  pre-commit:
+    name: Pre-commit hooks (all files)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+
+      - name: Install pre-commit
+        run: pip install pre-commit==4.6.0
+
+      - name: Cache pre-commit environments
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Restore .NET projects
+        run: |
+          dotnet restore src/order-api/order-api.csproj
+          dotnet restore src/order-api.Tests/order-api.Tests.csproj
+          dotnet restore src/gateway-api/gateway-api.csproj
+          dotnet restore src/gateway-api.Tests/gateway-api.Tests.csproj
+          dotnet restore src/integration-tests/integration-tests.csproj
+
+      - name: Install frontend dependencies
+        run: npm ci --legacy-peer-deps
+        working-directory: src/frontend
+
+      - name: Run pre-commit on all files
+        run: pre-commit run --all-files --show-diff-on-failure
+        env:
+          SKIP: gitleaks
+
   # ── .NET services ────────────────────────────────────────────────────────────
   test-dotnet:
     name: .NET tests
