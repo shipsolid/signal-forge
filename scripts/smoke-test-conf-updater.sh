@@ -1,40 +1,66 @@
 #!/usr/bin/env bash
 # smoke-test-conf-updater.sh
 #
-# Offline regression test for the in-place conf.yml updater used by
+# Offline regression test for the in-place env-file updater used by
 # fetch-grafana-cloud-conf-from-akv.sh.
 #
-# Feeds synthetic values through the updater logic against a *copy* of
-# conf.yml (the real file is never touched) and asserts:
-#   - every target leaf path is updated (9 fields)
-#   - the top-level grafana_cloud.api_key and the nested faro.api_key are
-#     disambiguated correctly (they share a key name but different paths)
+# Feeds synthetic values through the updater logic against a synthetic env
+# file (nothing under version control is touched) and asserts:
+#   - every target key is updated (7 pre-existing) or appended (2 missing —
+#     exercises the "key not present yet" path)
 #   - every comment line in the original file is preserved verbatim
-#   - every field outside monitoring.grafana_cloud.{api_key,tempo,mimir,loki,faro}
-#     is untouched (e.g. the monitoring.grafana_cloud.akv.* block must survive)
+#   - unrelated lines (ARM_*, a custom key) are untouched
 #
 # Run after any change to the updater logic in
 # scripts/fetch-grafana-cloud-conf-from-akv.sh. Exits non-zero on any failure.
 #
 # Usage:
-#   ./scripts/smoke-test-conf-updater.sh                       # against ../conf.yml
-#   CONF_FILE=/path/to/other.yml ./scripts/smoke-test-conf-updater.sh
+#   ./scripts/smoke-test-conf-updater.sh
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-CONF_FILE="${CONF_FILE:-${REPO_DIR}/conf.yml}"
-
-[[ -f "$CONF_FILE" ]] || { echo "ERROR: conf file not found: $CONF_FILE" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "ERROR: python3 required" >&2; exit 1; }
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
-TMP_CONF="${TMP_DIR}/conf.yml"
-cp "$CONF_FILE" "$TMP_CONF"
+TMP_ENV="${TMP_DIR}/.env"
 
-echo "==> smoke-testing updater against copy: $TMP_CONF"
+# Synthetic fixture: 7 of the 9 target keys pre-populated (to exercise the
+# update-in-place path), 2 deliberately absent (to exercise the append path),
+# plus comments and unrelated lines that must survive untouched.
+cat > "$TMP_ENV" <<'ENV'
+# =============================================================================
+# Grafana Cloud credentials — sourced from Azure Key Vault.
+# =============================================================================
+
+# ── Azure Service Principal ──────────────────────────────────────────────────
+ARM_CLIENT_ID=""
+ARM_CLIENT_SECRET=""
+ARM_TENANT_ID="tenant-123"
+ARM_SUBSCRIPTION_ID="sub-456"
+Resource_Group="rg-test"
+Azure_KeyVault="kv-test"
+
+# ── Grafana Cloud API key ────────────────────────────────────────────────────
+GRAFANA_CLOUD_API_KEY=""
+
+# ── Traces ────────────────────────────────────────────────────────────────────
+GRAFANA_CLOUD_TEMPO_ENDPOINT=""
+GRAFANA_CLOUD_TEMPO_USER=""
+
+# ── Metrics ───────────────────────────────────────────────────────────────────
+GRAFANA_CLOUD_MIMIR_ENDPOINT=""
+GRAFANA_CLOUD_MIMIR_USER=""
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+GRAFANA_CLOUD_LOKI_ENDPOINT=""
+GRAFANA_CLOUD_LOKI_USER=""
+
+# Unrelated custom key that must survive untouched.
+CUSTOM_UNRELATED_KEY="do-not-touch"
+ENV
+
+echo "==> smoke-testing updater against synthetic env file: $TMP_ENV"
 
 # Fake values — chosen to be easy to eyeball in the diff.
 FAKE_API_KEY="glc_TEST_API_KEY"
@@ -48,17 +74,17 @@ FAKE_FARO_EP="https://faro-TEST.grafana.net/faro/api/v1"
 FAKE_FARO_KEY="glc_TEST_FARO_KEY"
 
 # The Python here is a verbatim copy of the in-place updater in
-# fetch-grafana-cloud-conf-from-akv.sh (see its `python3 - "$CONF_FILE" ... <<PY`
+# fetch-grafana-cloud-conf-from-akv.sh (see its `python3 - "$ENV_FILE" ... <<PY`
 # block). When the updater is changed, update this copy too — the whole point
 # of this script is to catch regressions in that logic.
-python3 - "$TMP_CONF" 0 1 \
+python3 - "$TMP_ENV" 0 1 \
   "$FAKE_API_KEY" "$FAKE_TEMPO_EP" "$FAKE_TEMPO_USER" \
   "$FAKE_MIMIR_EP" "$FAKE_MIMIR_USER" \
   "$FAKE_LOKI_EP" "$FAKE_LOKI_USER" \
   "$FAKE_FARO_EP" "$FAKE_FARO_KEY" <<'PY'
-import sys, re, shutil, difflib
+import sys, re, difflib
 
-conf_path = sys.argv[1]
+env_path  = sys.argv[1]
 dry_run   = sys.argv[2] == "1"
 no_backup = sys.argv[3] == "1"
 (api_key, tempo_ep, tempo_user,
@@ -66,120 +92,105 @@ no_backup = sys.argv[3] == "1"
  faro_ep, faro_api_key) = sys.argv[4:13]
 
 updates = {
-    "monitoring.grafana_cloud.api_key":         api_key,
-    "monitoring.grafana_cloud.tempo.endpoint":  tempo_ep,
-    "monitoring.grafana_cloud.tempo.user":      tempo_user,
-    "monitoring.grafana_cloud.mimir.endpoint":  mimir_ep,
-    "monitoring.grafana_cloud.mimir.user":      mimir_user,
-    "monitoring.grafana_cloud.loki.endpoint":   loki_ep,
-    "monitoring.grafana_cloud.loki.user":       loki_user,
-    "monitoring.grafana_cloud.faro.endpoint":   faro_ep,
-    "monitoring.grafana_cloud.faro.api_key":    faro_api_key,
+    "GRAFANA_CLOUD_API_KEY":        api_key,
+    "GRAFANA_CLOUD_TEMPO_ENDPOINT": tempo_ep,
+    "GRAFANA_CLOUD_TEMPO_USER":     tempo_user,
+    "GRAFANA_CLOUD_MIMIR_ENDPOINT": mimir_ep,
+    "GRAFANA_CLOUD_MIMIR_USER":     mimir_user,
+    "GRAFANA_CLOUD_LOKI_ENDPOINT":  loki_ep,
+    "GRAFANA_CLOUD_LOKI_USER":      loki_user,
+    "FARO_COLLECTOR_URL":           faro_ep,
+    "FARO_API_KEY":                 faro_api_key,
 }
 
-with open(conf_path) as f:
+with open(env_path) as f:
     original = f.read()
 lines = original.splitlines(keepends=True)
 
-key_re = re.compile(r'^(?P<indent>\s*)(?P<key>[A-Za-z0-9_]+)\s*:(?P<rest>.*)$')
+key_re = re.compile(r'^(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<rest>.*)$')
 
-def parse_current_value(rest: str):
-    s = rest.lstrip()
-    in_str = None
-    value_part, comment_part = s, ""
-    for i, ch in enumerate(s):
-        if in_str:
-            if ch == in_str and s[i-1] != '\\':
-                in_str = None
-        elif ch in ('"', "'"):
-            in_str = ch
-        elif ch == '#':
-            value_part, comment_part = s[:i].rstrip(), s[i:]
-            break
-    return value_part, comment_part
+def quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
-stack = []
 changed = []
+seen = set()
 for idx, raw in enumerate(lines):
     line = raw.rstrip("\n")
     m = key_re.match(line)
-    if not m: continue
-    indent = len(m.group("indent"))
+    if not m:
+        continue
     key = m.group("key")
-    rest = m.group("rest")
-    while stack and stack[-1][0] >= indent: stack.pop()
-    full_path = ".".join([s[1] for s in stack] + [key])
-    value_part, comment_part = parse_current_value(rest)
-    if full_path in updates and value_part != "":
-        new_val = updates[full_path]
-        new_val_escaped = new_val.replace("\\", "\\\\").replace('"', '\\"')
-        new_rest = f' "{new_val_escaped}"'
-        if comment_part:
-            new_rest = f'{new_rest}  {comment_part}'
-        new_line = f'{m.group("indent")}{key}:{new_rest}'
-        if new_line != line:
-            changed.append((full_path, value_part.strip(), new_val))
-            lines[idx] = new_line + ("\n" if raw.endswith("\n") else "")
-    if value_part == "":
-        stack.append((indent, key))
+    if key not in updates:
+        continue
+    seen.add(key)
+    old_val = m.group("rest")
+    new_line = f"{key}={quote(updates[key])}"
+    if new_line != line:
+        changed.append((key, old_val, updates[key]))
+        lines[idx] = new_line + ("\n" if raw.endswith("\n") else "\n")
+
+missing = [k for k in updates if k not in seen]
+if missing:
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    lines.append("\n# --- appended by fetch-grafana-cloud-conf-from-akv.sh ---\n")
+    for k in missing:
+        lines.append(f"{k}={quote(updates[k])}\n")
+        changed.append((k, "", updates[k]))
 
 new_text = "".join(lines)
-with open(conf_path, "w") as f:
+with open(env_path, "w") as f:
     f.write(new_text)
 
 # ── Assertions ──────────────────────────────────────────────────────────────
 failed = []
 
-# 1. All 9 paths updated
-changed_paths = {c[0] for c in changed}
-missing = set(updates) - changed_paths
-if missing:
-    failed.append(f"FAIL: paths not updated: {sorted(missing)}")
+# 1. All 9 keys updated or appended
+changed_keys = {c[0] for c in changed}
+still_missing = set(updates) - changed_keys
+if still_missing:
+    failed.append(f"FAIL: keys not updated/appended: {sorted(still_missing)}")
 
-# 2. Top-level api_key and faro.api_key disambiguated — both present, different values
-top_api = next((c for c in changed if c[0] == "monitoring.grafana_cloud.api_key"), None)
-faro_api = next((c for c in changed if c[0] == "monitoring.grafana_cloud.faro.api_key"), None)
-if not top_api or not faro_api:
-    failed.append("FAIL: one of api_key / faro.api_key missing from updates")
-elif top_api[2] == faro_api[2]:
-    failed.append("FAIL: api_key and faro.api_key got the same value (disambiguation broken)")
-elif top_api[2] != updates["monitoring.grafana_cloud.api_key"]:
-    failed.append(f"FAIL: top api_key got wrong value: {top_api[2]!r}")
-elif faro_api[2] != updates["monitoring.grafana_cloud.faro.api_key"]:
-    failed.append(f"FAIL: faro.api_key got wrong value: {faro_api[2]!r}")
+# 2. The 2 deliberately-absent keys were appended with the right values
+for key in ("FARO_COLLECTOR_URL", "FARO_API_KEY"):
+    entry = next((c for c in changed if c[0] == key), None)
+    if not entry:
+        failed.append(f"FAIL: {key} missing from updates")
+    elif entry[1] != "":
+        failed.append(f"FAIL: {key} expected to be newly-appended (old value empty), got old={entry[1]!r}")
+    elif entry[2] != updates[key]:
+        failed.append(f"FAIL: {key} got wrong value: {entry[2]!r}")
 
-# 3. Every comment line survived verbatim
+# 3. The 7 pre-existing keys were updated in place, not appended
+for key in ("GRAFANA_CLOUD_API_KEY", "GRAFANA_CLOUD_TEMPO_ENDPOINT", "GRAFANA_CLOUD_TEMPO_USER",
+            "GRAFANA_CLOUD_MIMIR_ENDPOINT", "GRAFANA_CLOUD_MIMIR_USER",
+            "GRAFANA_CLOUD_LOKI_ENDPOINT", "GRAFANA_CLOUD_LOKI_USER"):
+    entry = next((c for c in changed if c[0] == key), None)
+    if not entry:
+        failed.append(f"FAIL: {key} missing from updates")
+    elif entry[2] != updates[key]:
+        failed.append(f"FAIL: {key} got wrong value: {entry[2]!r}")
+
+# 4. Every comment line survived verbatim
 orig_comments = [l for l in original.splitlines() if l.lstrip().startswith("#")]
 new_comments  = [l for l in new_text.splitlines()  if l.lstrip().startswith("#")]
-if orig_comments != new_comments:
-    failed.append(f"FAIL: comment lines changed ({len(orig_comments)} → {len(new_comments)})")
+if orig_comments != new_comments[:len(orig_comments)]:
+    failed.append(f"FAIL: original comment lines were altered ({len(orig_comments)} → {len(new_comments)})")
 
-# 4. AKV block survived untouched
-orig_akv = re.search(r'^\s{4}akv:\n(?:\s{6}.+\n)+', original, re.M)
-new_akv  = re.search(r'^\s{4}akv:\n(?:\s{6}.+\n)+', new_text,  re.M)
-if orig_akv and new_akv:
-    if orig_akv.group(0) != new_akv.group(0):
-        failed.append("FAIL: monitoring.grafana_cloud.akv block was modified")
-else:
-    failed.append("FAIL: could not locate akv block in one of the files")
-
-# 5. Nothing outside grafana_cloud.{api_key,tempo,mimir,loki,faro} changed.
-# Strategy: remove every updated line from both sides and compare the residuals.
-updated_line_nums = set()
-for idx, (raw_new, raw_old) in enumerate(zip(new_text.splitlines(), original.splitlines())):
-    if raw_new != raw_old:
-        updated_line_nums.add(idx)
-# Each of the 9 updates should have changed exactly 1 line.
-if len(updated_line_nums) != 9:
-    failed.append(f"FAIL: expected 9 lines changed, got {len(updated_line_nums)}")
+# 5. Unrelated lines (ARM_*, custom key) untouched
+for unrelated in ('ARM_CLIENT_ID=""', 'ARM_CLIENT_SECRET=""', 'ARM_TENANT_ID="tenant-123"',
+                  'ARM_SUBSCRIPTION_ID="sub-456"', 'Resource_Group="rg-test"',
+                  'Azure_KeyVault="kv-test"', 'CUSTOM_UNRELATED_KEY="do-not-touch"'):
+    if unrelated not in new_text:
+        failed.append(f"FAIL: unrelated line was modified: {unrelated!r}")
 
 # Report
 print()
 print("=== Updates applied ===")
-for path, old, new in changed:
+for key, old, new in changed:
     old_disp = (old[:40] + "…") if len(old) > 40 else old
     new_disp = (new[:40] + "…") if len(new) > 40 else new
-    print(f"  {path}")
+    print(f"  {key}")
     print(f"    -  {old_disp}")
     print(f"    +  {new_disp}")
 
@@ -188,7 +199,7 @@ print("=== Unified diff ===")
 sys.stdout.writelines(difflib.unified_diff(
     original.splitlines(keepends=True),
     new_text.splitlines(keepends=True),
-    fromfile="conf.yml (original)", tofile="conf.yml (after)", n=1,
+    fromfile=".env (original)", tofile=".env (after)", n=1,
 ))
 
 print()

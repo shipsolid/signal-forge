@@ -10,8 +10,8 @@
 # it, same spirit as scripts/fetch-grafana-cloud-conf-from-akv.sh.
 #
 # Credentials: resolved the same way deploy-local.sh resolves them —
-# monitoring.grafana_cloud.use_env in conf.yml picks .env (GRAFANA_CLOUD_*)
-# or conf.yml's monitoring.grafana_cloud.mimir.* / api_key fields directly.
+# monitoring.grafana_cloud.use_env in conf.yml is a required path to an env
+# file to source (GRAFANA_CLOUD_*). There is no conf.yml-fields fallback.
 #
 # Usage:
 #   ./scripts/push-slo-rules-to-mimir.sh             # mimirtool rules load (mutates the Ruler)
@@ -63,29 +63,23 @@ if cur is not None:
 PY
 }
 
-# ── Resolve Mimir credentials — mirrors deploy-local.sh's use_env branching ──
+# ── Resolve Mimir credentials — mirrors deploy-local.sh's use_env handling ──
 USE_ENV="$(conf_get monitoring.grafana_cloud.use_env)"
-[[ "$USE_ENV" == "True" ]] && USE_ENV="true"
+[[ -n "$USE_ENV" ]] || { echo "ERROR: monitoring.grafana_cloud.use_env is required in ${CONF_FILE}" >&2; exit 1; }
+ENV_FILE="$USE_ENV"
+[[ "$ENV_FILE" == /* ]] || ENV_FILE="${REPO_DIR}/${ENV_FILE}"
+[[ -f "$ENV_FILE" ]] || { echo "ERROR: monitoring.grafana_cloud.use_env=${USE_ENV} but ${ENV_FILE} not found" >&2; exit 1; }
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
+MIMIR_ENDPOINT="${GRAFANA_CLOUD_MIMIR_ENDPOINT:-}"
+MIMIR_USER="${GRAFANA_CLOUD_MIMIR_USER:-}"
+API_KEY="${GRAFANA_CLOUD_API_KEY:-}"
 
-if [[ "$USE_ENV" == "true" ]]; then
-  ENV_FILE="${REPO_DIR}/.env"
-  [[ -f "$ENV_FILE" ]] || { echo "ERROR: monitoring.grafana_cloud.use_env=true but ${ENV_FILE} not found" >&2; exit 1; }
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
-  MIMIR_ENDPOINT="${GRAFANA_CLOUD_MIMIR_ENDPOINT:-}"
-  MIMIR_USER="${GRAFANA_CLOUD_MIMIR_USER:-}"
-  API_KEY="${GRAFANA_CLOUD_API_KEY:-}"
-else
-  MIMIR_ENDPOINT="$(conf_get monitoring.grafana_cloud.mimir.endpoint)"
-  MIMIR_USER="$(conf_get monitoring.grafana_cloud.mimir.user)"
-  API_KEY="$(conf_get monitoring.grafana_cloud.api_key)"
-fi
-
-: "${MIMIR_ENDPOINT:?Mimir endpoint is empty (source: $([[ "$USE_ENV" == "true" ]] && echo ".env" || echo "conf.yml"))}"
-: "${MIMIR_USER:?Mimir user is empty (source: $([[ "$USE_ENV" == "true" ]] && echo ".env" || echo "conf.yml"))}"
-: "${API_KEY:?Grafana Cloud API key is empty (source: $([[ "$USE_ENV" == "true" ]] && echo ".env" || echo "conf.yml"))}"
+: "${MIMIR_ENDPOINT:?Mimir endpoint is empty (source: $ENV_FILE)}"
+: "${MIMIR_USER:?Mimir user is empty (source: $ENV_FILE)}"
+: "${API_KEY:?Grafana Cloud API key is empty (source: $ENV_FILE)}"
 
 # monitoring.grafana_cloud.mimir.endpoint is the remote_write push URL
 # (".../api/prom/push"); the Ruler API lives at the same host with no suffix.

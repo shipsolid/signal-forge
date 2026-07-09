@@ -107,43 +107,29 @@ if [[ -n "$CA_PATH" && "$CA_PATH" != /* ]]; then
 fi
 
 # ── Grafana Cloud credential source ─────────────────────────────────────────
-# monitoring.grafana_cloud.use_env picks where the nine leaf credential
-# values come from:
-#   true  → source .env (repo root) — GRAFANA_CLOUD_*/FARO_* keys, the same
-#           ones the legacy Makefile flow (`make secrets-fetch-akv`) uses
-#   false → read monitoring.grafana_cloud.{api_key,tempo,mimir,loki,faro}
-#           straight from conf.yml (today's default; populated in place by
-#           scripts/fetch-grafana-cloud-conf-from-akv.sh)
+# monitoring.grafana_cloud.use_env is a required path to an env file to
+# source (relative to CONF_DIR unless absolute), defining GRAFANA_CLOUD_*/
+# FARO_* keys — the same ones the legacy Makefile flow
+# (`make secrets-fetch-akv`) uses. Populated by
+# scripts/fetch-grafana-cloud-conf-from-akv.sh.
 USE_ENV="$(yq monitoring.grafana_cloud.use_env)"
-# yq prints Python's str(bool) for YAML booleans ("True"/"False") — normalize.
-[[ "$USE_ENV" == "True" ]] && USE_ENV="true"
-if [[ "$USE_ENV" == "true" ]]; then
-  ENV_FILE="${CONF_DIR}/.env"
-  [[ -f "$ENV_FILE" ]] || die "monitoring.grafana_cloud.use_env=true but ${ENV_FILE} not found"
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
-  GC_API_KEY="${GRAFANA_CLOUD_API_KEY:-}"
-  GC_TEMPO_ENDPOINT="${GRAFANA_CLOUD_TEMPO_ENDPOINT:-}"
-  GC_TEMPO_USER="${GRAFANA_CLOUD_TEMPO_USER:-}"
-  GC_MIMIR_ENDPOINT="${GRAFANA_CLOUD_MIMIR_ENDPOINT:-}"
-  GC_MIMIR_USER="${GRAFANA_CLOUD_MIMIR_USER:-}"
-  GC_LOKI_ENDPOINT="${GRAFANA_CLOUD_LOKI_ENDPOINT:-}"
-  GC_LOKI_USER="${GRAFANA_CLOUD_LOKI_USER:-}"
-  GC_FARO_ENDPOINT="${FARO_COLLECTOR_URL:-}"
-  GC_FARO_API_KEY="${FARO_API_KEY:-}"
-else
-  GC_API_KEY="$(yq monitoring.grafana_cloud.api_key)"
-  GC_TEMPO_ENDPOINT="$(yq monitoring.grafana_cloud.tempo.endpoint)"
-  GC_TEMPO_USER="$(yq monitoring.grafana_cloud.tempo.user)"
-  GC_MIMIR_ENDPOINT="$(yq monitoring.grafana_cloud.mimir.endpoint)"
-  GC_MIMIR_USER="$(yq monitoring.grafana_cloud.mimir.user)"
-  GC_LOKI_ENDPOINT="$(yq monitoring.grafana_cloud.loki.endpoint)"
-  GC_LOKI_USER="$(yq monitoring.grafana_cloud.loki.user)"
-  GC_FARO_ENDPOINT="$(yq monitoring.grafana_cloud.faro.endpoint)"
-  GC_FARO_API_KEY="$(yq monitoring.grafana_cloud.faro.api_key)"
-fi
+[[ -n "$USE_ENV" ]] || die "monitoring.grafana_cloud.use_env is required in ${CONF}"
+ENV_FILE="$USE_ENV"
+[[ "$ENV_FILE" == /* ]] || ENV_FILE="${CONF_DIR}/${ENV_FILE}"
+[[ -f "$ENV_FILE" ]] || die "monitoring.grafana_cloud.use_env=${USE_ENV} but ${ENV_FILE} not found"
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
+GC_API_KEY="${GRAFANA_CLOUD_API_KEY:-}"
+GC_TEMPO_ENDPOINT="${GRAFANA_CLOUD_TEMPO_ENDPOINT:-}"
+GC_TEMPO_USER="${GRAFANA_CLOUD_TEMPO_USER:-}"
+GC_MIMIR_ENDPOINT="${GRAFANA_CLOUD_MIMIR_ENDPOINT:-}"
+GC_MIMIR_USER="${GRAFANA_CLOUD_MIMIR_USER:-}"
+GC_LOKI_ENDPOINT="${GRAFANA_CLOUD_LOKI_ENDPOINT:-}"
+GC_LOKI_USER="${GRAFANA_CLOUD_LOKI_USER:-}"
+GC_FARO_ENDPOINT="${FARO_COLLECTOR_URL:-}"
+GC_FARO_API_KEY="${FARO_API_KEY:-}"
 
 # ── Context guard ────────────────────────────────────────────────────────────
 # Refuse to touch any cluster other than the k3d cluster named in cluster.name.
@@ -556,7 +542,7 @@ wait_datastores() {
 # ── 4. Helm release: grafana/k8s-monitoring ──────────────────────────────────
 # Render a values.yaml template (${...} placeholders) → tmp file, then pass to
 # helm. Non-credential substitutions come from conf.yml; the three endpoint
-# values come from the resolved GC_* vars (conf.yml or .env, per use_env).
+# values come from the resolved GC_* vars (sourced from the use_env file).
 render_helm_values() {
   local tmpl="$1"   # abs path to .tmpl
   local out="$2"    # abs path for rendered output

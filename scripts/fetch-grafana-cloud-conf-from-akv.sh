@@ -1,23 +1,28 @@
 #!/usr/bin/env bash
 # fetch-grafana-cloud-conf-from-akv.sh
 #
-# Pull every Grafana Cloud secret from the Key Vault named in conf.yml's
-# monitoring.grafana_cloud.akv.*, and write the fetched values IN PLACE back
-# into conf.yml's monitoring.grafana_cloud.{api_key, tempo.*, mimir.*, loki.*,
-# faro.*} fields.
+# Pull every Grafana Cloud secret from Azure Key Vault and write the fetched
+# values IN PLACE into the env file named by conf.yml's
+# monitoring.grafana_cloud.use_env (GRAFANA_CLOUD_*/FARO_* keys — the same
+# ones deploy-local.sh and the legacy Makefile flow read).
 #
-# Comments, ordering, and unrelated fields in conf.yml are preserved — the
-# updater edits only the specific leaf lines it owns.
+# Vault coordinates (ARM_TENANT_ID / ARM_SUBSCRIPTION_ID / Resource_Group /
+# Azure_KeyVault) are read FROM that same env file — they're already defined
+# there for the legacy Makefile flow (`make secrets-fetch-akv`).
+#
+# Comments and unrelated lines in the env file are preserved — the updater
+# rewrites only the nine leaf lines it owns (appending any that don't exist
+# yet).
 #
 # Authentication:
-#   Uses the az CLI's existing login context. Run `az login` once before this.
-#   Service-principal auth is also honored if the shell has ARM_CLIENT_ID and
-#   ARM_CLIENT_SECRET exported (no .env loading — export them yourself).
+#   Uses ARM_CLIENT_ID / ARM_CLIENT_SECRET from the env file if both are set
+#   (service-principal login). Otherwise falls back to the caller's existing
+#   `az login` session.
 #
 # Usage:
 #   ./scripts/fetch-grafana-cloud-conf-from-akv.sh             # fetch + apply in place
 #   ./scripts/fetch-grafana-cloud-conf-from-akv.sh --dry-run   # fetch + show diff, don't write
-#   ./scripts/fetch-grafana-cloud-conf-from-akv.sh --print     # fetch + print YAML block (legacy)
+#   ./scripts/fetch-grafana-cloud-conf-from-akv.sh --print     # fetch + print env lines (legacy)
 #   ./scripts/fetch-grafana-cloud-conf-from-akv.sh --no-backup # skip .bak
 #
 # Env override:
@@ -49,8 +54,8 @@ require_bin az
 require_bin python3
 
 [[ -f "$CONF_FILE" ]] || { echo "ERROR: conf file not found: $CONF_FILE" >&2; exit 1; }
+CONF_DIR="$(cd "$(dirname "$CONF_FILE")" && pwd)"
 
-# ── Read AKV metadata from conf.yml ──────────────────────────────────────────
 conf_get() {
   python3 - "$CONF_FILE" "$1" <<'PY'
 import sys, yaml, re
@@ -67,47 +72,56 @@ if cur is not None:
 PY
 }
 
-TENANT_ID="$(conf_get monitoring.grafana_cloud.akv.tenant_id)"
-SUBSCRIPTION_ID="$(conf_get monitoring.grafana_cloud.akv.subscription_id)"
-RESOURCE_GROUP="$(conf_get monitoring.grafana_cloud.akv.resource_group)"
-AZURE_KEYVAULT="$(conf_get monitoring.grafana_cloud.akv.vault_name)"
+# ── Resolve the target env file from conf.yml ────────────────────────────────
+USE_ENV="$(conf_get monitoring.grafana_cloud.use_env)"
+[[ -n "$USE_ENV" ]] || { echo "ERROR: monitoring.grafana_cloud.use_env is required in ${CONF_FILE}" >&2; exit 1; }
+ENV_FILE="$USE_ENV"
+[[ "$ENV_FILE" == /* ]] || ENV_FILE="${CONF_DIR}/${ENV_FILE}"
+[[ -f "$ENV_FILE" ]] || { echo "ERROR: monitoring.grafana_cloud.use_env=${USE_ENV} but ${ENV_FILE} not found" >&2; exit 1; }
 
-: "${TENANT_ID:?monitoring.grafana_cloud.akv.tenant_id must be set in ${CONF_FILE}}"
-: "${SUBSCRIPTION_ID:?monitoring.grafana_cloud.akv.subscription_id must be set in ${CONF_FILE}}"
-: "${RESOURCE_GROUP:?monitoring.grafana_cloud.akv.resource_group must be set in ${CONF_FILE}}"
-: "${AZURE_KEYVAULT:?monitoring.grafana_cloud.akv.vault_name must be set in ${CONF_FILE}}"
+# ── Read AKV coordinates from the env file ───────────────────────────────────
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
+
+: "${ARM_TENANT_ID:?ARM_TENANT_ID must be set in ${ENV_FILE}}"
+: "${ARM_SUBSCRIPTION_ID:?ARM_SUBSCRIPTION_ID must be set in ${ENV_FILE}}"
+: "${Resource_Group:?Resource_Group must be set in ${ENV_FILE}}"
+: "${Azure_KeyVault:?Azure_KeyVault must be set in ${ENV_FILE}}"
 
 # ── Azure auth ───────────────────────────────────────────────────────────────
 # Two paths:
-#   1. Shell exports ARM_CLIENT_ID + ARM_CLIENT_SECRET → log in as service principal.
+#   1. ARM_CLIENT_ID + ARM_CLIENT_SECRET set (from the env file) → log in as
+#      service principal.
 #   2. Otherwise → use the caller's existing `az login` session. Fail fast if
 #      no session exists (az account show returns non-zero).
 if [[ -n "${ARM_CLIENT_ID:-}" && -n "${ARM_CLIENT_SECRET:-}" ]]; then
-  echo "==> az login (service principal from shell env, tenant=${TENANT_ID})"
+  echo "==> az login (service principal from ${ENV_FILE}, tenant=${ARM_TENANT_ID})"
   az login \
     --service-principal \
     --username "$ARM_CLIENT_ID" \
     --password "$ARM_CLIENT_SECRET" \
-    --tenant "$TENANT_ID" \
+    --tenant "$ARM_TENANT_ID" \
     --output none >/dev/null
 else
   if ! az account show --output none 2>/dev/null; then
-    echo "ERROR: no active az session. Run 'az login' first, or export ARM_CLIENT_ID + ARM_CLIENT_SECRET for service-principal auth." >&2
+    echo "ERROR: no active az session. Run 'az login' first, or set ARM_CLIENT_ID + ARM_CLIENT_SECRET in ${ENV_FILE} for service-principal auth." >&2
     exit 1
   fi
   echo "==> using existing az session ($(az account show --query user.name -o tsv 2>/dev/null || echo unknown))"
 fi
 
-az account set --subscription "$SUBSCRIPTION_ID" >/dev/null
+az account set --subscription "$ARM_SUBSCRIPTION_ID" >/dev/null
 
 kv_get() {
-  az keyvault secret show --vault-name "$AZURE_KEYVAULT" --name "$1" --query value -o tsv
+  az keyvault secret show --vault-name "$Azure_KeyVault" --name "$1" --query value -o tsv
 }
 kv_get_optional() {
-  az keyvault secret show --vault-name "$AZURE_KEYVAULT" --name "$1" --query value -o tsv 2>/dev/null || true
+  az keyvault secret show --vault-name "$Azure_KeyVault" --name "$1" --query value -o tsv 2>/dev/null || true
 }
 
-echo "==> fetching secrets from Key Vault: ${AZURE_KEYVAULT}"
+echo "==> fetching secrets from Key Vault: ${Azure_KeyVault}"
 api_key="$(kv_get grafana-example-org-alloy-writer-example-org-token)"
 tempo_host="$(kv_get grafana-example-org-cloud-tempo-endpoint)"
 tempo_user="$(kv_get grafana-example-org-cloud-tempo-username)"
@@ -144,158 +158,97 @@ esac
 
 faro_endpoint="$(trim_slash "${faro_endpoint:-}")"
 
-# ── Print-only mode: emit a YAML block and stop ──────────────────────────────
+# ── Print-only mode: emit env-file lines and stop ────────────────────────────
 if [[ "$PRINT_ONLY" -eq 1 ]]; then
   cat <<EOF
-monitoring:
-  grafana_cloud:
-    api_key: "${api_key}"
-    tempo:
-      endpoint: "${tempo_endpoint}"
-      user: "${tempo_user}"
-    mimir:
-      endpoint: "${mimir_endpoint}"
-      user: "${mimir_user}"
-    loki:
-      endpoint: "${loki_endpoint}"
-      user: "${loki_user}"
-    faro:
-      endpoint: "${faro_endpoint}"
-      api_key: "${faro_api_key}"
+GRAFANA_CLOUD_API_KEY="${api_key}"
+GRAFANA_CLOUD_TEMPO_ENDPOINT="${tempo_endpoint}"
+GRAFANA_CLOUD_TEMPO_USER="${tempo_user}"
+GRAFANA_CLOUD_MIMIR_ENDPOINT="${mimir_endpoint}"
+GRAFANA_CLOUD_MIMIR_USER="${mimir_user}"
+GRAFANA_CLOUD_LOKI_ENDPOINT="${loki_endpoint}"
+GRAFANA_CLOUD_LOKI_USER="${loki_user}"
+FARO_COLLECTOR_URL="${faro_endpoint}"
+FARO_API_KEY="${faro_api_key}"
 EOF
   exit 0
 fi
 
-# ── In-place update of conf.yml ──────────────────────────────────────────────
-# Preserves comments, ordering, and unrelated fields by line-level editing.
-python3 - "$CONF_FILE" "$DRY_RUN" "$NO_BACKUP" \
+# ── In-place update of the env file ──────────────────────────────────────────
+# Preserves comments, ordering, and unrelated lines by line-level editing.
+# Missing keys are appended rather than skipped.
+python3 - "$ENV_FILE" "$DRY_RUN" "$NO_BACKUP" \
   "$api_key" "$tempo_endpoint" "$tempo_user" \
   "$mimir_endpoint" "$mimir_user" \
   "$loki_endpoint" "$loki_user" \
   "$faro_endpoint" "$faro_api_key" <<'PY'
-import sys, re, os, shutil, difflib
+import sys, re, shutil, difflib
 
-conf_path = sys.argv[1]
+env_path  = sys.argv[1]
 dry_run   = sys.argv[2] == "1"
 no_backup = sys.argv[3] == "1"
 (api_key, tempo_ep, tempo_user,
  mimir_ep, mimir_user, loki_ep, loki_user,
  faro_ep, faro_api_key) = sys.argv[4:13]
 
-# path → new value. Paths are dotted under conf.yml root.
+# key → new value, in the order they should be appended if missing.
 updates = {
-    "monitoring.grafana_cloud.api_key":         api_key,
-    "monitoring.grafana_cloud.tempo.endpoint":  tempo_ep,
-    "monitoring.grafana_cloud.tempo.user":      tempo_user,
-    "monitoring.grafana_cloud.mimir.endpoint":  mimir_ep,
-    "monitoring.grafana_cloud.mimir.user":      mimir_user,
-    "monitoring.grafana_cloud.loki.endpoint":   loki_ep,
-    "monitoring.grafana_cloud.loki.user":       loki_user,
-    "monitoring.grafana_cloud.faro.endpoint":   faro_ep,
-    "monitoring.grafana_cloud.faro.api_key":    faro_api_key,
+    "GRAFANA_CLOUD_API_KEY":        api_key,
+    "GRAFANA_CLOUD_TEMPO_ENDPOINT": tempo_ep,
+    "GRAFANA_CLOUD_TEMPO_USER":     tempo_user,
+    "GRAFANA_CLOUD_MIMIR_ENDPOINT": mimir_ep,
+    "GRAFANA_CLOUD_MIMIR_USER":     mimir_user,
+    "GRAFANA_CLOUD_LOKI_ENDPOINT":  loki_ep,
+    "GRAFANA_CLOUD_LOKI_USER":      loki_user,
+    "FARO_COLLECTOR_URL":           faro_ep,
+    "FARO_API_KEY":                 faro_api_key,
 }
 
-with open(conf_path) as f:
+with open(env_path) as f:
     original = f.read()
 lines = original.splitlines(keepends=True)
 
-key_re = re.compile(
-    r'^(?P<indent>\s*)(?P<key>[A-Za-z0-9_]+)\s*:(?P<rest>.*)$'
-)
+key_re = re.compile(r'^(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<rest>.*)$')
 
-def parse_current_value(rest: str):
-    """Return (value_part, trailing_comment) given the text after 'key:'."""
-    s = rest.lstrip()
-    comment = ""
-    # Scan for a '#' that is outside any quoted section.
-    value_part, comment_part = s, ""
-    in_str = None
-    for i, ch in enumerate(s):
-        if in_str:
-            if ch == in_str and s[i-1] != '\\':
-                in_str = None
-        elif ch in ('"', "'"):
-            in_str = ch
-        elif ch == '#':
-            value_part, comment_part = s[:i].rstrip(), s[i:]
-            break
-    return value_part, comment_part
+def quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
-# Walk the lines tracking nesting via indentation. When the leaf key in one of
-# the target paths matches at the right nested location, rewrite its value.
-stack = []  # [(indent, key)]
 changed = []
+seen = set()
 for idx, raw in enumerate(lines):
     line = raw.rstrip("\n")
     m = key_re.match(line)
     if not m:
         continue
-    indent = len(m.group("indent"))
     key = m.group("key")
-    rest = m.group("rest")
-    # Pop stack entries at the same or deeper level.
-    while stack and stack[-1][0] >= indent:
-        stack.pop()
+    if key not in updates:
+        continue
+    seen.add(key)
+    old_val = m.group("rest")
+    new_line = f"{key}={quote(updates[key])}"
+    if new_line != line:
+        changed.append((key, old_val, updates[key]))
+        lines[idx] = new_line + ("\n" if raw.endswith("\n") else "\n")
 
-    full_path = ".".join([s[1] for s in stack] + [key])
-    value_part, comment_part = parse_current_value(rest)
-
-    if full_path in updates and value_part != "":
-        new_val = updates[full_path]
-        # Always emit double-quoted — keys in this block are string scalars.
-        new_val_escaped = new_val.replace("\\", "\\\\").replace('"', '\\"')
-        new_rest = f' "{new_val_escaped}"'
-        if comment_part:
-            new_rest = f'{new_rest}  {comment_part}'
-        new_line = f'{m.group("indent")}{key}:{new_rest}'
-        if new_line != line:
-            changed.append((full_path, value_part.strip(), new_val))
-            lines[idx] = new_line + ("\n" if raw.endswith("\n") else "")
-    # Push only when this line opens a mapping (no value on this line).
-    if value_part == "":
-        stack.append((indent, key))
-
-# Report
-missing = [p for p in updates if p not in {c[0] for c in changed} and p not in {c[0] for c in changed}]
-# Fix: missing = paths never encountered
-encountered = {c[0] for c in changed}
-# Still-missing paths either had a value that already matches, or were absent.
-still_needed = set(updates) - encountered
-# Distinguish "already correct" from "absent": re-scan.
-absent = []
-for path in still_needed:
-    present = False
-    stack2 = []
-    for raw in lines:
-        line = raw.rstrip("\n")
-        m = key_re.match(line)
-        if not m: continue
-        ind = len(m.group("indent"))
-        while stack2 and stack2[-1][0] >= ind: stack2.pop()
-        fp = ".".join([s[1] for s in stack2] + [m.group("key")])
-        vp, _ = parse_current_value(m.group("rest"))
-        if vp == "":
-            stack2.append((ind, m.group("key")))
-        if fp == path:
-            present = True; break
-    if not present:
-        absent.append(path)
+missing = [k for k in updates if k not in seen]
+if missing:
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    lines.append("\n# --- appended by fetch-grafana-cloud-conf-from-akv.sh ---\n")
+    for k in missing:
+        lines.append(f"{k}={quote(updates[k])}\n")
+        changed.append((k, "", updates[k]))
 
 if changed:
     print(f"==> {len(changed)} field(s) to update:")
-    for path, old, new in changed:
+    for key, old, new in changed:
         old_disp = old[:40] + ("…" if len(old) > 40 else "")
         new_disp = new[:40] + ("…" if len(new) > 40 else "")
-        print(f"    {path}")
+        print(f"    {key}")
         print(f"      -  {old_disp}")
         print(f"      +  {new_disp}")
 else:
-    print("==> no changes (fetched values already match conf.yml)")
-
-if absent:
-    print("WARN: the following conf.yml paths were not found — the fetch script cannot populate them:", file=sys.stderr)
-    for p in absent:
-        print(f"      {p}", file=sys.stderr)
+    print("==> no changes (fetched values already match the env file)")
 
 new_text = "".join(lines)
 if dry_run:
@@ -304,7 +257,7 @@ if dry_run:
         diff = difflib.unified_diff(
             original.splitlines(keepends=True),
             new_text.splitlines(keepends=True),
-            fromfile=conf_path, tofile=conf_path + " (proposed)",
+            fromfile=env_path, tofile=env_path + " (proposed)",
         )
         sys.stdout.writelines(diff)
     sys.exit(0)
@@ -313,10 +266,10 @@ if new_text == original:
     sys.exit(0)
 
 if not no_backup:
-    shutil.copy2(conf_path, conf_path + ".bak")
-    print(f"==> backed up: {conf_path}.bak")
+    shutil.copy2(env_path, env_path + ".bak")
+    print(f"==> backed up: {env_path}.bak")
 
-with open(conf_path, "w") as f:
+with open(env_path, "w") as f:
     f.write(new_text)
-print(f"==> updated: {conf_path}")
+print(f"==> updated: {env_path}")
 PY

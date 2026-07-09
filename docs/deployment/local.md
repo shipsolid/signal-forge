@@ -92,17 +92,14 @@ as a build arg to the frontend build so the webpack plugin can upload source map
 
 ### 4. Grafana Cloud knobs in `conf.yml`
 
-`deploy-local.sh` reads `monitoring.grafana_cloud` and writes it into the in-cluster
-`grafana-cloud-secrets` Secret (source is `.env` or an AKV fetch, per
-`monitoring.grafana_cloud.use_env` — see [grafana-cloud.md](grafana-cloud.md) for the full model):
+`deploy-local.sh` sources the env file named by `monitoring.grafana_cloud.use_env` and writes its
+nine `GRAFANA_CLOUD_*`/`FARO_*` credentials into the in-cluster `grafana-cloud-secrets` Secret — see
+[grafana-cloud.md](grafana-cloud.md) for the full model. `scripts/fetch-grafana-cloud-conf-from-akv.sh`
+populates that same env file from Azure Key Vault; there's no separate conf.yml-fields path:
 
 ```yaml
 grafana_cloud:
-  mimir: { endpoint: "", user: "" }
-  loki: { endpoint: "", user: "" }
-  tempo: { endpoint: "", user: "" }
-  api_key: ""
-  faro: { collector_url: "", api_key: "" }
+  use_env: ".env"
 ```
 
 ### 5. Helm monitoring stack

@@ -206,62 +206,25 @@ monitoring:
   # ─── Grafana Cloud credentials ───────────────────────────────────────────
   # deploy-local.sh materializes the nine leaf values into the
   # {monitoring.secret_name} Secret. values-cloud.yaml.tmpl is rendered with
-  # the URLs/deployment_environment from this block.
+  # the URLs/deployment_environment sourced from this file.
   grafana_cloud:
-    # Selects where deploy-local.sh reads api_key / tempo.* / mimir.* /
-    # loki.* / faro.* from:
-    #   true  → source .env (repo root) — GRAFANA_CLOUD_*/FARO_* keys, the
-    #           same ones the legacy Makefile flow (`make secrets-fetch-akv`)
-    #           writes/consumes. akv.* and the fields below are ignored —
-    #           no need to run fetch-grafana-cloud-conf-from-akv.sh.
-    #   false → read the fields below directly (populated in place by
-    #           scripts/fetch-grafana-cloud-conf-from-akv.sh, which does use
-    #           akv.* to locate the Key Vault).
-    use_env: true
-
-    # ── use_env: false only ───────────────────────────────────────────────
-    # Everything from here down (akv coordinates + the nine leaf credential
-    # fields) is irrelevant when use_env: true — deploy-local.sh sources
-    # .env instead and never looks at any of it. No need to run
-    # fetch-grafana-cloud-conf-from-akv.sh or fill in akv.* in that mode.
-
-    # Azure Key Vault source metadata. Consumed ONLY by
-    # scripts/fetch-grafana-cloud-conf-from-akv.sh, which authenticates with a
-    # service principal (ARM_CLIENT_ID / ARM_CLIENT_SECRET in .env), pulls every
-    # Grafana Cloud secret from this vault, and writes the fetched values back
-    # into the fields below (api_key, tempo.*, mimir.*, loki.*, faro.*) in place.
-    # Safe to track in git — these are IDs / names, not credentials.
-    akv:
-      tenant_id: ""
-      subscription_id: ""
-      resource_group: ""
-      vault_name: ""
-
-    # Shared Access Policy token for data-plane writes (metrics/logs/traces).
-    api_key: ""
-
-    # Tempo — OTLP gRPC. Endpoint format: <host>:443 (no scheme).
-    tempo:
-      endpoint: ""
-      user: ""
-
-    # Mimir — Prometheus remote_write. Endpoint format: https://<host>/api/prom/push
-    mimir:
-      endpoint: ""
-      user: ""
-
-    # Loki — push. Endpoint format: https://<host>/loki/api/v1/push
-    loki:
-      endpoint: ""
-      user: ""
-
-    # Faro — browser RUM. endpoint = runtime collector URL (used by frontend
-    # at container start via grafana-cloud-secrets/FARO_COLLECTOR_URL).
-    # api_key = source-map upload key (used by webpack at build time; can also
-    # be supplied via shell `export FARO_API_KEY=...` which wins over this value).
-    faro:
-      endpoint: ""
-      api_key: ""
+    # Path to an env file to source (relative to conf.yml's directory unless
+    # it starts with "/"). Required — deploy-local.sh and
+    # push-slo-rules-to-mimir.sh fail fast if this is empty or the file is
+    # missing; there is no conf.yml-fields fallback.
+    #
+    # Must define: GRAFANA_CLOUD_API_KEY, GRAFANA_CLOUD_TEMPO_ENDPOINT,
+    # GRAFANA_CLOUD_TEMPO_USER, GRAFANA_CLOUD_MIMIR_ENDPOINT,
+    # GRAFANA_CLOUD_MIMIR_USER, GRAFANA_CLOUD_LOKI_ENDPOINT,
+    # GRAFANA_CLOUD_LOKI_USER, FARO_COLLECTOR_URL, FARO_API_KEY — the same
+    # keys the legacy Makefile flow (`make secrets-fetch-akv`) uses.
+    #
+    # scripts/fetch-grafana-cloud-conf-from-akv.sh populates those nine keys
+    # in place by pulling from Azure Key Vault, using this same file's
+    # ARM_TENANT_ID / ARM_SUBSCRIPTION_ID / Resource_Group / Azure_KeyVault
+    # (already defined there for the legacy Makefile flow) to locate the
+    # vault, and ARM_CLIENT_ID / ARM_CLIENT_SECRET to authenticate.
+    use_env: ".env"
 
   # ─── Helm release: grafana/k8s-monitoring ────────────────────────────────
   # In cloud mode this IS the cloud exporter pipeline — auto-installed.

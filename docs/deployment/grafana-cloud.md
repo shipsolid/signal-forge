@@ -55,20 +55,23 @@ expects a host:port endpoint without a URL scheme.
 ## Azure Key Vault integration
 
 Credentials are stored in Azure Key Vault (`example-org-prd-kv`) under the `grafana-example-org-*`
-prefix. The AKV coordinates (tenant/subscription/RG/vault name) live in [conf.yml](../../conf.yml)
-under `monitoring.grafana_cloud.akv.*` — these are IDs/names and are safe to track in git.
+prefix. The AKV coordinates (tenant/subscription/RG/vault name) live in the env file named by
+[conf.yml](../../conf.yml)'s `monitoring.grafana_cloud.use_env` — as `ARM_TENANT_ID` /
+`ARM_SUBSCRIPTION_ID` / `Resource_Group` / `Azure_KeyVault`, the same keys the legacy Makefile flow
+(`make secrets-fetch-akv`) already reads from there. Safe to track in git — these are IDs/names, not
+credentials.
 
-| AKV secret name                                      | conf.yml key     | Secret key (K8s)               | Notes                                                       |
-| ---------------------------------------------------- | ---------------- | ------------------------------ | ----------------------------------------------------------- |
-| `grafana-example-org-alloy-writer-example-org-token` | `api_key`        | `GRAFANA_CLOUD_API_KEY`        | `glc_` access-policy token — required for data-plane writes |
-| `grafana-example-org-cloud-tempo-endpoint`           | `tempo.endpoint` | `GRAFANA_CLOUD_TEMPO_ENDPOINT` | fetch script appends `:443`                                 |
-| `grafana-example-org-cloud-tempo-username`           | `tempo.user`     | `GRAFANA_CLOUD_TEMPO_USER`     |                                                             |
-| `grafana-example-org-cloud-mimir-endpoint`           | `mimir.endpoint` | `GRAFANA_CLOUD_MIMIR_ENDPOINT` | fetch script appends `/push` if missing                     |
-| `grafana-example-org-cloud-mimir-username`           | `mimir.user`     | `GRAFANA_CLOUD_MIMIR_USER`     |                                                             |
-| `grafana-example-org-cloud-loki-endpoint`            | `loki.endpoint`  | `GRAFANA_CLOUD_LOKI_ENDPOINT`  | fetch script appends `/loki/api/v1/push` if missing         |
-| `grafana-example-org-cloud-loki-username`            | `loki.user`      | `GRAFANA_CLOUD_LOKI_USER`      |                                                             |
-| `grafana-example-org-faro-api-endpoint`              | `faro.endpoint`  | `FARO_COLLECTOR_URL`           | frontend runtime env                                        |
-| `grafana-example-org-faro-sourcemap-token`           | `faro.api_key`   | `FARO_API_KEY`                 | webpack build arg                                           |
+| AKV secret name                                      | env file key (== K8s Secret key) | Notes                                                       |
+| ----------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------ |
+| `grafana-example-org-alloy-writer-example-org-token` | `GRAFANA_CLOUD_API_KEY`            | `glc_` access-policy token — required for data-plane writes |
+| `grafana-example-org-cloud-tempo-endpoint`            | `GRAFANA_CLOUD_TEMPO_ENDPOINT`     | fetch script appends `:443`                                 |
+| `grafana-example-org-cloud-tempo-username`            | `GRAFANA_CLOUD_TEMPO_USER`         |                                                              |
+| `grafana-example-org-cloud-mimir-endpoint`            | `GRAFANA_CLOUD_MIMIR_ENDPOINT`     | fetch script appends `/push` if missing                     |
+| `grafana-example-org-cloud-mimir-username`            | `GRAFANA_CLOUD_MIMIR_USER`         |                                                              |
+| `grafana-example-org-cloud-loki-endpoint`             | `GRAFANA_CLOUD_LOKI_ENDPOINT`      | fetch script appends `/loki/api/v1/push` if missing         |
+| `grafana-example-org-cloud-loki-username`             | `GRAFANA_CLOUD_LOKI_USER`          |                                                              |
+| `grafana-example-org-faro-api-endpoint`               | `FARO_COLLECTOR_URL`               | frontend runtime env                                        |
+| `grafana-example-org-faro-sourcemap-token`            | `FARO_API_KEY`                     | webpack build arg                                           |
 
 ---
 
@@ -76,35 +79,32 @@ under `monitoring.grafana_cloud.akv.*` — these are IDs/names and are safe to t
 
 ### 1. Azure auth
 
-The fetch script uses whatever `az` session is active. Either:
+The fetch script first resolves the target env file from `conf.yml`'s `monitoring.grafana_cloud.use_env`,
+then sources it to load `ARM_TENANT_ID` / `ARM_SUBSCRIPTION_ID` / `Resource_Group` / `Azure_KeyVault`
+(vault coordinates) and `ARM_CLIENT_ID` / `ARM_CLIENT_SECRET` (service-principal credentials, if set).
 
 ```bash
-# Interactive login (your user credentials):
+# Interactive login (your user credentials) — used if ARM_CLIENT_ID/ARM_CLIENT_SECRET
+# are empty in the env file:
 az login
 ```
 
-Or export a service-principal before running the script (no .env file loading — export them in the
-shell):
+Or fill in `ARM_CLIENT_ID` / `ARM_CLIENT_SECRET` in the env file itself for service-principal auth —
+the script logs in as that principal automatically.
 
-```bash
-export ARM_CLIENT_ID=<sp-app-id>
-export ARM_CLIENT_SECRET=<sp-password>
-# TENANT_ID is read from conf.yml monitoring.grafana_cloud.akv.tenant_id
-```
-
-### 2. Fetch into conf.yml (in place)
+### 2. Fetch into the env file (in place)
 
 ```bash
 # Preview the changes:
 ./scripts/fetch-grafana-cloud-conf-from-akv.sh --dry-run
 
-# Apply in place (creates conf.yml.bak):
+# Apply in place (creates <env file>.bak):
 ./scripts/fetch-grafana-cloud-conf-from-akv.sh
 ```
 
-The script updates **only** the nine leaf fields in
-`monitoring.grafana_cloud.{api_key, tempo.*, mimir.*, loki.*, faro.*}`. Comments, ordering, and
-every other field in conf.yml are preserved — see
+The script updates **only** the nine `GRAFANA_CLOUD_*`/`FARO_*` keys in the env file named by
+`use_env` (appending any that don't exist yet). Comments, ordering, and every other line (including
+the `ARM_*`/`Resource_Group`/`Azure_KeyVault` coordinates) are preserved — see
 [smoke-test-conf-updater.sh](../../scripts/smoke-test-conf-updater.sh) for the regression test that
 enforces this.
 
@@ -114,22 +114,11 @@ enforces this.
 ./deploy-local.sh --skip-cluster --skip-build
 ```
 
-`deploy-local.sh` writes the `grafana-cloud-secrets` K8s Secret into both `otel-lab` (apps/FARO
-consumers) and `monitoring` (Helm chart's Alloy). Before `helm upgrade`, a contract validator
-asserts every key referenced by the rendered values file is present in the Secret — rename on either
-side fails fast.
-
-Where the nine leaf values come from is gated by `monitoring.grafana_cloud.use_env`:
-
-- `false` (default) — read straight from
-  `monitoring.grafana_cloud.{api_key, tempo.*, mimir.*, loki.*, faro.*}` in conf.yml, i.e. whatever
-  step 2 last wrote.
-- `true` — `deploy-local.sh` sources `.env` (repo root) instead and ignores the conf.yml fields
-  above, reading `GRAFANA_CLOUD_API_KEY` / `GRAFANA_CLOUD_TEMPO_ENDPOINT` /
-  `GRAFANA_CLOUD_TEMPO_USER` / `GRAFANA_CLOUD_MIMIR_ENDPOINT` / `GRAFANA_CLOUD_MIMIR_USER` /
-  `GRAFANA_CLOUD_LOKI_ENDPOINT` / `GRAFANA_CLOUD_LOKI_USER` / `FARO_COLLECTOR_URL` / `FARO_API_KEY`
-  — the same keys the legacy Makefile flow uses. Useful if you already keep `.env` current and want
-  to skip step 2 entirely.
+`deploy-local.sh` sources the same env file named by `monitoring.grafana_cloud.use_env` (required —
+it fails fast if empty or missing) and writes the `grafana-cloud-secrets` K8s Secret into both
+`otel-lab` (apps/FARO consumers) and `monitoring` (Helm chart's Alloy). Before `helm upgrade`, a
+contract validator asserts every key referenced by the rendered values file is present in the
+Secret — rename on either side fails fast.
 
 ---
 
