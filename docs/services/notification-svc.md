@@ -74,14 +74,11 @@ storms when RabbitMQ restarts.
 
 ## Queue and exchange topology
 
-```
-Exchange: orders  (topic, durable)
-   └─ routing key: order.created
-         └─ Queue: notifications  (durable)
-               x-dead-letter-exchange: orders.dlq
-
-Exchange: orders.dlq  (fanout, durable)
-   └─ Queue: notifications.dlq  (durable)
+```mermaid
+flowchart LR
+    Orders["Exchange: orders<br/>(topic, durable)"] -->|routing key: order.created| Notifications["Queue: notifications<br/>(durable)"]
+    Notifications -->|"NACK, requeue=false →<br/>x-dead-letter-exchange: orders.dlq"| DLQExchange["Exchange: orders.dlq<br/>(fanout, durable)"]
+    DLQExchange --> DLQQueue["Queue: notifications.dlq<br/>(durable)"]
 ```
 
 Dead-letter routing is declared via queue arguments:

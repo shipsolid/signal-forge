@@ -71,10 +71,15 @@ End-to-end technical and production-grade documentation for the SignalForge OTel
 
 ## Quick orientation
 
-```
-Browser → gateway-api (.NET) → order-api (.NET, gRPC) → RabbitMQ → notification-svc (Python)
-                  │                      │                                 │
-                MySQL                PostgreSQL                          Redis
+```mermaid
+flowchart LR
+    Browser --> Gateway["gateway-api (.NET)"]
+    Gateway --> OrderAPI["order-api (.NET, gRPC)"]
+    OrderAPI --> RabbitMQ[RabbitMQ]
+    RabbitMQ --> Notification["notification-svc (Python)"]
+    Gateway --> MySQL[MySQL]
+    OrderAPI --> PostgreSQL[PostgreSQL]
+    Notification --> Redis[Redis]
 ```
 
 All services export OTLP → `alloy-receiver` (Helm DaemonSet in the `monitoring` namespace).

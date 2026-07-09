@@ -4,54 +4,15 @@ Exemplars link a histogram bucket observation to a specific trace, enabling a "j
 
 ## End-to-end pipeline
 
-```
-1. Application SDK
-   ┌─────────────────────────────────────────────────────────┐
-   │  gateway.downstream.duration.Record(42.5ms, tags...)    │
-   │                                                         │
-   │  OTel SDK (OTEL_METRICS_EXEMPLAR_FILTER=trace_based):  │
-   │  Is Activity.Current a sampled span? YES                │
-   │  → attach exemplar: {traceId="4bf92f...", value=42.5}  │
-   │    to the histogram bucket for this observation         │
-   └─────────────────────────────────────────────────────────┘
-                          │ OTLP
-                          ▼
-2. Alloy receiver
-   ┌─────────────────────────────────────────────────────────┐
-   │  spanmetrics connector also attaches exemplars          │
-   │  (exemplars { enabled = true })                         │
-   │  → traces_spanmetrics_latency_bucket carries exemplars  │
-   └─────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-3. Local mode: prometheus.remote_write
-   ┌─────────────────────────────────────────────────────────┐
-   │  Converts OTLP metrics to Prometheus remote-write.      │
-   │  Exemplars survive as OpenMetrics exemplars:            │
-   │                                                         │
-   │  latency_bucket{le="100",...} 7                         │
-   │    # {traceID="4bf92f3577b34da6a3ce929d0e0e4736"} 42.5 │
-   └─────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-4. Prometheus (--enable-feature=exemplar-storage)
-   ┌─────────────────────────────────────────────────────────┐
-   │  Stores exemplars in a ring buffer per series.          │
-   │  Without this flag, exemplars are silently dropped.     │
-   └─────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-5. Grafana panel
-   ┌─────────────────────────────────────────────────────────┐
-   │  Query: http_server_request_duration_seconds            │
-   │  Enable: Exemplars toggle ON                            │
-   │  Data links: Jaeger datasource, URL: ${__value.raw}     │
-   │                                                         │
-   │  Grafana fetches exemplars via:                         │
-   │  GET /api/v1/query_exemplars?...                        │
-   │  Renders as scatter dots on the time series.            │
-   │  Click dot → opens trace in Jaeger.                     │
-   └─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["<b>1. Application SDK</b><br/>gateway.downstream.duration.Record(42.5ms, tags...)<br/><br/>OTel SDK (OTEL_METRICS_EXEMPLAR_FILTER=trace_based):<br/>Is Activity.Current a sampled span? YES<br/>→ attach exemplar: {traceId='4bf92f...', value=42.5}<br/>to the histogram bucket for this observation"]
+    B["<b>2. Alloy receiver</b><br/>spanmetrics connector also attaches exemplars<br/>(exemplars { enabled = true })<br/>→ traces_spanmetrics_latency_bucket carries exemplars"]
+    C["<b>3. Local mode: prometheus.remote_write</b><br/>Converts OTLP metrics to Prometheus remote-write.<br/>Exemplars survive as OpenMetrics exemplars:<br/><br/>latency_bucket{le='100',...} 7<br/># {traceID='4bf92f3577b34da6a3ce929d0e0e4736'} 42.5"]
+    D["<b>4. Prometheus (--enable-feature=exemplar-storage)</b><br/>Stores exemplars in a ring buffer per series.<br/>Without this flag, exemplars are silently dropped."]
+    E["<b>5. Grafana panel</b><br/>Query: http_server_request_duration_seconds<br/>Enable: Exemplars toggle ON<br/>Data links: Jaeger datasource, URL: ${__value.raw}<br/><br/>Grafana fetches exemplars via:<br/>GET /api/v1/query_exemplars?...<br/>Renders as scatter dots on the time series.<br/>Click dot → opens trace in Jaeger."]
+
+    A -->|OTLP| B --> C --> D --> E
 ```
 
 ## Configuration checklist

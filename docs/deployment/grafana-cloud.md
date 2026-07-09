@@ -10,14 +10,19 @@ When credentials are absent, cloud exporters are no-ops — local backends are u
 Grafana Cloud uses **per-signal instance IDs** as Basic Auth usernames. A single shared API key is
 the password for all three signals.
 
-```
-Grafana Cloud Stack
-  ├── Tempo (traces)   → instance ID:  1541184   endpoint: tempo-prod-xx.grafana.net
-  ├── Mimir (metrics)  → instance ID:  3102416   endpoint: prometheus-us-central2.grafana.net
-  └── Loki  (logs)     → instance ID:  1546883   endpoint: logs-prod-037.grafana.net
+```mermaid
+flowchart TD
+    Token["Shared Access Policy token (glc_...)<br/>grafana-example-org-alloy-writer-example-org-token<br/>Scopes: metrics:write logs:write traces:write"]
 
-Shared Access Policy token (glc_...): grafana-example-org-alloy-writer-example-org-token
-  Scopes: metrics:write  logs:write  traces:write
+    subgraph GC["Grafana Cloud Stack"]
+        Tempo["Tempo (traces)<br/>instance ID: 1541184<br/>tempo-prod-xx.grafana.net"]
+        Mimir["Mimir (metrics)<br/>instance ID: 3102416<br/>prometheus-us-central2.grafana.net"]
+        Loki["Loki (logs)<br/>instance ID: 1546883<br/>logs-prod-037.grafana.net"]
+    end
+
+    Token -->|authenticates| Tempo
+    Token -->|authenticates| Mimir
+    Token -->|authenticates| Loki
 ```
 
 > **Important**: The Grafana Cloud API key (`grafana-example-org-cloud-api-key`, prefix `glsa_`) is

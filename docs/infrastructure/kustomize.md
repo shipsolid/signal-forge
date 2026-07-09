@@ -4,23 +4,24 @@ signal-forge ships a Kustomize base + per-env overlays alongside the `deploy-loc
 
 ## Directory layout
 
-```
-k8s/
-├── base/
-│   └── kustomization.yaml          # aggregates every component
-├── overlays/
-│   ├── dev/kustomization.yaml      # identity overlay — matches base
-│   ├── staging/kustomization.yaml  # replicas=3, staging ingress host
-│   └── prod/kustomization.yaml     # replicas=6, required anti-affinity, prod ingress host
-├── infra/
-│   ├── kustomization.yaml          # namespace + secrets + pdb + netpol + ingress
-│   └── *.yaml
-├── app/{gateway,order,notification,frontend}/
-│   ├── kustomization.yaml          # deployment + service
-│   └── *.yaml
-└── datastores/{mysql,postgres,redis,rabbitmq}/
-    ├── kustomization.yaml
-    └── *.yaml
+```mermaid
+mindmap
+  root["k8s/"]
+    n1["base/"]
+      n1a["kustomization.yaml # aggregates every component"]
+    n2["overlays/"]
+      n2a["dev/kustomization.yaml # identity overlay — matches base"]
+      n2b["staging/kustomization.yaml # replicas=3, staging ingress host"]
+      n2c["prod/kustomization.yaml # replicas=6, required anti-affinity, prod ingress host"]
+    n3["infra/"]
+      n3a["kustomization.yaml # namespace + secrets + pdb + netpol + ingress"]
+      n3b["*.yaml"]
+    n4["app/{gateway,order,notification,frontend}/"]
+      n4a["kustomization.yaml # deployment + service"]
+      n4b["*.yaml"]
+    n5["datastores/{mysql,postgres,redis,rabbitmq}/"]
+      n5a["kustomization.yaml"]
+      n5b["*.yaml"]
 ```
 
 The manifest files themselves **did not move** during the Kustomize refactor. They stayed in their original directories (`k8s/infra/`, `k8s/app/*/`, `k8s/datastores/*/`). Each subdirectory gained a small `kustomization.yaml` listing its local resources; `k8s/base/kustomization.yaml` then references those subdirectories.

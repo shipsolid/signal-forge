@@ -47,30 +47,35 @@ bleed into production pipelines.
 
 ## Architecture
 
-```text
-Browser (Faro RUM)
-  └─► gateway-api (.NET 8, :5000)
-        ├─► MySQL 8 (EF Core)
-        ├─► order-api (.NET 8, gRPC :5001)
-        │     ├─► PostgreSQL 16 (Npgsql)
-        │     └─► RabbitMQ → notification-svc (Python, :8000)
-        │                          └─► Redis 7
-        └─► notification-svc (HTTP)
+```mermaid
+flowchart TD
+    Browser["Browser (Faro RUM)"] --> Gateway["gateway-api (.NET 8, :5000)"]
+    Gateway --> MySQL["MySQL 8 (EF Core)"]
+    Gateway --> OrderAPI["order-api (.NET 8, gRPC :5001)"]
+    Gateway -->|HTTP| Notification["notification-svc (Python, :8000)"]
+    OrderAPI --> Postgres["PostgreSQL 16 (Npgsql)"]
+    OrderAPI --> RabbitMQ["RabbitMQ"]
+    RabbitMQ --> Notification
+    Notification --> Redis["Redis 7"]
 ```
 
 All services push OTLP to `alloy-receiver` (Helm-managed DaemonSet, `monitoring` namespace):
 
-```text
-App SDK ──OTLP gRPC :4317──► alloy-receiver
-  → k8sattributes enrichment
-  → transform (stamp deployment.environment)
-  → filter (drop /healthz spans)
-  ├── spanmetrics connector  → RED metrics (before sampling)
-  └── tail_sampling          → errors=100%, slow>2s=100%, rest=25%
-       └── batch → Tempo (cloud) | Jaeger (local)
+```mermaid
+flowchart TD
+    SDK["App SDK"] -->|OTLP gRPC :4317| Receiver[alloy-receiver]
+    Receiver --> K8sAttrs[k8sattributes enrichment]
+    K8sAttrs --> Transform["transform (stamp deployment.environment)"]
+    Transform --> Filter["filter (drop /healthz spans)"]
+    Filter --> SpanMetrics[spanmetrics connector]
+    SpanMetrics --> RED["RED metrics (before sampling)"]
+    Filter --> TailSampling["tail_sampling (errors=100%, slow>2s=100%, rest=25%)"]
+    TailSampling --> Batch[batch]
+    Batch --> Backend1["Tempo (cloud) | Jaeger (local)"]
 
-alloy-logs (DaemonSet)  → pod stdout tailing → trace correlation → Loki
-alloy-metrics (StatefulSet) → kubelet/cAdvisor/KSM → Mimir | Prometheus
+    Logs["alloy-logs (DaemonSet)"] --> LogsTail["pod stdout tailing"] --> LogsCorr["trace correlation"] --> Loki[Loki]
+
+    Metrics["alloy-metrics (StatefulSet)"] --> MetricsScrape["kubelet/cAdvisor/KSM"] --> Backend2["Mimir | Prometheus"]
 ```
 
 The single most important configuration knob is `monitoring.mode` in [conf.yml](conf.yml):
@@ -113,10 +118,14 @@ A single "Create Order" click produces a 5-hop trace across three runtimes. The 
 SpanLink (not parent-child) because message processing is async; both spans share the same `traceId`
 and appear as a dashed arrow in Jaeger.
 
-```text
-Browser (Faro)  →  gateway-api  →  order-api  →  RabbitMQ (SpanLink)  →  notification-svc
-                                  ↓                                       ↓
-                              PostgreSQL                               Redis
+```mermaid
+flowchart LR
+    Browser["Browser (Faro)"] --> Gateway[gateway-api]
+    Gateway --> OrderAPI[order-api]
+    OrderAPI -->|SpanLink| RabbitMQ[RabbitMQ]
+    RabbitMQ --> Notification[notification-svc]
+    OrderAPI --> Postgres[PostgreSQL]
+    Notification --> Redis[Redis]
 ```
 
 See [docs/architecture/overview.md](docs/architecture/overview.md) for the full signal flow

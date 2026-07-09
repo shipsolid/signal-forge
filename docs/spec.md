@@ -23,60 +23,53 @@ once.
 
 ## 2. Architecture Overview
 
-```text
-┌──────────────────────────────────────────────────────────────────────────────────┐
-│  k3d cluster: otel-lab   (namespace: otel-lab)                                   │
-│                                                                                    │
-│  ┌────────────────┐        ┌───────────────────┐  gRPC:5002 ┌────────────────┐   │
-│  │  Angular SPA   │──HTTP─▶│  gateway-api      │───────────▶│  order-api     │   │
-│  │  (Faro RUM)    │  /api  │  (.NET 8)         │            │  (.NET 8)      │   │
-│  │  nginx:8080    │        │  :5000            │            │  :5002 grpc    │   │
-│  │  UID 101       │        │  UID 1654          │            │  :5001 health  │   │
-│  └────────────────┘        │  owns: MySQL 8.0   │            │  UID 1654      │   │
-│                             └──────┬────────────┘            │  owns: PG 16   │   │
-│                                    │                          └───┬────────┬──┘   │
-│                                    │ HTTP :8000                    │        │       │
-│                                    ▼                       publish│    outbox     │
-│                             ┌──────────────┐                      ▼   relay(5s)   │
-│                             │ notification │◀──consume────┌──────────────┐        │
-│                             │ -svc         │   prefetch=1  │  RabbitMQ    │        │
-│                             │ (Python/     │   ┌──────────▶│  (broker)    │        │
-│                             │  FastAPI)    │   │ DLQ on     │  exch:orders │        │
-│                             │ :8000        │   │ nack       │  (topic)     │        │
-│                             │ UID 1000     │   └───────────┴──────────────┘        │
-│                             │ owns: Redis  │                                        │
-│                             └──────────────┘                                        │
-│                                                                                     │
-│  TLS ingress (Traefik + cert-manager): signal-forge.local:8443 → frontend / gateway│
-│  NetworkPolicies: default-deny + tiered allow-list (not enforced on k3d/flannel)   │
-└──────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph CLUSTER["k3d cluster: otel-lab (namespace: otel-lab)"]
+        FE["Angular SPA (Faro RUM)<br/>nginx:8080, UID 101"]
+        GW["gateway-api (.NET 8)<br/>:5000, UID 1654<br/>owns: MySQL 8.0"]
+        ORD["order-api (.NET 8)<br/>:5002 grpc, :5001 health<br/>UID 1654, owns: PostgreSQL 16"]
+        NOTIF["notification-svc (Python/FastAPI)<br/>:8000, UID 1000<br/>owns: Redis"]
+        MQ["RabbitMQ (broker)<br/>exch:orders (topic)"]
 
-            ┌─────────────────────────── monitoring.mode = local ───────────────────────────┐
-            │  k8s/monitoring/grafana/ (bespoke Alloy DaemonSet, v1.14.0)                    │
-            │  OTLP :4317/:4318, Faro :12347                                                 │
-            │  memory_limiter → k8sattributes → transform(env label) → filter(healthz)        │
-            │    → spanmetrics connector ─┐                                                   │
-            │    → tail_sampling (errors 100%, >2s 100%, rest 25%) ─┘→ batch → exporters:     │
-            │      traces→Jaeger, metrics→Prometheus remote_write, logs→Loki (separate         │
-            │      loki.source.kubernetes tailing pipeline, trace_correlation stage)           │
-            │  Local backends (k8s/monitoring/local/): Jaeger:16686, Prometheus:9090,          │
-            │  Loki:3100, Grafana:3000 (pre-provisioned datasources + 2 dashboards)            │
-            │  Helm chart install is OPTIONAL here (--with-helm)                               │
-            └─────────────────────────────────────────────────────────────────────────────────┘
+        FE -->|"HTTP /api"| GW
+        GW -->|"gRPC :5002"| ORD
+        GW -->|"HTTP :8000"| NOTIF
+        ORD -->|"publish / outbox relay (5s)"| MQ
+        MQ -->|"consume, prefetch=1"| NOTIF
+        NOTIF -.->|"nack → DLQ"| MQ
 
-            ┌─────────────────────────── monitoring.mode = cloud (default) ─────────────────┐
-            │  grafana/k8s-monitoring Helm chart v3.8.4, namespace: monitoring, MANDATORY    │
-            │  alloy-receiver DaemonSet — OTLP :4317/:4318 — is the sole ingress             │
-            │  Destinations (values-cloud.yaml.tmpl, rendered from conf.yml +                │
-            │  grafana-cloud-secrets Secret, keys cross-checked at deploy time):              │
-            │    grafana-cloud-metrics → Mimir Prometheus remote_write (NOT /api/v1/otlp)     │
-            │    grafana-cloud-logs    → Loki push                                            │
-            │    grafana-cloud-traces  → Tempo OTLP/gRPC                                       │
-            │  Also enables: clusterMetrics, annotationAutodiscovery, clusterEvents,          │
-            │  node/pod log pipelines with trace correlation, applicationObservability.        │
-            │  Disabled: Beyla auto-instrumentation, Pyroscope profiling, Fleet Management.   │
-            │  No in-cluster Jaeger/Prometheus/Loki/Grafana deployed in this mode.             │
-            └─────────────────────────────────────────────────────────────────────────────────┘
+        TLSNOTE["TLS ingress (Traefik + cert-manager): signal-forge.local:8443 → frontend / gateway"]
+        NPNOTE["NetworkPolicies: default-deny + tiered allow-list (not enforced on k3d/flannel)"]
+    end
+
+    subgraph LOCALMODE["monitoring.mode = local"]
+        L_INFO["k8s/monitoring/grafana/ (bespoke Alloy DaemonSet, v1.14.0)<br/>OTLP :4317/:4318, Faro :12347"]
+        L1[memory_limiter] --> L2[k8sattributes] --> L3["transform (env label)"] --> L4["filter (healthz)"]
+        L4 --> L5[spanmetrics connector]
+        L4 --> L6["tail_sampling (errors 100%, &gt;2s 100%, rest 25%)"]
+        L5 --> L7[batch]
+        L6 --> L7
+        L7 --> L8["traces → Jaeger"]
+        L7 --> L9["metrics → Prometheus remote_write"]
+        L10["logs → Loki<br/>(separate loki.source.kubernetes tailing pipeline, trace_correlation stage)"]
+        L_BACKENDS["Local backends (k8s/monitoring/local/):<br/>Jaeger:16686, Prometheus:9090, Loki:3100, Grafana:3000<br/>(pre-provisioned datasources + 2 dashboards)"]
+        L_HELM["Helm chart install is OPTIONAL here (--with-helm)"]
+    end
+
+    subgraph CLOUDMODE["monitoring.mode = cloud (default)"]
+        CL_INFO["grafana/k8s-monitoring Helm chart v3.8.4<br/>namespace: monitoring, MANDATORY"]
+        CL_RECEIVER["alloy-receiver DaemonSet<br/>OTLP :4317/:4318 — is the sole ingress"]
+        CL_DEST_M["grafana-cloud-metrics → Mimir Prometheus remote_write<br/>(NOT /api/v1/otlp)"]
+        CL_DEST_L["grafana-cloud-logs → Loki push"]
+        CL_DEST_T["grafana-cloud-traces → Tempo OTLP/gRPC"]
+        CL_RECEIVER --> CL_DEST_M
+        CL_RECEIVER --> CL_DEST_L
+        CL_RECEIVER --> CL_DEST_T
+        CL_ENABLES["Also enables: clusterMetrics, annotationAutodiscovery, clusterEvents,<br/>node/pod log pipelines with trace correlation, applicationObservability."]
+        CL_DISABLED["Disabled: Beyla auto-instrumentation, Pyroscope profiling, Fleet Management."]
+        CL_NONE["No in-cluster Jaeger/Prometheus/Loki/Grafana deployed in this mode."]
+    end
 ```
 
 ---
@@ -629,30 +622,25 @@ Two independent pipelines exist, selected by `monitoring.mode` — **never both 
 Deployed by a bespoke DaemonSet (`k8s/monitoring/grafana/daemonset.yaml`, image
 `grafana/alloy:v1.14.0`), not the Helm chart (Helm install is optional here, via `--with-helm`).
 
-```
-otelcol.receiver.otlp (grpc:4317, http:4318)  ─┐
-faro.receiver (port:12347)                     ─┴─▶ otelcol.processor.memory_limiter (400MiB/100MiB spike)
-  ▼
-otelcol.processor.k8sattributes (pod/node/namespace enrichment)
-  ▼
-otelcol.processor.transform "env_label" (stamps deployment.environment, promotes resource attrs to metric labels)
-  ▼
-otelcol.processor.filter "healthz" (drops /healthz spans before spanmetrics/sampling)
-  ▼
-  ├─▶ otelcol.connector.spanmetrics (RED metrics; dims: http.method/route/status_code, rpc.*, messaging.operation;
-  │     explicit buckets 5ms–10s; exemplars enabled) — runs BEFORE sampling, so counters reflect 100% of traffic
-  └─▶ otelcol.processor.tail_sampling (errors 100%, latency >2s 100%, rest 25% probabilistic)
-  ▼
-otelcol.processor.batch (5s / 1024)
-  ▼
-  ├─ traces  → otelcol.exporter.otlp → jaeger.otel-lab.svc.cluster.local:4317
-  └─ metrics → otelcol.exporter.prometheus → prometheus.remote_write → prometheus...:9090/api/v1/write
+```mermaid
+flowchart TD
+    A["otelcol.receiver.otlp (grpc:4317, http:4318)"] --> C["otelcol.processor.memory_limiter (400MiB/100MiB spike)"]
+    B["faro.receiver (port:12347)"] --> C
+    C --> D["otelcol.processor.k8sattributes (pod/node/namespace enrichment)"]
+    D --> E["otelcol.processor.transform (env_label)<br/>stamps deployment.environment, promotes resource attrs to metric labels"]
+    E --> F["otelcol.processor.filter (healthz)<br/>drops /healthz spans before spanmetrics/sampling"]
+    F --> G["otelcol.connector.spanmetrics<br/>RED metrics; dims: http.method/route/status_code, rpc.*, messaging.operation;<br/>explicit buckets 5ms–10s; exemplars enabled<br/>— runs BEFORE sampling, so counters reflect 100% of traffic"]
+    F --> H["otelcol.processor.tail_sampling<br/>errors 100%, latency &gt;2s 100%, rest 25% probabilistic"]
+    G --> I["otelcol.processor.batch (5s / 1024)"]
+    H --> I
+    I --> J["traces → otelcol.exporter.otlp → jaeger.otel-lab.svc.cluster.local:4317"]
+    I --> K["metrics → otelcol.exporter.prometheus → prometheus.remote_write → prometheus...:9090/api/v1/write"]
 
-// Separate log-tailing pipeline (not OTLP):
-discovery.kubernetes (pods, ns=otel-lab) → loki.source.kubernetes
-  → loki.process "trace_correlation" (extracts .NET TraceId/SpanId/Level and Python
-    otelTraceID/otelSpanID/levelname via JSON stage, promotes to Loki structured metadata)
-  → loki.write "local" → loki...:3100/loki/api/v1/push
+    subgraph LOGS["Separate log-tailing pipeline (not OTLP)"]
+        N["discovery.kubernetes (pods, ns=otel-lab)"] --> O["loki.source.kubernetes"]
+        O --> P["loki.process (trace_correlation)<br/>extracts .NET TraceId/SpanId/Level and Python otelTraceID/otelSpanID/levelname via JSON stage,<br/>promotes to Loki structured metadata"]
+        P --> Q["loki.write (local) → loki...:3100/loki/api/v1/push"]
+    end
 ```
 
 No Grafana Cloud exporters exist in this file at all — confirmed explicitly by a comment in
@@ -711,35 +699,31 @@ the trace-link target (pre-wired in the local-mode Grafana provisioning, §14).
 
 ## 6. Communication Patterns & Trace Propagation Map
 
-```
-  Browser (Faro)
-      │  traceparent (W3C) via fetch, scoped to API base URL + localhost
-      ▼
-  gateway-api (.NET)  ◄── Span: HTTP Server, endpoint.{method}
-      │  EF Core → MySQL span
-      │
-      ├─ gRPC (traceparent in metadata) ──────────────────────┐
-      └─ HTTP (traceparent in headers)  ──┐                    │
-                                            │                    ▼
-                                            │        order-api (.NET)  ◄── Span: gRPC Server, order.create
-                                            │             │  EF Core → PostgreSQL span
-                                            │             │  ── single transaction ──
-                                            │             │  writes Order + OutboxMessage{TraceParent = Activity.Current.Id}
-                                            │             │
-                                            │             ▼  (async, 5s poll, FOR UPDATE SKIP LOCKED)
-                                            │        OutboxRelayWorker ◄── Span: outbox.relay
-                                            │             │  parented via ActivityContext.TryParse(TraceParent) + ActivityLink
-                                            │             ▼
-                                            │        RabbitMQ publish ◄── Span: order.publish (PRODUCER)
-                                            │             (traceparent injected into message headers, manually — not
-                                            │              via Propagators.Inject(), since Activity.Current here is
-                                            │              the relay's own activity, not the request's)
-                                            │             │
-                                            │             ▼  async (message queue, exch:orders, key:order.created)
-                                            ▼        notification-svc (Python) ◄── Span: notification.process
-                                    notification-svc         (CONSUMER, Linked — not parent/child, per messaging semconv)
-                                    (HTTP GET /notifications)     │  Redis span (dedup + write)
-                                                                    │  Span: notification.send_email (mock)
+```mermaid
+sequenceDiagram
+    participant Browser as Browser (Faro)
+    participant Gateway as gateway-api (.NET)
+    participant Order as order-api (.NET)
+    participant Relay as OutboxRelayWorker
+    participant MQ as RabbitMQ
+    participant Notif as notification-svc (Python)
+
+    Browser->>Gateway: traceparent (W3C) via fetch,<br/>scoped to API base URL + localhost
+    Note over Gateway: Span: HTTP Server, endpoint.{method}<br/>EF Core → MySQL span
+
+    Gateway->>Order: gRPC (traceparent in metadata)
+    Note over Order: Span: gRPC Server, order.create<br/>EF Core → PostgreSQL span<br/>— single transaction —<br/>writes Order + OutboxMessage{TraceParent = Activity.Current.Id}
+
+    Order->>Relay: async, 5s poll, FOR UPDATE SKIP LOCKED
+    Note over Relay: Span: outbox.relay<br/>parented via ActivityContext.TryParse(TraceParent) + ActivityLink
+
+    Relay->>MQ: publish
+    Note over MQ: Span: order.publish (PRODUCER)<br/>traceparent injected into message headers, manually —<br/>not via Propagators.Inject(), since Activity.Current here<br/>is the relay's own activity, not the request's
+
+    MQ-->>Notif: async (message queue, exch:orders, key:order.created)
+    Note over Notif: Span: notification.process (CONSUMER, Linked —<br/>not parent/child, per messaging semconv)<br/>Redis span (dedup + write)<br/>Span: notification.send_email (mock)
+
+    Gateway->>Notif: HTTP (traceparent in headers): GET /notifications
 ```
 
 **Propagation protocol**: W3C TraceContext (`traceparent`) everywhere — HTTP headers, gRPC

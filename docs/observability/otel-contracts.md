@@ -443,25 +443,41 @@ Events whose JSON serialisation contains `"/healthz"` are dropped before transmi
 
 The complete 5-hop trace for a `POST /api/orders` request:
 
-```
-Browser (Faro)
-  └─ [CLIENT] XHR fetch span (TracingInstrumentation, W3C traceparent → HTTP header)
-       └─ gateway-api [SERVER] HTTP POST /api/orders
-            └─ gateway-api [INTERNAL] gateway.fanout (tags: order.project_id, order.id)
-                 └─ gateway-api [CLIENT] orders.OrderService/CreateOrder (gRPC)
-                      └─ order-api [SERVER] orders.OrderService/CreateOrder
-                           └─ order-api [INTERNAL] order.create (tags: project_id, amount, id)
-                                ├─ order-api [CLIENT] EF Core INSERT Orders (db.system=postgresql)
-                                └─ order-api [PRODUCER] order.publish (W3C traceparent → RabbitMQ header)
-                                     ╌╌╌ async queue crossing ╌╌╌
-                                     notification-svc [CONSUMER] notification.process
-                                          ├── [Link → order.publish span]
-                                          ├─ notification-svc [CLIENT] redis EXISTS (dedup)
-                                          ├─ notification-svc [CLIENT] redis HSET (store)
-                                          ├─ notification-svc [CLIENT] redis EXPIRE
-                                          ├─ notification-svc [CLIENT] redis SET (dedup key)
-                                          ├─ notification-svc [CLIENT] redis LPUSH + LTRIM
-                                          └─ notification-svc [INTERNAL] notification.send_email
+```mermaid
+flowchart TD
+    subgraph Browser["Browser (Faro)"]
+        A["[CLIENT] XHR fetch span<br/>TracingInstrumentation, W3C traceparent → HTTP header"]
+    end
+
+    subgraph GW["gateway-api"]
+        B["[SERVER] HTTP POST /api/orders"]
+        C["[INTERNAL] gateway.fanout<br/>tags: order.project_id, order.id"]
+        D["[CLIENT] orders.OrderService/CreateOrder (gRPC)"]
+    end
+
+    subgraph OA["order-api"]
+        E["[SERVER] orders.OrderService/CreateOrder"]
+        F["[INTERNAL] order.create<br/>tags: project_id, amount, id"]
+        G["[CLIENT] EF Core INSERT Orders<br/>db.system=postgresql"]
+        H["[PRODUCER] order.publish<br/>W3C traceparent → RabbitMQ header"]
+    end
+
+    subgraph NS["notification-svc"]
+        I["[CONSUMER] notification.process"]
+        J["[CLIENT] redis EXISTS (dedup)"]
+        K["[CLIENT] redis HSET (store)"]
+        L["[CLIENT] redis EXPIRE"]
+        M["[CLIENT] redis SET (dedup key)"]
+        N["[CLIENT] redis LPUSH + LTRIM"]
+        O["[INTERNAL] notification.send_email"]
+    end
+
+    A --> B --> C --> D --> E --> F
+    F --> G
+    F --> H
+    H -.->|SpanLink, async queue crossing| I
+    I --> J --> K --> L --> M --> N
+    I --> O
 ```
 
 **Trace continuity rules:**

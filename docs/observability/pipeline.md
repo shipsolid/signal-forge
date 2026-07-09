@@ -293,14 +293,28 @@ Grafana's Jaeger datasource `tracesToLogsV2` config queries Loki for `{trace_id=
 
 ### Full local-mode data flow
 
-```
-OTLP gRPC :4317 ──┐
-OTLP HTTP :4318 ──┤── k8sattributes ── env_label ──┬── traces ── filter ──┬── spanmetrics ── batch ── exporters
-Faro HTTP :12347 ─┘   (pod metadata)  (env stamp)  │                      └── tail_sampling ─┘
-                                                    ├── metrics ──────────── batch ── exporters
-                                                    └── logs ────────────── batch ── exporters
+```mermaid
+flowchart LR
+    otlp_grpc["OTLP gRPC :4317"] --> k8sattr
+    otlp_http["OTLP HTTP :4318"] --> k8sattr
+    faro["Faro HTTP :12347"] --> k8sattr
 
-Pod stdout ── loki.source.kubernetes ── trace_correlation ── loki.write ── Loki
+    k8sattr["k8sattributes<br/>(pod metadata)"] --> envlabel["env_label<br/>(env stamp)"]
+
+    envlabel --> traces["traces"]
+    envlabel --> metrics["metrics"]
+    envlabel --> logs["logs"]
+
+    traces --> filter["filter"]
+    filter --> spanmetrics["spanmetrics"]
+    filter --> tailsampling["tail_sampling"]
+    spanmetrics --> batch1["batch"] --> exp1["exporters"]
+    tailsampling --> batch1
+
+    metrics --> batch2["batch"] --> exp2["exporters"]
+    logs --> batch3["batch"] --> exp3["exporters"]
+
+    podstdout["Pod stdout"] --> lokisrc["loki.source.kubernetes"] --> tracecorr["trace_correlation"] --> lokiwrite["loki.write"] --> loki["Loki"]
 ```
 
 ---
@@ -314,10 +328,11 @@ Cloud mode has no hand-authored River config at all. `deploy-local.sh` renders
 **fixed, templated pipeline** from those values — not something this repo controls stage-by-stage
 the way local mode's configmap does:
 
-```text
-OTLP gRPC :4317 ──┐
-OTLP HTTP :4318 ──┴── resourcedetection ── k8sattributes ── transform ── batch ── destinations
-                                                                            (Mimir / Loki / Tempo)
+```mermaid
+flowchart LR
+    grpc["OTLP gRPC :4317"] --> rd["resourcedetection"]
+    http["OTLP HTTP :4318"] --> rd
+    rd --> k8s["k8sattributes"] --> tr["transform"] --> batch["batch"] --> dest["destinations<br/>(Mimir / Loki / Tempo)"]
 ```
 
 There is no spanmetrics connector, healthz filter, or tail-sampling stage enabled in this repo's

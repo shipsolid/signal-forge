@@ -100,16 +100,15 @@ production, use a Redis PVC or managed Redis with persistence.
 
 ### Key structure
 
-```
-notifications:{order_id}  (Hash)
-  ├── order_id:       "42"
-  ├── project_id:     "7"
-  ├── description:    "Server rack provisioning"
-  ├── amount:         "4500.0"
-  ├── processed_at:   "2026-04-14T10:30:01.234Z"
-  └── status:         "processed"
-
-TTL: 86400s (24 hours)
+```mermaid
+flowchart TD
+    H["notifications:{order_id} (Hash)<br/>TTL: 86400s (24 hours)"]
+    H --> F1["order_id: '42'"]
+    H --> F2["project_id: '7'"]
+    H --> F3["description: 'Server rack provisioning'"]
+    H --> F4["amount: '4500.0'"]
+    H --> F5["processed_at: '2026-04-14T10:30:01.234Z'"]
+    H --> F6["status: 'processed'"]
 ```
 
 ### OTel instrumentation
@@ -142,14 +141,16 @@ change on restarts.
 
 ### Exchange and queue topology
 
-```
-Exchange: orders          (topic, durable)
-  Binding: order.created → Queue: notifications (durable)
-                                    │
-                                    x-dead-letter-exchange: orders.dlq
+```mermaid
+flowchart LR
+    O["Exchange: orders<br/>(topic, durable)"]
+    N["Queue: notifications<br/>(durable)"]
+    D["Exchange: orders.dlq<br/>(fanout, durable)"]
+    ND["Queue: notifications.dlq<br/>(durable)"]
 
-Exchange: orders.dlq      (fanout, durable)
-  → Queue: notifications.dlq (durable)
+    O -->|"binding: order.created"| N
+    N -->|"x-dead-letter-exchange"| D
+    D --> ND
 ```
 
 The DLQ is declared by notification-svc at consumer startup. Messages NACKed with `requeue=False`

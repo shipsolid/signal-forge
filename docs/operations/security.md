@@ -36,28 +36,17 @@ have their own page are linked out:
 
 Two independent paths — neither populates the other's Secret:
 
-```
-Azure Key Vault (example-org-prd-kv)
-  └─ grafana-example-org-* (7 secrets)
-        │
-        │  make secrets-fetch-akv  (or scripts/fetch-grafana-cloud-conf-from-akv.sh,
-        │                            the primary flow — see CLAUDE.md)
-        ▼
-Kubernetes Secret (grafana-cloud-secrets)
-        │
-        │  secretKeyRef in Deployment specs
-        ▼
-Container environment variables (runtime only, not in manifests)
+```mermaid
+flowchart TD
+    subgraph pathA["Path A — Grafana Cloud secrets"]
+        A1["Azure Key Vault (example-org-prd-kv)<br/>grafana-example-org-* (7 secrets)"] -->|"make secrets-fetch-akv<br/>(or scripts/fetch-grafana-cloud-conf-from-akv.sh,<br/>the primary flow — see CLAUDE.md)"| A2["Kubernetes Secret: grafana-cloud-secrets"]
+        A2 -->|secretKeyRef in Deployment specs| A3["Container environment variables<br/>(runtime only, not in manifests)"]
+    end
 
-k8s/infra/secrets.yaml (static, hand-rotated base64 values)
-        │
-        │  kubectl apply -f k8s/infra/secrets.yaml
-        ▼
-Kubernetes Secret (db-secrets, otel-lab namespace)
-        │
-        │  secretKeyRef in Deployment/StatefulSet specs
-        ▼
-Container environment variables (runtime only, not in manifests)
+    subgraph pathB["Path B — Database secrets"]
+        B1["k8s/infra/secrets.yaml<br/>(static, hand-rotated base64 values)"] -->|"kubectl apply -f k8s/infra/secrets.yaml"| B2["Kubernetes Secret: db-secrets<br/>(otel-lab namespace)"]
+        B2 -->|secretKeyRef in Deployment/StatefulSet specs| B3["Container environment variables<br/>(runtime only, not in manifests)"]
+    end
 ```
 
 `db-secrets` is never AKV-sourced — see §Credential rotation procedure below for how it's actually

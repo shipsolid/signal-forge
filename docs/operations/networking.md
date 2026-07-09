@@ -87,25 +87,12 @@ kubectl -n otel-lab exec -it deploy/otel-frontend -- nc -vz api.grafana.net 443
 
 ### Architecture
 
-```
-                                    (one-time bootstrap)
-    ClusterIssuer selfsigned-bootstrap
-            │
-            │ issues
-            ▼
-    Certificate signal-forge-ca  (10-year self-signed root, in ns/cert-manager)
-            │
-            │ renewed every 11 months
-            ▼
-    ClusterIssuer signal-forge-ca
-            │
-            │ referenced by Ingress annotation
-            ▼
-    Ingress otel-lab-ingress  (cert-manager.io/cluster-issuer: signal-forge-ca)
-            │
-            │ cert-manager reconciles → issues leaf cert
-            ▼
-    Secret signal-forge-tls  (in ns/otel-lab)  —  consumed by Traefik for TLS termination
+```mermaid
+flowchart TD
+    A["ClusterIssuer: selfsigned-bootstrap<br/>(one-time bootstrap)"] -->|issues| B["Certificate: signal-forge-ca<br/>10-year self-signed root, in ns/cert-manager"]
+    B -->|renewed every 11 months| C["ClusterIssuer: signal-forge-ca"]
+    C -->|referenced by Ingress annotation| D["Ingress: otel-lab-ingress<br/>cert-manager.io/cluster-issuer: signal-forge-ca"]
+    D -->|cert-manager reconciles → issues leaf cert| E["Secret: signal-forge-tls<br/>in ns/otel-lab — consumed by Traefik for TLS termination"]
 ```
 
 ### Bootstrap order

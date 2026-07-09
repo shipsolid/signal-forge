@@ -16,22 +16,15 @@
 Logs are not shipped via OTLP. Applications write structured JSON to stdout; `alloy-logs` (a
 DaemonSet) tails pod stdout at the node level and extracts trace IDs for Loki structured metadata.
 
-```
-.NET service → stdout (JSON, TraceId/SpanId fields)
-Python service → stdout (JSON, otelTraceID/otelSpanID fields)
-                              │
-              alloy-logs DaemonSet (node-level)
-                   loki.source.kubernetes
-                              │
-                   loki.process "trace_correlation"
-                     stage.json (extract fields)
-                     stage.template (normalise names)
-                     stage.structured_metadata (attach)
-                              │
-                   loki.write → Loki
-                              │
-              Grafana "Logs for this span"
-                   query: {trace_id="<id>"}
+```mermaid
+flowchart TD
+    A[".NET service → stdout (JSON, TraceId/SpanId fields)<br/>Python service → stdout (JSON, otelTraceID/otelSpanID fields)"]
+    B["alloy-logs DaemonSet (node-level)<br/>loki.source.kubernetes"]
+    C["loki.process 'trace_correlation'<br/>stage.json (extract fields)<br/>stage.template (normalise names)<br/>stage.structured_metadata (attach)"]
+    D["loki.write → Loki"]
+    E["Grafana 'Logs for this span'<br/>query: {trace_id=&lt;id&gt;}"]
+
+    A --> B --> C --> D --> E
 ```
 
 ## Why node-level tailing instead of OTLP log push

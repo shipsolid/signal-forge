@@ -28,35 +28,55 @@ chosen over alternatives, and _what you should see_ when the pattern works corre
 
 ## 1. Architecture & Signal Flow
 
-```text
-                    namespace: otel-lab           namespace: monitoring
-                    ───────────────────           ─────────────────────────────────────────────
-                                                  ┌──────────────────────────────────────────┐
-Applications                                      │  alloy-receiver (DaemonSet)              │
-────────────                                      │    otelcol.receiver.otlp :4317/:4318     │
-gateway-api  ──OTLP──────────────────────────────►│    ├─ k8sattributes                      │
-order-api    ──OTLP──────────────────────────────►│    ├─ filter (drop /healthz)             │
-notif-svc    ──OTLP──────────────────────────────►│    ├─ spanmetrics connector ─────────────┼──► metrics
-Angular Faro ──HTTP (Faro) ─ (via alloy-receiver) │    ├─ tail_sampling                      │
-                                                  │    └─ batch                              │
-                                                  ├──────────────────────────────────────────┤
-                                                  │  alloy-logs (DaemonSet)                  │
-                                                  │    loki.source.kubernetes                │
-                                                  │    ├─ trace_correlation stage            │
-                                                  │    └─ loki.write                         │
-                                                  ├──────────────────────────────────────────┤
-                                                  │  alloy-metrics (StatefulSet)             │
-                                                  │    prometheus.scrape (kubelet, cAdvisor, │
-                                                  │    node-exporter, kube-state-metrics)    │
-                                                  └──────────────┬──────────────┬────────────┘
-                                                                 │              │
-                                                         ┌───────▼────┐  ┌──────▼──────────┐
-                                                         │ Local      │  │  Grafana Cloud  │
-                                                         │ Jaeger     │  │  Tempo/Mimir/   │
-                                                         │ Prom       │  │  Loki           │
-                                                         │ Loki       │  │                 │
-                                                         │ Grafana    │  │                 │
-                                                         └────────────┘  └─────────────────┘
+```mermaid
+flowchart TD
+    subgraph otellab["namespace: otel-lab"]
+        gatewayapi["gateway-api"]
+        orderapi["order-api"]
+        notifsvc["notif-svc"]
+        angularfaro["Angular Faro"]
+    end
+
+    subgraph monitoring["namespace: monitoring"]
+        subgraph alloyreceiver["alloy-receiver (DaemonSet)"]
+            otlpreceiver["otelcol.receiver.otlp :4317/:4318"]
+            k8sattributes["k8sattributes"]
+            filterhealthz["filter (drop /healthz)"]
+            spanmetricsconn["spanmetrics connector"]
+            tailsampling["tail_sampling"]
+            batchproc["batch"]
+            otlpreceiver --> k8sattributes --> filterhealthz --> spanmetricsconn --> tailsampling --> batchproc
+            spanmetricsconn -.-> metricsout["metrics"]
+        end
+        subgraph alloylogs["alloy-logs (DaemonSet)"]
+            lokisource["loki.source.kubernetes"]
+            tracecorrelation["trace_correlation stage"]
+            lokiwrite["loki.write"]
+            lokisource --> tracecorrelation --> lokiwrite
+        end
+        subgraph alloymetrics["alloy-metrics (StatefulSet)"]
+            promscrape["prometheus.scrape (kubelet, cAdvisor,<br/>node-exporter, kube-state-metrics)"]
+        end
+
+        subgraph localbackends["Local"]
+            localstack["Jaeger<br/>Prom<br/>Loki<br/>Grafana"]
+        end
+        subgraph cloudbackends["Grafana Cloud"]
+            cloudstack["Tempo/Mimir/Loki"]
+        end
+
+        batchproc --> localstack
+        lokiwrite --> localstack
+        promscrape --> localstack
+        batchproc --> cloudstack
+        lokiwrite --> cloudstack
+        promscrape --> cloudstack
+    end
+
+    gatewayapi -- OTLP --> otlpreceiver
+    orderapi -- OTLP --> otlpreceiver
+    notifsvc -- OTLP --> otlpreceiver
+    angularfaro -- "HTTP (Faro), via alloy-receiver" --> otlpreceiver
 ```
 
 All OTel signal types (traces, metrics) flow through `alloy-receiver`. Logs are tailed at the node
@@ -73,23 +93,26 @@ specialised Alloy roles). The hand-rolled DaemonSet in `k8s/alloy/` is kept as r
 A single "Create Order" click in the Angular SPA produces a trace spanning five hops across three
 runtimes and two communication paradigms:
 
-```text
-Browser (Faro)
-  │  W3C traceparent header in HTTP fetch
-  ▼
-gateway-api (.NET 8)        ← HTTP server span
-  │  EF Core child spans    ← db.system=mysql
-  │
-  │  W3C traceparent in gRPC metadata (grpc-trace-bin / traceparent)
-  ▼
-order-api (.NET 8)          ← gRPC server span
-  │  EF Core child spans    ← db.system=postgresql
-  │
-  │  W3C traceparent in RabbitMQ message headers (bytes-encoded)
-  ▼  (async)
-notification-svc (Python)   ← CONSUMER span (linked, same traceId)
-  │  Redis child spans       ← db.system=redis
-  └─ send_email child span   ← custom span
+```mermaid
+sequenceDiagram
+    participant Browser as Browser (Faro)
+    participant Gateway as gateway-api (.NET 8)
+    participant MySQL
+    participant Order as order-api (.NET 8)
+    participant Postgres as PostgreSQL
+    participant Notif as notification-svc (Python)
+    participant Redis
+
+    Browser->>Gateway: HTTP fetch (W3C traceparent header)
+    Note right of Gateway: HTTP server span
+    Gateway->>MySQL: EF Core child spans (db.system=mysql)
+    Gateway->>Order: gRPC call (W3C traceparent in grpc-trace-bin / traceparent metadata)
+    Note right of Order: gRPC server span
+    Order->>Postgres: EF Core child spans (db.system=postgresql)
+    Order-)Notif: RabbitMQ message (W3C traceparent in message headers, bytes-encoded, async)
+    Note right of Notif: CONSUMER span (linked via SpanLink, same traceId)
+    Notif->>Redis: Redis child spans (db.system=redis)
+    Notif->>Notif: send_email child span
 ```
 
 ### Propagation mechanism per transport
@@ -249,28 +272,15 @@ OTel metric names (dots) become underscores in Prometheus by convention.
 
 Exemplars link a histogram bucket observation to a specific trace:
 
-```text
-Application code
-  │  Records histogram observation while inside a sampled span:
-  │  DownstreamDuration.Record(42.5, tags...)
-  │
-  ▼
-OTel SDK (ExemplarFilterType.TraceBased)
-  │  Because Activity.Current is a sampled span, the SDK attaches:
-  │    { traceId: "4bf92f...", spanId: "00f067...", value: 42.5 }
-  │  as an exemplar on the histogram bucket for this observation.
-  │
-  ▼
-Alloy (preserves exemplars through OTLP → Prometheus remote-write)
-  │
-  ▼
-Prometheus (--enable-feature=exemplar-storage)
-  │  Stores exemplars alongside the histogram data.
-  │
-  ▼
-Grafana (exemplars toggle enabled on panel)
-  │  Renders exemplar dots on the histogram time series.
-  │  Each dot is clickable → opens the linked trace in Jaeger.
+```mermaid
+flowchart TD
+    appcode["Application code<br/>Records histogram observation while inside a sampled span:<br/>DownstreamDuration.Record(42.5, tags...)"]
+    otelsdk["OTel SDK (ExemplarFilterType.TraceBased)<br/>Because Activity.Current is a sampled span, the SDK attaches<br/>traceId: '4bf92f...', spanId: '00f067...', value: 42.5<br/>as an exemplar on the histogram bucket for this observation."]
+    alloy["Alloy<br/>(preserves exemplars through OTLP → Prometheus remote-write)"]
+    prometheus["Prometheus (--enable-feature=exemplar-storage)<br/>Stores exemplars alongside the histogram data."]
+    grafana["Grafana (exemplars toggle enabled on panel)<br/>Renders exemplar dots on the histogram time series.<br/>Each dot is clickable → opens the linked trace in Jaeger."]
+
+    appcode --> otelsdk --> alloy --> prometheus --> grafana
 ```
 
 **Configuration checklist for exemplars to work:**
@@ -300,12 +310,11 @@ If span metrics were generated _after_ sampling, only 25% of traces would contri
 your request rate metric would read 25% of reality. By placing `spanmetrics` in the pipeline
 _before_ `tail_sampling`, every span is counted regardless of whether the trace is kept:
 
-```text
-filter → spanmetrics (counts ALL spans)
-       ↘
-         tail_sampling (keeps 25% + errors + slow)
-                     ↓
-                   batch → Jaeger
+```mermaid
+flowchart LR
+    filterhealthz["filter"] --> spanmetricsconn["spanmetrics<br/>(counts ALL spans)"]
+    spanmetricsconn --> tailsampling["tail_sampling<br/>(keeps 25% + errors + slow)"]
+    tailsampling --> batchproc["batch"] --> jaeger["Jaeger"]
 ```
 
 ### Metric dimensions
