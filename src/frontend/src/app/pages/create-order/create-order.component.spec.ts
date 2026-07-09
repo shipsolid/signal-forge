@@ -112,9 +112,7 @@ describe('CreateOrderComponent', () => {
   });
 
   it('shows error message when createOrder fails', () => {
-    apiSpy.createOrder.mockReturnValue(
-      throwError(() => new Error('Bad Request'))
-    );
+    apiSpy.createOrder.mockReturnValue(throwError(() => new Error('Bad Request')));
     component.submit();
     fixture.detectChanges();
 
@@ -124,9 +122,7 @@ describe('CreateOrderComponent', () => {
   });
 
   it('clears a previous error before each submission', () => {
-    apiSpy.createOrder.mockReturnValue(
-      throwError(() => new Error('First error'))
-    );
+    apiSpy.createOrder.mockReturnValue(throwError(() => new Error('First error')));
     component.submit();
     expect(component.error).toBe('First error');
 

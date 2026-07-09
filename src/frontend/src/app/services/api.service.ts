@@ -84,7 +84,11 @@ export class ApiService {
    * (0, 999_999.99], description 1–500 chars) before forwarding to order-api
    * via gRPC.  Returns 400 on validation failure, 502 on gRPC/downstream error.
    */
-  createOrder(data: { projectId: number; description: string; amount: number }): Observable<{ id: number; status: string }> {
+  createOrder(data: {
+    projectId: number;
+    description: string;
+    amount: number;
+  }): Observable<{ id: number; status: string }> {
     return this.http.post<{ id: number; status: string }>(`${this.base}/orders`, data);
   }
 

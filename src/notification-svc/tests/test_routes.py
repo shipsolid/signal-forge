@@ -5,8 +5,6 @@ Uses fakeredis so no real Redis connection is needed.
 
 from unittest.mock import patch
 
-import pytest
-
 
 def test_health_returns_200(client):
     resp = client.get("/healthz")

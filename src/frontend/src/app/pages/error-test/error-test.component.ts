@@ -15,11 +15,10 @@ import { ApiService } from '../../services/api.service';
     <button (click)="triggerUnhandledRejection()">Trigger Unhandled Promise Rejection</button>
 
     <div *ngIf="backendResult" class="result">
-      Backend result: <pre>{{ backendResult }}</pre>
+      Backend result:
+      <pre>{{ backendResult }}</pre>
     </div>
-    <div *ngIf="backendError" class="error">
-      Backend error captured: {{ backendError }}
-    </div>
+    <div *ngIf="backendError" class="error">Backend error captured: {{ backendError }}</div>
     <div *ngIf="frontendMsg" class="info">{{ frontendMsg }}</div>
   `,
 })
@@ -34,8 +33,12 @@ export class ErrorTestComponent {
     this.backendError = '';
     this.backendResult = '';
     this.api.triggerError().subscribe({
-      next: (r) => { this.backendResult = JSON.stringify(r); },
-      error: (err) => { this.backendError = `${err.status}: ${err.message}`; },
+      next: (r) => {
+        this.backendResult = JSON.stringify(r);
+      },
+      error: (err) => {
+        this.backendError = `${err.status}: ${err.message}`;
+      },
     });
   }
 

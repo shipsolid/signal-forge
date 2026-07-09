@@ -20,7 +20,12 @@ import { ApiService } from '../../services/api.service';
       </label>
       <label>
         Description:
-        <input [(ngModel)]="description" name="description" placeholder="What are you ordering?" required />
+        <input
+          [(ngModel)]="description"
+          name="description"
+          placeholder="What are you ordering?"
+          required
+        />
       </label>
       <label>
         Amount ($):
@@ -44,7 +49,7 @@ export class CreateOrderComponent implements OnInit {
   constructor(
     private api: ApiService,
     private route: ActivatedRoute,
-    private router: Router
+    private router: Router,
   ) {}
 
   ngOnInit(): void {
@@ -59,7 +64,11 @@ export class CreateOrderComponent implements OnInit {
     this.submitting = true;
     this.error = '';
     this.api
-      .createOrder({ projectId: this.projectId, description: this.description, amount: this.amount })
+      .createOrder({
+        projectId: this.projectId,
+        description: this.description,
+        amount: this.amount,
+      })
       .subscribe({
         next: (res) => {
           this.createdId = res.id;
@@ -67,7 +76,10 @@ export class CreateOrderComponent implements OnInit {
           this.submitting = false;
           setTimeout(() => this.router.navigate(['/projects', this.projectId]), 1500);
         },
-        error: (err) => { this.error = err.message; this.submitting = false; },
+        error: (err) => {
+          this.error = err.message;
+          this.submitting = false;
+        },
       });
   }
 }

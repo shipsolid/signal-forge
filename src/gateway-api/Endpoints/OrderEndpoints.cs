@@ -30,13 +30,13 @@ public static class OrderEndpoints
     {
         if (dto.ProjectId <= 0)
             return Results.ValidationProblem(new Dictionary<string, string[]>
-                { ["projectId"] = ["ProjectId must be a positive integer."] });
+            { ["projectId"] = ["ProjectId must be a positive integer."] });
         if (dto.Amount <= 0 || dto.Amount > OrderLimits.MaxAmount)
             return Results.ValidationProblem(new Dictionary<string, string[]>
-                { ["amount"] = [$"Amount must be between 0.01 and {OrderLimits.MaxAmount}."] });
+            { ["amount"] = [$"Amount must be between 0.01 and {OrderLimits.MaxAmount}."] });
         if (string.IsNullOrWhiteSpace(dto.Description) || dto.Description.Length > OrderLimits.MaxDescriptionLength)
             return Results.ValidationProblem(new Dictionary<string, string[]>
-                { ["description"] = [$"Description is required and must be {OrderLimits.MaxDescriptionLength} characters or fewer."] });
+            { ["description"] = [$"Description is required and must be {OrderLimits.MaxDescriptionLength} characters or fewer."] });
 
         // ActivityKind.Client: this span initiates an outbound call to order-api.
         // Kind=Client is the OTel convention for synchronous RPC/HTTP client spans.

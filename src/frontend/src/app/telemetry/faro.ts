@@ -29,7 +29,10 @@ export function scrubTelemetryItem(item: TransportItem): TransportItem | null {
     if (message.includes('/healthz')) {
       return null;
     }
-    return { ...item, payload: { ...item.payload, message: message.replace(EMAIL_PATTERN, '[redacted-email]') } };
+    return {
+      ...item,
+      payload: { ...item.payload, message: message.replace(EMAIL_PATTERN, '[redacted-email]') },
+    };
   }
   return item;
 }

@@ -14,7 +14,10 @@ const RETRY_BASE_DELAY_MS = 500;
  * template would leak to the user.
  */
 export class ApiError extends Error {
-  constructor(public readonly status: number, message: string) {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
     super(message);
   }
 }
@@ -22,8 +25,10 @@ export class ApiError extends Error {
 function toUserMessage(err: HttpErrorResponse): string {
   if (err.status === 0) return 'Unable to reach the server. Check your connection and try again.';
   if (err.status === 404) return 'The requested resource was not found.';
-  if (err.status >= 500) return 'The server had a problem handling that request. Please try again shortly.';
-  if (err.status >= 400) return 'That request could not be processed. Please check your input and try again.';
+  if (err.status >= 500)
+    return 'The server had a problem handling that request. Please try again shortly.';
+  if (err.status >= 400)
+    return 'That request could not be processed. Please check your input and try again.';
   return 'Something went wrong. Please try again.';
 }
 
@@ -41,7 +46,12 @@ export const resilienceInterceptor: HttpInterceptorFn = (req, next) => {
   // hop, unlike gateway-api's own downstream call to order-api).
   const withRetry$ =
     req.method === 'GET'
-      ? response$.pipe(retry({ count: MAX_RETRIES, delay: (_, retryIndex) => timer(retryIndex * RETRY_BASE_DELAY_MS) }))
+      ? response$.pipe(
+          retry({
+            count: MAX_RETRIES,
+            delay: (_, retryIndex) => timer(retryIndex * RETRY_BASE_DELAY_MS),
+          }),
+        )
       : response$;
 
   return withRetry$.pipe(
@@ -51,6 +61,6 @@ export const resilienceInterceptor: HttpInterceptorFn = (req, next) => {
           ? new ApiError(err.status, toUserMessage(err))
           : new ApiError(0, 'Something went wrong. Please try again.');
       return throwError(() => apiError);
-    })
+    }),
   );
 };

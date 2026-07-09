@@ -33,7 +33,7 @@ describe('ErrorTestComponent', () => {
 
   it('shows backendError when the backend call fails', () => {
     apiSpy.triggerError.mockReturnValue(
-      throwError(() => ({ status: 500, message: 'Internal Server Error' }))
+      throwError(() => ({ status: 500, message: 'Internal Server Error' })),
     );
     component.triggerBackendError();
     fixture.detectChanges();
@@ -52,7 +52,7 @@ describe('ErrorTestComponent', () => {
 
   it('clears previous error before each backend call', () => {
     apiSpy.triggerError.mockReturnValue(
-      throwError(() => ({ status: 500, message: 'First error' }))
+      throwError(() => ({ status: 500, message: 'First error' })),
     );
     component.triggerBackendError();
 
@@ -67,7 +67,7 @@ describe('ErrorTestComponent', () => {
 
   it('sets frontendMsg before throwing', () => {
     expect(() => component.triggerFrontendError()).toThrow(
-      'Intentional frontend error for Faro validation'
+      'Intentional frontend error for Faro validation',
     );
     expect(component.frontendMsg).toContain('JS exception thrown');
   });

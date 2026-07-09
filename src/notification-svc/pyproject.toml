@@ -1,0 +1,13 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = [".venv", ".pytest_cache"]
+
+[tool.ruff.lint]
+# Deliberately conservative — first lint pass ever on this codebase.
+# This is Ruff's own curated default (pyflakes + a handful of pycodestyle
+# checks), spelled out explicitly rather than left implicit. Widen later.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.format]
+# No overrides — double-quote strings, space indentation (Black-compatible).

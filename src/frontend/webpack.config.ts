@@ -13,20 +13,19 @@ const FaroSourceMapUploaderPlugin = require('@grafana/faro-webpack-plugin');
 // If FARO_API_KEY is absent the plugin is skipped so local / watch builds work
 // without credentials.
 
-const faroPlugins =
-  process.env['FARO_API_KEY']
-    ? [
-        new FaroSourceMapUploaderPlugin({
-          appName: 'signal-forge',
-          endpoint: 'https://faro-api-prod-us-central-7.grafana.net/faro/api/v1',
-          appId: '128',
-          stackId: '1589094',
-          apiKey: process.env['FARO_API_KEY'],
-          gzipContents: true,
-          verbose: true,
-        }),
-      ]
-    : [];
+const faroPlugins = process.env['FARO_API_KEY']
+  ? [
+      new FaroSourceMapUploaderPlugin({
+        appName: 'signal-forge',
+        endpoint: 'https://faro-api-prod-us-central-7.grafana.net/faro/api/v1',
+        appId: '128',
+        stackId: '1589094',
+        apiKey: process.env['FARO_API_KEY'],
+        gzipContents: true,
+        verbose: true,
+      }),
+    ]
+  : [];
 
 const config: Configuration = {
   plugins: faroPlugins,

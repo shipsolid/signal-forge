@@ -1,8 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import {
-  HttpClientTestingModule,
-  HttpTestingController,
-} from '@angular/common/http/testing';
+import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
 import { ApiService, Project, Order, Notification } from './api.service';
 import { environment } from '../../environments/environment';
 
@@ -56,7 +53,12 @@ describe('ApiService', () => {
   // ── getProject ─────────────────────────────────────────────────────────────
 
   it('getProject(id) calls GET /projects/:id', () => {
-    const mockProject: Project = { id: 7, name: 'Beta', owner: 'Bob', createdAt: '2026-01-01T00:00:00Z' };
+    const mockProject: Project = {
+      id: 7,
+      name: 'Beta',
+      owner: 'Bob',
+      createdAt: '2026-01-01T00:00:00Z',
+    };
 
     service.getProject(7).subscribe((p) => {
       expect(p.id).toBe(7);
@@ -85,7 +87,12 @@ describe('ApiService', () => {
   // ── createProject ──────────────────────────────────────────────────────────
 
   it('createProject() calls POST /projects with body', () => {
-    const mockProject: Project = { id: 3, name: 'Gamma', owner: 'Carol', createdAt: '2026-01-01T00:00:00Z' };
+    const mockProject: Project = {
+      id: 3,
+      name: 'Gamma',
+      owner: 'Carol',
+      createdAt: '2026-01-01T00:00:00Z',
+    };
 
     service.createProject({ name: 'Gamma', owner: 'Carol' }).subscribe((p) => {
       expect(p.id).toBe(3);
@@ -144,8 +151,12 @@ describe('ApiService', () => {
   it('getNotifications() calls GET /notifications', () => {
     const mockNotifications: Notification[] = [
       {
-        id: 'notif-1', order_id: '1', project_id: '1',
-        message: 'Order created', status: 'sent', created_at: '',
+        id: 'notif-1',
+        order_id: '1',
+        project_id: '1',
+        message: 'Order created',
+        status: 'sent',
+        created_at: '',
       },
     ];
 

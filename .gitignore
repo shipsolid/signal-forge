@@ -28,6 +28,9 @@ src/**/.venv/
 # Backup files created by credential fetch scripts
 *.bak
 
+# JetBrains Rider IDE cache
+*.lscache
+
 zcert.crt
 .env
 

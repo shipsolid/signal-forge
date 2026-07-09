@@ -4,8 +4,23 @@ import { NotificationsComponent } from './notifications.component';
 import { ApiService, Notification } from '../../services/api.service';
 
 const MOCK_NOTIFICATIONS: Notification[] = [
-  { id: '1', order_id: '10', project_id: '5', message: 'Order 10 received', status: 'sent', created_at: '2026-01-01T00:00:00Z', trace_id: 'abc123' },
-  { id: '2', order_id: '11', project_id: '5', message: 'Order 11 received', status: 'sent', created_at: '2026-01-02T00:00:00Z' },
+  {
+    id: '1',
+    order_id: '10',
+    project_id: '5',
+    message: 'Order 10 received',
+    status: 'sent',
+    created_at: '2026-01-01T00:00:00Z',
+    trace_id: 'abc123',
+  },
+  {
+    id: '2',
+    order_id: '11',
+    project_id: '5',
+    message: 'Order 11 received',
+    status: 'sent',
+    created_at: '2026-01-02T00:00:00Z',
+  },
 ];
 
 describe('NotificationsComponent', () => {
@@ -57,9 +72,7 @@ describe('NotificationsComponent', () => {
   });
 
   it('shows error message when getNotifications fails', () => {
-    apiSpy.getNotifications.mockReturnValue(
-      throwError(() => new Error('Service unavailable'))
-    );
+    apiSpy.getNotifications.mockReturnValue(throwError(() => new Error('Service unavailable')));
     component.load();
     fixture.detectChanges();
 
@@ -68,16 +81,21 @@ describe('NotificationsComponent', () => {
   });
 
   it('clears loading flag even on error', () => {
-    apiSpy.getNotifications.mockReturnValue(
-      throwError(() => new Error('timeout'))
-    );
+    apiSpy.getNotifications.mockReturnValue(throwError(() => new Error('timeout')));
     component.load();
     expect(component.loading).toBe(false);
   });
 
   it('refreshes list when load() is called again', () => {
     const fresh: Notification[] = [
-      { id: '3', order_id: '12', project_id: '7', message: 'Order 12 received', status: 'sent', created_at: '2026-01-03T00:00:00Z' },
+      {
+        id: '3',
+        order_id: '12',
+        project_id: '7',
+        message: 'Order 12 received',
+        status: 'sent',
+        created_at: '2026-01-03T00:00:00Z',
+      },
     ];
     apiSpy.getNotifications.mockReturnValue(of(fresh));
     component.load();

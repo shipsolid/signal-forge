@@ -208,7 +208,8 @@ public class OrderEndpointsTests : IClassFixture<CustomWebApplicationFactory>
             new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(notificationsJson, Encoding.UTF8, "application/json")
-            })) { BaseAddress = new Uri("http://notification-svc") };
+            }))
+        { BaseAddress = new Uri("http://notification-svc") };
 
         _factory.MockHttpClientFactory
             .Setup(f => f.CreateClient("notification-svc"))

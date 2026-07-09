@@ -10,28 +10,22 @@ export const routes: Routes = [
     path: 'projects/:id',
     loadComponent: () =>
       import('./pages/project-detail/project-detail.component').then(
-        (m) => m.ProjectDetailComponent
+        (m) => m.ProjectDetailComponent,
       ),
   },
   {
     path: 'orders/new',
     loadComponent: () =>
-      import('./pages/create-order/create-order.component').then(
-        (m) => m.CreateOrderComponent
-      ),
+      import('./pages/create-order/create-order.component').then((m) => m.CreateOrderComponent),
   },
   {
     path: 'notifications',
     loadComponent: () =>
-      import('./pages/notifications/notifications.component').then(
-        (m) => m.NotificationsComponent
-      ),
+      import('./pages/notifications/notifications.component').then((m) => m.NotificationsComponent),
   },
   {
     path: 'error-test',
     loadComponent: () =>
-      import('./pages/error-test/error-test.component').then(
-        (m) => m.ErrorTestComponent
-      ),
+      import('./pages/error-test/error-test.component').then((m) => m.ErrorTestComponent),
   },
 ];

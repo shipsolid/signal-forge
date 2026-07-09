@@ -13,8 +13,22 @@ const MOCK_PROJECT: Project = {
 };
 
 const MOCK_ORDERS: Order[] = [
-  { id: 100, projectId: 3, description: 'Server rack', amount: 4500, status: 'Created', createdAt: '2026-01-11T00:00:00Z' },
-  { id: 101, projectId: 3, description: 'Network switch', amount: 1200, status: 'Created', createdAt: '2026-01-12T00:00:00Z' },
+  {
+    id: 100,
+    projectId: 3,
+    description: 'Server rack',
+    amount: 4500,
+    status: 'Created',
+    createdAt: '2026-01-11T00:00:00Z',
+  },
+  {
+    id: 101,
+    projectId: 3,
+    description: 'Network switch',
+    amount: 1200,
+    status: 'Created',
+    createdAt: '2026-01-12T00:00:00Z',
+  },
 ];
 
 describe('ProjectDetailComponent', () => {
@@ -89,9 +103,7 @@ describe('ProjectDetailComponent', () => {
   // ── Error handling ────────────────────────────────────────────────────────
 
   it('shows error message when the forkJoin fails', () => {
-    apiSpy.getProject.mockReturnValue(
-      throwError(() => new Error('Not found'))
-    );
+    apiSpy.getProject.mockReturnValue(throwError(() => new Error('Not found')));
     apiSpy.getOrdersByProject.mockReturnValue(of([]));
 
     fixture = TestBed.createComponent(ProjectDetailComponent);
@@ -103,9 +115,7 @@ describe('ProjectDetailComponent', () => {
   });
 
   it('clears loading flag even on error', () => {
-    apiSpy.getProject.mockReturnValue(
-      throwError(() => new Error('timeout'))
-    );
+    apiSpy.getProject.mockReturnValue(throwError(() => new Error('timeout')));
     apiSpy.getOrdersByProject.mockReturnValue(of([]));
 
     fixture = TestBed.createComponent(ProjectDetailComponent);

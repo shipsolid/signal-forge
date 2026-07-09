@@ -42,8 +42,7 @@ describe('DashboardComponent', () => {
   });
 
   it('renders project list after successful load', () => {
-    const items: NodeListOf<HTMLLIElement> =
-      fixture.nativeElement.querySelectorAll('ul li');
+    const items: NodeListOf<HTMLLIElement> = fixture.nativeElement.querySelectorAll('ul li');
     expect(items.length).toBe(2);
     expect(items[0].textContent).toContain('Alpha');
     expect(items[1].textContent).toContain('Beta');
@@ -70,9 +69,7 @@ describe('DashboardComponent', () => {
   // ── Error handling ────────────────────────────────────────────────────────
 
   it('shows error message when getProjects fails', () => {
-    apiSpy.getProjects.mockReturnValue(
-      throwError(() => new Error('Network error'))
-    );
+    apiSpy.getProjects.mockReturnValue(throwError(() => new Error('Network error')));
     component.load();
     fixture.detectChanges();
 
@@ -82,9 +79,7 @@ describe('DashboardComponent', () => {
   });
 
   it('clears loading flag even on error', () => {
-    apiSpy.getProjects.mockReturnValue(
-      throwError(() => new Error('timeout'))
-    );
+    apiSpy.getProjects.mockReturnValue(throwError(() => new Error('timeout')));
     component.load();
     expect(component.loading).toBe(false);
   });

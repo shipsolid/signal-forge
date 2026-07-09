@@ -14,11 +14,12 @@ import { ApiService, Order, Project } from '../../services/api.service';
     <div *ngIf="error" class="error">{{ error }}</div>
     <ng-container *ngIf="project">
       <h1>{{ project.name }}</h1>
-      <p>Owner: {{ project.owner }} | Created: {{ project.createdAt | date:'medium' }}</p>
+      <p>Owner: {{ project.owner }} | Created: {{ project.createdAt | date: 'medium' }}</p>
       <h2>Orders</h2>
       <ul *ngIf="orders.length">
         <li *ngFor="let o of orders">
-          #{{ o.id }} — {{ o.description }} (\${{ o.amount | number:'1.2-2' }}) — <strong>{{ o.status }}</strong>
+          #{{ o.id }} — {{ o.description }} (\${{ o.amount | number: '1.2-2' }}) —
+          <strong>{{ o.status }}</strong>
         </li>
       </ul>
       <p *ngIf="!orders.length">No orders for this project.</p>
@@ -32,7 +33,10 @@ export class ProjectDetailComponent implements OnInit {
   loading = false;
   error = '';
 
-  constructor(private route: ActivatedRoute, private api: ApiService) {}
+  constructor(
+    private route: ActivatedRoute,
+    private api: ApiService,
+  ) {}
 
   ngOnInit(): void {
     const id = Number(this.route.snapshot.paramMap.get('id'));
@@ -46,7 +50,10 @@ export class ProjectDetailComponent implements OnInit {
         this.orders = orders;
         this.loading = false;
       },
-      error: (err) => { this.error = err.message; this.loading = false; },
+      error: (err) => {
+        this.error = err.message;
+        this.loading = false;
+      },
     });
   }
 }

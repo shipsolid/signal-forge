@@ -36,8 +36,14 @@ export class NotificationsComponent implements OnInit {
   load(): void {
     this.loading = true;
     this.api.getNotifications().subscribe({
-      next: (data) => { this.notifications = data; this.loading = false; },
-      error: (err) => { this.error = err.message; this.loading = false; },
+      next: (data) => {
+        this.notifications = data;
+        this.loading = false;
+      },
+      error: (err) => {
+        this.error = err.message;
+        this.loading = false;
+      },
     });
   }
 }

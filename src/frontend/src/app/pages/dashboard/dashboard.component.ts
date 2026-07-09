@@ -16,7 +16,7 @@ import { ApiService, Project } from '../../services/api.service';
       <li *ngFor="let p of projects">
         <a [routerLink]="['/projects', p.id]">{{ p.name }}</a>
         — Owner: {{ p.owner }}
-        <small>{{ p.createdAt | date:'short' }}</small>
+        <small>{{ p.createdAt | date: 'short' }}</small>
       </li>
     </ul>
     <p *ngIf="!loading && projects.length === 0">No projects yet.</p>
@@ -43,16 +43,28 @@ export class DashboardComponent implements OnInit {
   load(): void {
     this.loading = true;
     this.api.getProjects().subscribe({
-      next: (data) => { this.projects = data; this.loading = false; },
-      error: (err) => { this.error = err.message; this.loading = false; },
+      next: (data) => {
+        this.projects = data;
+        this.loading = false;
+      },
+      error: (err) => {
+        this.error = err.message;
+        this.loading = false;
+      },
     });
   }
 
   createProject(): void {
     if (!this.newName || !this.newOwner) return;
     this.api.createProject({ name: this.newName, owner: this.newOwner }).subscribe({
-      next: () => { this.newName = ''; this.newOwner = ''; this.load(); },
-      error: (err) => { this.error = err.message; },
+      next: () => {
+        this.newName = '';
+        this.newOwner = '';
+        this.load();
+      },
+      error: (err) => {
+        this.error = err.message;
+      },
     });
   }
 }

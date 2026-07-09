@@ -141,8 +141,12 @@ public class ProjectEndpointsTests : IClassFixture<CustomWebApplicationFactory>
             .ReturnsAsync(false);
         mockStream.Setup(s => s.Current).Returns(new OrderResponse
         {
-            Id = 1, ProjectId = project.Id, Description = "Widget",
-            Amount = 10.0, Status = "Created", CreatedAt = DateTime.UtcNow.ToString("O")
+            Id = 1,
+            ProjectId = project.Id,
+            Description = "Widget",
+            Amount = 10.0,
+            Status = "Created",
+            CreatedAt = DateTime.UtcNow.ToString("O")
         });
 
         var call = new Grpc.Core.AsyncServerStreamingCall<OrderResponse>(
