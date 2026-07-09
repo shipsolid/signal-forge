@@ -325,26 +325,19 @@ data:
 
     // Extract TraceId/SpanId from .NET and Python JSON log lines and promote
     // them to Loki structured metadata for "Logs for this span" correlation.
+    // Shared with cloud mode — single source at
+    // k8s/monitoring/grafana/shared/trace-correlation-stages.alloy, spliced in
+    // here by deploy-local.sh's render_local_alloy_configmap().
     loki.process "trace_correlation" {
+${TRACE_CORRELATION_STAGES}
+
+      // Local-only: level extraction. Cloud mode's chart-generated pipeline
+      // already parses level upstream, so this has no cloud equivalent.
       stage.json {
         expressions = {
-          dotnet_trace = "TraceId",
-          dotnet_span  = "SpanId",
           dotnet_level = "Level",
-          python_trace = "otelTraceID",
-          python_span  = "otelSpanID",
           python_level = "levelname",
         }
-      }
-
-      stage.template {
-        source   = "trace_id"
-        template = "{{ if .dotnet_trace }}{{ .dotnet_trace }}{{ else }}{{ .python_trace }}{{ end }}"
-      }
-
-      stage.template {
-        source   = "span_id"
-        template = "{{ if .dotnet_span }}{{ .dotnet_span }}{{ else }}{{ .python_span }}{{ end }}"
       }
 
       stage.template {
@@ -355,13 +348,6 @@ data:
       stage.labels {
         values = {
           level = "",
-        }
-      }
-
-      stage.structured_metadata {
-        values = {
-          trace_id = "trace_id",
-          span_id  = "span_id",
         }
       }
 

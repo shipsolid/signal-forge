@@ -255,7 +255,12 @@ loki.source.kubernetes "pod_logs" {
 ```
 
 The `trace_correlation` processor extracts trace IDs from JSON log lines of both .NET and Python
-services:
+services. Its trace_id/span_id extraction + structured-metadata stages are single-sourced at
+[`k8s/monitoring/grafana/shared/trace-correlation-stages.alloy`](../../k8s/monitoring/grafana/shared/trace-correlation-stages.alloy)
+and spliced into `configmap.yaml.tmpl` at deploy time (`deploy-local.sh`'s
+`render_local_alloy_configmap()`) — the same fragment cloud mode uses, see
+[Log↔trace correlation (cloud mode)](#logtrace-correlation-cloud-mode) below. Only the `level`
+extraction/label stages below are local-only:
 
 ```river
 loki.process "trace_correlation" {
@@ -322,11 +327,13 @@ and `receivers.otlp`, `clusterMetrics`, `clusterEvents`, and `nodeLogs`/`podLogs
 ### Log↔trace correlation (cloud mode)
 
 `podLogs.extraLogProcessingStages` in `values-cloud.yaml.tmpl` carries the same JSON-extraction +
-structured-metadata logic as local mode's `trace_correlation` stage above, ported through the
-chart's raw-River-snippet hook (the same mechanism already used there for ANSI-stripping and
-kube-system log-level dropping). The Helm chart runs `tpl` on this value, so the Go-template
-delimiters inside it are escaped (`{{"{{"}}` / `{{"}}"}}`) to survive Helm's render pass intact —
-see the comment in the values file for why.
+structured-metadata logic as local mode's `trace_correlation` stage above — both are rendered from
+the single shared fragment,
+[`k8s/monitoring/grafana/shared/trace-correlation-stages.alloy`](../../k8s/monitoring/grafana/shared/trace-correlation-stages.alloy),
+spliced in by `deploy-local.sh`'s `render_helm_values()`, through the chart's raw-River-snippet hook
+(the same mechanism already used there for ANSI-stripping and kube-system log-level dropping). The
+Helm chart runs `tpl` on this value, so `render_helm_values()` escapes the fragment's Go-template
+delimiters (`{{"{{"}}` / `{{"}}"}}`) before substitution, to survive Helm's render pass intact.
 
 ---
 

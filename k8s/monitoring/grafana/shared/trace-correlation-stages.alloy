@@ -1,0 +1,44 @@
+// Single source of truth for the log↔trace correlation stages: extracts
+// TraceId/SpanId from .NET and Python JSON log lines and promotes them to
+// Loki structured metadata, so Grafana's "Logs for this span" can query
+// {trace_id="<id>"}.
+//
+// Spliced into two different pipelines by deploy-local.sh — do not hand-copy
+// this content elsewhere, edit only here:
+//   - k8s/monitoring/grafana/local/configmap.yaml.tmpl (${TRACE_CORRELATION_STAGES})
+//     raw, indented 6 spaces, no escaping — this file's content is already
+//     valid River.
+//   - k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl
+//     (${TRACE_CORRELATION_STAGES_ESCAPED}) indented 4 spaces, with Go-template
+//     delimiters escaped ({{ → {{"{{"}}, }} → {{"}}"}}) because the chart runs
+//     Helm's `tpl` over extraLogProcessingStages before Alloy ever sees it.
+//
+// Local mode's level extraction (dotnet_level/python_level → stage.labels) is
+// NOT part of this shared fragment — it stays local-only, since cloud mode's
+// chart-generated pipeline already handles level elsewhere.
+
+stage.json {
+  expressions = {
+    dotnet_trace = "TraceId",
+    dotnet_span  = "SpanId",
+    python_trace = "otelTraceID",
+    python_span  = "otelSpanID",
+  }
+}
+
+stage.template {
+  source   = "trace_id"
+  template = "{{ if .dotnet_trace }}{{ .dotnet_trace }}{{ else }}{{ .python_trace }}{{ end }}"
+}
+
+stage.template {
+  source   = "span_id"
+  template = "{{ if .dotnet_span }}{{ .dotnet_span }}{{ else }}{{ .python_span }}{{ end }}"
+}
+
+stage.structured_metadata {
+  values = {
+    trace_id = "trace_id",
+    span_id  = "span_id",
+  }
+}

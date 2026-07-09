@@ -404,9 +404,43 @@ apply_monitoring() {
     [[ -n "$p" ]] && args+=( -f "${SCRIPT_DIR}/${p}" )
   done < <(yq "monitoring.manifests.${mode}")
 
+  if [[ "$mode" == "local" ]]; then
+    render_local_alloy_configmap
+  fi
+
   [[ ${#args[@]} -gt 0 ]] || { log "no monitoring manifests for mode=${mode} (cloud mode owns the pipeline via Helm)"; return; }
   log "kubectl apply — stage: monitoring (mode: $mode)"
   kubectl apply "${args[@]}"
+}
+
+# Render the local-mode Alloy DaemonSet's ConfigMap: splices the shared
+# trace-correlation fragment (k8s/monitoring/grafana/shared/) into
+# configmap.yaml.tmpl's ${TRACE_CORRELATION_STAGES} placeholder, indented to
+# match its nesting inside loki.process. See render_helm_values() below for
+# the cloud-mode counterpart (same fragment, Helm-tpl-escaped instead).
+render_local_alloy_configmap() {
+  local fragment="${SCRIPT_DIR}/k8s/monitoring/grafana/shared/trace-correlation-stages.alloy"
+  local tmpl="${SCRIPT_DIR}/k8s/monitoring/grafana/local/configmap.yaml.tmpl"
+  [[ -f "$fragment" ]] || die "missing shared fragment: $fragment"
+  [[ -f "$tmpl" ]] || die "missing template: $tmpl"
+  local rendered; rendered="$(mktemp --suffix=.alloy-configmap.yaml)"
+  python3 - "$fragment" "$tmpl" "$rendered" <<'PY'
+import sys
+from string import Template
+fragment_path, tmpl_path, out_path = sys.argv[1:4]
+with open(fragment_path) as f: lines = f.read().rstrip("\n").splitlines()
+# Drop the fragment file's own doc-comment header — only splice the actual
+# stage.* code, so the deployed ConfigMap doesn't carry documentation meant
+# for someone editing the shared source file directly.
+code = lines[next(i for i, l in enumerate(lines) if l.lstrip().startswith("stage.")):]
+indented = "\n".join(("      " + line if line else line) for line in code)
+with open(tmpl_path) as f: tmpl = f.read()
+with open(out_path, "w") as f:
+    f.write(Template(tmpl).substitute(TRACE_CORRELATION_STAGES=indented))
+PY
+  log "kubectl apply — ConfigMap alloy-config (local mode, trace-correlation from shared/) → ns/otel-lab"
+  kubectl apply -f "$rendered"
+  rm -f "$rendered"
 }
 
 # Render and apply the shared ConfigMap that every app Deployment consumes via
@@ -546,26 +580,50 @@ wait_datastores() {
 render_helm_values() {
   local tmpl="$1"   # abs path to .tmpl
   local out="$2"    # abs path for rendered output
-  python3 - "$CONF" "$tmpl" "$out" "$CLUSTER" "$NAMESPACE" "$SECRET_NAME" "$DEPLOYMENT_ENV" \
+  local fragment="${SCRIPT_DIR}/k8s/monitoring/grafana/shared/trace-correlation-stages.alloy"
+  python3 - "$CONF" "$tmpl" "$out" "$fragment" "$CLUSTER" "$NAMESPACE" "$SECRET_NAME" "$DEPLOYMENT_ENV" \
     "$GC_MIMIR_ENDPOINT" "$GC_LOKI_ENDPOINT" "$GC_TEMPO_ENDPOINT" <<'PY'
 import sys, yaml
 from string import Template
 
-(conf_path, tmpl_path, out_path, cluster_name, ns, secret_name, deploy_env,
- mimir_url, loki_url, tempo_endpoint) = sys.argv[1:11]
+(conf_path, tmpl_path, out_path, fragment_path, cluster_name, ns, secret_name, deploy_env,
+ mimir_url, loki_url, tempo_endpoint) = sys.argv[1:12]
 with open(conf_path) as f:
     doc = yaml.safe_load(f) or {}
 
 helm = (doc.get("monitoring") or {}).get("helm") or {}
 
+# Same shared fragment render_local_alloy_configmap() splices into local mode's
+# configmap, but escaped for Helm's tpl pass (which runs over
+# extraLogProcessingStages before Alloy ever sees it): literal Go-template
+# delimiters must survive as text, not be evaluated by Helm's own templating.
+with open(fragment_path) as f:
+    lines = f.read().rstrip("\n").splitlines()
+# Drop the fragment file's own doc-comment header — see the matching comment
+# in render_local_alloy_configmap() above.
+code = lines[next(i for i, l in enumerate(lines) if l.lstrip().startswith("stage.")):]
+# Placeholder-swap, not two chained replace() calls: a plain
+# .replace("{{",...).replace("}}",...) would re-match the "}}" that the first
+# call just inserted (its replacement text itself contains "}}"), corrupting
+# the escape. The \x00 placeholder is untouched by the "}}" pass, so each
+# delimiter is escaped exactly once.
+escaped = [
+    l.replace("{{", "\x00").replace("}}", '{{"}}"}}').replace("\x00", '{{"{{"}}')
+    for l in code
+]
+trace_correlation_escaped = "\n".join(
+    ("    " + line if line else line) for line in escaped
+)
+
 subs = {
-    "CLUSTER_NAME":           cluster_name,
-    "DEPLOYMENT_ENVIRONMENT": deploy_env,
-    "SECRET_NAME":            secret_name,
-    "SECRET_NAMESPACE":       helm.get("namespace") or ns,
-    "MIMIR_URL":              mimir_url,
-    "LOKI_URL":               loki_url,
-    "TEMPO_ENDPOINT":         tempo_endpoint,
+    "CLUSTER_NAME":                      cluster_name,
+    "DEPLOYMENT_ENVIRONMENT":            deploy_env,
+    "SECRET_NAME":                       secret_name,
+    "SECRET_NAMESPACE":                  helm.get("namespace") or ns,
+    "MIMIR_URL":                         mimir_url,
+    "LOKI_URL":                          loki_url,
+    "TEMPO_ENDPOINT":                    tempo_endpoint,
+    "TRACE_CORRELATION_STAGES_ESCAPED":  trace_correlation_escaped,
 }
 
 with open(tmpl_path) as f:

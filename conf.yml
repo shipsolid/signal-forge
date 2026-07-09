@@ -196,7 +196,9 @@ monitoring:
     # below replaces this entire list.
     local:
       - k8s/monitoring/grafana/                  # bespoke Alloy DaemonSet + RBAC + Service
-      - k8s/monitoring/grafana/local/            # alloy-config ConfigMap with local destinations
+      # alloy-config ConfigMap: NOT listed here — it's now a .tmpl (shared
+      # trace-correlation fragment spliced in), rendered + applied explicitly
+      # by deploy-local.sh's render_local_alloy_configmap().
       - k8s/monitoring/local/jaeger/
       - k8s/monitoring/local/prometheus/
       - k8s/monitoring/local/loki/

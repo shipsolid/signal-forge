@@ -99,6 +99,14 @@ filter(healthz) → spanmetrics (ALL spans)
 
 **Alternative considered**: Single configmap with empty-endpoint guards — rejected because it conflates two deployment modes and produces misleading no-op exporter logs.
 
+**Addendum (single-sourced trace correlation)**: The one piece of logic that was genuinely
+identical in both configs — the trace-ID/span-ID → Loki structured-metadata correlation stages —
+is now authored once at `k8s/monitoring/grafana/shared/trace-correlation-stages.alloy` and spliced
+into both `configmap.yaml.tmpl` (raw) and `values-cloud.yaml.tmpl` (Helm-`tpl`-escaped) by
+`deploy-local.sh` (`render_local_alloy_configmap()` / `render_helm_values()`). This doesn't change
+the rationale above — the two pipelines still have separate, structurally different files; it just
+stops one specific snippet from silently drifting when only one side gets edited.
+
 ---
 
 ## ADR-006: Fail-fast on missing secrets
