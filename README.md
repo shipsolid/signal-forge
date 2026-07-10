@@ -11,11 +11,11 @@ Work outside-in, purpose → design → implementation:
 
 | Step | File                           | Why                                                                                  |
 | ---- | ------------------------------ | ------------------------------------------------------------------------------------ |
-| 1    | https://shipsolid.github.io/notes/shipsolid/app-signal-forge/spec/ | The "what" — all services, patterns to validate, the validation checklist at §11     |
-| 2    | https://shipsolid.github.io/notes/shipsolid/app-signal-forge/architecture/overview/ | Topology diagram, signal flow per type, port map                                     |
-| 3    | https://shipsolid.github.io/notes/shipsolid/app-signal-forge/architecture/adrs/ | 10 ADRs that explain the non-obvious "why" (most important before touching anything) |
+| 1    | https://shipsolid.github.io/notes/documentation/app-signal-forge/spec/ | The "what" — all services, patterns to validate, the validation checklist at §11     |
+| 2    | https://shipsolid.github.io/notes/documentation/app-signal-forge/architecture/overview/ | Topology diagram, signal flow per type, port map                                     |
+| 3    | https://shipsolid.github.io/notes/documentation/app-signal-forge/architecture/adrs/ | 10 ADRs that explain the non-obvious "why" (most important before touching anything) |
 | 4    | conf.yml                       | The single control file — every knob deploy-local.sh reads                           |
-| 5    | https://shipsolid.github.io/notes/shipsolid/app-signal-forge/observability/pipeline/ | Alloy River config stage-by-stage; the heart of the lab                              |
+| 5    | https://shipsolid.github.io/notes/documentation/app-signal-forge/observability/pipeline/ | Alloy River config stage-by-stage; the heart of the lab                              |
 | 6    | src/order-api/                 | Richest service: gRPC, Outbox, RabbitMQ publish with W3C traceparent injection       |
 | 7    | src/notification-svc/          | Python consumer, SpanLink, cross-language async propagation                          |
 | 8    | src/gateway-api/               | .NET BFF, exemplars, UpDownCounter, fan-out pattern                                  |
@@ -94,8 +94,8 @@ still installed and still serves as the app OTLP ingress, but its destinations p
 in-cluster services.
 
 `alloy-logs` tails pod stdout/stderr with trace-id correlation. `alloy-metrics` scrapes cluster
-infra metrics. See [docs/observability/pipeline.md](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/observability/pipeline/) for the full
-signal flow and [docs/OTEL-PATTERNS.md](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/otel-patterns/) for per-runtime instrumentation
+infra metrics. See [docs/observability/pipeline.md](https://shipsolid.github.io/notes/documentation/app-signal-forge/observability/pipeline/) for the full
+signal flow and [docs/OTEL-PATTERNS.md](https://shipsolid.github.io/notes/documentation/app-signal-forge/otel-patterns/) for per-runtime instrumentation
 choices.
 
 ### Alloy roles (Helm release, `monitoring` namespace)
@@ -128,7 +128,7 @@ flowchart LR
     Notification --> Redis[Redis]
 ```
 
-See [docs/architecture/overview.md](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/architecture/overview/) for the full signal flow
+See [docs/architecture/overview.md](https://shipsolid.github.io/notes/documentation/app-signal-forge/architecture/overview/) for the full signal flow
 diagrams.
 
 ---
@@ -205,7 +205,7 @@ secondary/legacy; the script-based flow remains the recommended path.
 ```
 
 Auth: `az login` first, or export `ARM_CLIENT_ID` + `ARM_CLIENT_SECRET` in the shell. See
-[docs/deployment/grafana-cloud.md](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/deployment/grafana-cloud/) for the full credential model
+[docs/deployment/grafana-cloud.md](https://shipsolid.github.io/notes/documentation/app-signal-forge/deployment/grafana-cloud/) for the full credential model
 and rotation procedure.
 
 ### Helm upgrade invocation (used by deploy-local.sh, cloud mode)
@@ -304,7 +304,7 @@ default — set `observability.slo_rules.enabled: true` in conf.yml and ensure t
 | `AlloyReceiverDown`                | page     | `up == 0` for alloy-receiver for 5m               |
 | `DatastoreDown`                    | page     | any datastore pod not Ready for 3m                |
 
-**Runbook:** [docs/operations/runbooks.md](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/operations/runbooks/) — covers no-traces, missing
+**Runbook:** [docs/operations/runbooks.md](https://shipsolid.github.io/notes/documentation/app-signal-forge/operations/runbooks/) — covers no-traces, missing
 metrics, async propagation failures, log correlation gaps, exemplar troubleshooting, Grafana Cloud
 export errors.
 
@@ -470,7 +470,7 @@ into the `grafana-cloud-secrets` Kubernetes Secret that the chart's destinations
 ./deploy-local.sh --skip-cluster --skip-build
 ```
 
-See [docs/deployment/grafana-cloud.md](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/deployment/grafana-cloud/) for the full credential
+See [docs/deployment/grafana-cloud.md](https://shipsolid.github.io/notes/documentation/app-signal-forge/deployment/grafana-cloud/) for the full credential
 model and rotation procedure.
 
 ### Credentials
@@ -498,17 +498,17 @@ Kubernetes Secret.
 
 For any step beyond local lab, the following controls are already implemented:
 
-- [Container hardening](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/infrastructure/hardening/) — non-root UIDs per image,
+- [Container hardening](https://shipsolid.github.io/notes/documentation/app-signal-forge/infrastructure/hardening/) — non-root UIDs per image,
   `readOnlyRootFilesystem`, securityContext
-- [Kustomize layout](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/infrastructure/kustomize/) — base + overlays for dev/staging/prod
-- [Reliability](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/operations/reliability/) — PodDisruptionBudgets, pod anti-affinity, graceful
+- [Kustomize layout](https://shipsolid.github.io/notes/documentation/app-signal-forge/infrastructure/kustomize/) — base + overlays for dev/staging/prod
+- [Reliability](https://shipsolid.github.io/notes/documentation/app-signal-forge/operations/reliability/) — PodDisruptionBudgets, pod anti-affinity, graceful
   shutdown
-- [Networking & TLS](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/operations/networking/) — NetworkPolicies, cert-manager, flannel caveat
-- [Supply-chain security](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/operations/supply-chain/) — Trivy scan, Syft SBOM, cosign keyless
+- [Networking & TLS](https://shipsolid.github.io/notes/documentation/app-signal-forge/operations/networking/) — NetworkPolicies, cert-manager, flannel caveat
+- [Supply-chain security](https://shipsolid.github.io/notes/documentation/app-signal-forge/operations/supply-chain/) — Trivy scan, Syft SBOM, cosign keyless
   signing
-- [SLOs & burn-rate alerts](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/observability/slos/) — `PrometheusRule` with multi-window burn
+- [SLOs & burn-rate alerts](https://shipsolid.github.io/notes/documentation/app-signal-forge/observability/slos/) — `PrometheusRule` with multi-window burn
   thresholds
-- [Datastore HA migration](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/infrastructure/datastore-ha/) — CloudNativePG / RabbitMQ Operator
+- [Datastore HA migration](https://shipsolid.github.io/notes/documentation/app-signal-forge/infrastructure/datastore-ha/) — CloudNativePG / RabbitMQ Operator
   / Redis Sentinel paths
 
 ---
@@ -580,7 +580,7 @@ and exit non-zero, so old muscle memory fails loudly instead of silently doing t
 There's no separate `make *-helm` step anymore — `./deploy-local.sh` handles the Helm install
 inline, adding the `grafana` repo itself and rendering
 [values-cloud.yaml.tmpl](k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl) directly from
-`conf.yml` (see [docs/deployment/helm.md](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/deployment/helm/)). The Jinja2-based render
+`conf.yml` (see [docs/deployment/helm.md](https://shipsolid.github.io/notes/documentation/app-signal-forge/deployment/helm/)). The Jinja2-based render
 pipeline this table used to document (`render.py` + `config.yaml.j2`, real prod Grafana Cloud
 fingerprints left over from a copy-paste) has been deleted along with the Makefile targets that
 drove it.
@@ -589,7 +589,7 @@ drove it.
 
 ## OTel Validation Checklist
 
-See [docs/spec.md](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/spec/) for the full test scenarios, including:
+See [docs/spec.md](https://shipsolid.github.io/notes/documentation/app-signal-forge/spec/) for the full test scenarios, including:
 
 - Trace propagation (HTTP, gRPC, RabbitMQ async)
 - Span metrics (RED) + exemplars
@@ -614,4 +614,4 @@ See [docs/spec.md](https://shipsolid.github.io/notes/shipsolid/app-signal-forge/
 | 2     | SLO rules enabled by default (`slo_rules.enabled: true`)           | planned  | Requires Prometheus Operator CRD install in deploy-local.sh |
 | 3     | k6 CronJob for continuous synthetic traffic                        | planned  | Required for client-perceived SLO validation                |
 | 3     | Pyroscope continuous profiling (alloy-profiles enable)             | planned  | Blocked on in-cluster Pyroscope backend                     |
-| 3     | Datastore HA operators (CNPG / RabbitMQ Operator / Redis Sentinel) | deferred | See https://shipsolid.github.io/notes/shipsolid/app-signal-forge/infrastructure/datastore-ha/                     |
+| 3     | Datastore HA operators (CNPG / RabbitMQ Operator / Redis Sentinel) | deferred | See https://shipsolid.github.io/notes/documentation/app-signal-forge/infrastructure/datastore-ha/                     |

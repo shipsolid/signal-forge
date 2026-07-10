@@ -20,7 +20,7 @@
 #                 (k8s/monitoring/local/prometheus/). No CRDs involved.
 #   - mode=cloud: scripts/push-slo-rules-to-mimir.sh pushes this file to Grafana
 #                 Cloud Mimir's Ruler API via `mimirtool rules load` (manual step —
-#                 see https://shipsolid.github.io/notes/shipsolid/app-signal-forge/observability/slos/).
+#                 see https://shipsolid.github.io/notes/documentation/app-signal-forge/observability/slos/).
 #
 # If a cluster *does* have kube-prometheus-stack installed, deploy-local.sh's
 # apply_slo_rules() wraps this file's groups into a PrometheusRule on the fly —

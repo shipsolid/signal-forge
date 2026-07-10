@@ -22,7 +22,7 @@ namespace IntegrationTests;
 //
 // Not part of the fast default suite — needs Docker to build two real service
 // images and run five containers. See
-// https://shipsolid.github.io/notes/shipsolid/app-signal-forge/testing/ for how to run this
+// https://shipsolid.github.io/notes/documentation/app-signal-forge/testing/ for how to run this
 // explicitly; expect it to take real time (image builds + container startups).
 [Trait("Category", "Integration")]
 [Collection("CrossLanguageTrace")]
