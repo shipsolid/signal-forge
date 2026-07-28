@@ -56,6 +56,6 @@ spec:
       volumes:
         # AOF data directory — emptyDir so it survives readOnlyRootFilesystem
         # (still ephemeral per-pod; see
-        # https://shipsolid.github.io/notes/documentation/app-signal-forge/infrastructure/datastores/).
+        # https://shipsolid.github.io/notes/projects/app-signal-forge/infrastructure/datastores/).
         - name: data
           emptyDir: {}

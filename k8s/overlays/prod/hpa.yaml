@@ -4,7 +4,7 @@
 # driven HPA needs a custom-metrics adapter (e.g. prometheus-adapter) reading
 # the burn-rate recording rules in k8s/monitoring/slo-rules.yaml, which isn't
 # wired up here (see operations/reliability's "what this doesn't cover" at
-# https://shipsolid.github.io/notes/documentation/app-signal-forge/operations/reliability/).
+# https://shipsolid.github.io/notes/projects/app-signal-forge/operations/reliability/).
 # Requires metrics-server in the target cluster — not installed by
 # deploy-local.sh, since k3d/local dev has no need for autoscaling.
 #

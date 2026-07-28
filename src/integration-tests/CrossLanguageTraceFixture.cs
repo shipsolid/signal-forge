@@ -14,7 +14,7 @@ namespace IntegrationTests;
 // project references) — the same two images deploy-local.sh builds for k3d,
 // built here instead for a real broker + a real second-language consumer to
 // exercise, without needing a cluster. See
-// https://shipsolid.github.io/notes/documentation/app-signal-forge/testing/ for how to invoke
+// https://shipsolid.github.io/notes/projects/app-signal-forge/testing/ for how to invoke
 // this project; it is NOT part of the default `dotnet test` run (no Docker
 // dependency assumed there).
 public sealed class CrossLanguageTraceFixture : IAsyncLifetime

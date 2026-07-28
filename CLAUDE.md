@@ -102,7 +102,7 @@ The K8s `securityContext.runAsUser` **must** match the Dockerfile's `USER`. `run
 refuses mismatches at schedule time.
 
 Frontend is the documented exception to `readOnlyRootFilesystem: true` — see
-[Container hardening](https://shipsolid.github.io/notes/documentation/app-signal-forge/infrastructure/hardening/) for why.
+[Container hardening](https://shipsolid.github.io/notes/projects/app-signal-forge/infrastructure/hardening/) for why.
 
 ## Commands
 
@@ -138,7 +138,7 @@ Auth: either `az login` first, or export `ARM_CLIENT_ID` + `ARM_CLIENT_SECRET` i
 `.env` loading).
 
 `push-slo-rules-to-mimir.sh` is the mode=cloud counterpart to `observability.slo_rules` — see
-[SLOs & burn-rate alerts](https://shipsolid.github.io/notes/documentation/app-signal-forge/observability/slos/#where-the-alerts-are-evaluated).
+[SLOs & burn-rate alerts](https://shipsolid.github.io/notes/projects/app-signal-forge/observability/slos/#where-the-alerts-are-evaluated).
 mode=local needs no manual step; `deploy-local.sh` loads the same rules file automatically.
 
 ### Tests / CI
@@ -226,7 +226,7 @@ now just a one-line pointer (`docs/README.md`), it no longer holds content.
 
 - **Canonical source** — read this absolute path directly with the `Read` tool, regardless of your
   current working directory:
-  `/home/amit/repos/shipsolid--architect-learning-lab/_shipsolid.github.io/src/content/notes/documentation/app-signal-forge/`
+  `/home/amit/repos/shipsolid--architect-learning-lab/_shipsolid.github.io/src/content/notes/projects/app-signal-forge/`
   Start at `app-signal-forge/README.md` for the full index; the most load-bearing pages are:
   - `infrastructure/hardening.md` — per-image UID table, Dockerfile conventions, frontend readOnly
     exception
@@ -238,4 +238,4 @@ now just a one-line pointer (`docs/README.md`), it no longer holds content.
   - `observability/slos.md` — SLI recording rules + multi-window burn alerts
   - `deployment/grafana-cloud.md` — full AKV → conf.yml → Secret credential model
   - `architecture/adrs/` — 10 ADRs for every non-obvious design choice
-- **Published**: <https://shipsolid.github.io/notes/documentation/app-signal-forge/>
+- **Published**: <https://shipsolid.github.io/notes/projects/app-signal-forge/>

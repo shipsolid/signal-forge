@@ -47,7 +47,7 @@ Set `OTEL_METRICS_EXEMPLAR_FILTER=trace_based` to link histogram observations to
 
 #### Logs
 
-Write structured JSON to stdout — do **not** export logs via OTLP. Alloy's `loki.source.kubernetes` pipeline tails pod logs and ships them to Loki. See [ADR-001](https://shipsolid.github.io/notes/documentation/app-signal-forge/architecture/adrs/adr-log-tailing-not-otlp-export/) for the rationale.
+Write structured JSON to stdout — do **not** export logs via OTLP. Alloy's `loki.source.kubernetes` pipeline tails pod logs and ships them to Loki. See [ADR-001](https://shipsolid.github.io/notes/projects/app-signal-forge/architecture/adrs/adr-log-tailing-not-otlp-export/) for the rationale.
 
 The log record **must** include `TraceId` and `SpanId` fields so Alloy's `trace_correlation` stage can extract them and attach them as Loki structured metadata. Field names differ by runtime:
 
@@ -56,7 +56,7 @@ The log record **must** include `TraceId` and `SpanId` fields so Alloy's `trace_
 | .NET (`AddJsonConsole`) | `TraceId`     | `SpanId`     |
 | Python (`logging`)      | `otelTraceID` | `otelSpanID` |
 
-See [Log-to-Trace Correlation](https://shipsolid.github.io/notes/documentation/app-signal-forge/observability/correlation/) for the Alloy stage configuration.
+See [Log-to-Trace Correlation](https://shipsolid.github.io/notes/projects/app-signal-forge/observability/correlation/) for the Alloy stage configuration.
 
 #### Custom instrumentation checklist
 
@@ -68,7 +68,7 @@ For each business operation (e.g. creating an order, publishing an event):
 - [ ] Set span status to `Error` on failure
 - [ ] Create at least one counter and one histogram instrument for the operation
 
-See [OTel Signal Contracts](https://shipsolid.github.io/notes/documentation/app-signal-forge/observability/otel-contracts/) for the full attribute catalogue.
+See [OTel Signal Contracts](https://shipsolid.github.io/notes/projects/app-signal-forge/observability/otel-contracts/) for the full attribute catalogue.
 
 ### 3. Add a health endpoint
 
@@ -121,7 +121,7 @@ kubectl apply -f k8s/app/<service-name>/
 
 ### 6. Write tests
 
-All services must have automated tests that run without a cluster. See [Testing](https://shipsolid.github.io/notes/documentation/app-signal-forge/testing/) for the test strategy and isolation patterns.
+All services must have automated tests that run without a cluster. See [Testing](https://shipsolid.github.io/notes/projects/app-signal-forge/testing/) for the test strategy and isolation patterns.
 
 Minimum coverage:
 
@@ -189,18 +189,18 @@ than introducing a new style per PR.
 
 - **Fail-fast at startup** for required configuration (DB connection strings, downstream
   addresses) — throw immediately rather than falling back to a default that only works on a
-  developer's machine. See [ADR-006](https://shipsolid.github.io/notes/documentation/app-signal-forge/architecture/adrs/adr-fail-fast-on-missing-secrets/)
+  developer's machine. See [ADR-006](https://shipsolid.github.io/notes/projects/app-signal-forge/architecture/adrs/adr-fail-fast-on-missing-secrets/)
   for the rationale and the exact `InvalidOperationException` pattern to copy.
 - **Validate at the API boundary**, not deeper in the call chain — return a structured `422`
   (REST) or `InvalidArgument` (gRPC) before any downstream call is made. See
-  [Security § Input validation](https://shipsolid.github.io/notes/documentation/app-signal-forge/operations/security/#input-validation)
+  [Security § Input validation](https://shipsolid.github.io/notes/projects/app-signal-forge/operations/security/#input-validation)
   for the exact validation blocks in `OrderEndpoints.cs` / `OrderGrpcService.cs`.
 - **Never interpolate exception content into a log message string.** Use `logger.exception()`
   (Python) or `RecordException(ex)` on the span (.NET) so the traceback is captured without risking
   a credential-bearing exception message landing in a log field that isn't treated as sensitive.
-  See [Security § Credential leakage prevention](https://shipsolid.github.io/notes/documentation/app-signal-forge/operations/security/#credential-leakage-prevention-in-logs).
+  See [Security § Credential leakage prevention](https://shipsolid.github.io/notes/projects/app-signal-forge/operations/security/#credential-leakage-prevention-in-logs).
 - **Distinguish transient failures from poison input** on any consumer/retry path — a downstream
   timeout should retry or circuit-break, a malformed message should not. See
-  [Resilience Patterns](https://shipsolid.github.io/notes/documentation/app-signal-forge/operations/resilience-patterns/) for the pattern
+  [Resilience Patterns](https://shipsolid.github.io/notes/projects/app-signal-forge/operations/resilience-patterns/) for the pattern
   catalogue (retry, circuit breaker, backoff, DLQ) and copy the closest existing one rather than
   inventing a new retry policy.
