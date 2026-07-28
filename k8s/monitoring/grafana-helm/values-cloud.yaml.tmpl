@@ -4,7 +4,7 @@
 #
 # TEMPLATE FILE. Do not pass this to helm directly — it is rendered by
 # deploy-local.sh, which substitutes ${...} placeholders from conf.yml's
-# monitoring.grafana_cloud / deployment_environment / secret_name / cluster.name
+# monitoring.grafana_cloud / deployment_environment_name / secret_name / cluster.name
 # / helm.namespace, writes the rendered YAML to a tmp file, and passes that to
 # `helm upgrade -f`.
 #
@@ -41,7 +41,7 @@ destinations:
     openTelemetryConversion:
       resourceToTelemetryConversion: true
     extraLabels:
-      deployment_environment: ${DEPLOYMENT_ENVIRONMENT}
+      deployment_environment_name: ${DEPLOYMENT_ENVIRONMENT}
     auth:
       type: basic
       usernameKey: GRAFANA_CLOUD_MIMIR_USER
@@ -56,7 +56,7 @@ destinations:
     type: loki
     url: ${LOKI_URL}
     extraLabels:
-      deployment_environment: ${DEPLOYMENT_ENVIRONMENT}
+      deployment_environment_name: ${DEPLOYMENT_ENVIRONMENT}
     auth:
       type: basic
       usernameKey: GRAFANA_CLOUD_LOKI_USER
@@ -72,7 +72,7 @@ destinations:
     protocol: grpc
     url: ${TEMPO_ENDPOINT}
     extraLabels:
-      deployment_environment: ${DEPLOYMENT_ENVIRONMENT}
+      deployment_environment_name: ${DEPLOYMENT_ENVIRONMENT}
     metrics:
       enabled: false
     logs:

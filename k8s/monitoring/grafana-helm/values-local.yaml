@@ -56,7 +56,7 @@ destinations:
       resourceToTelemetryConversion: true
     # Stamped on every metric series written by the Helm chart's Alloy agents.
     extraLabels:
-      deployment_environment: signal-forge-dev
+      deployment_environment_name: signal-forge-dev
 
   # Loki push — receives pod logs and cluster events.
   # Loki is deployed as a StatefulSet with a 2Gi PVC in otel-lab namespace.
@@ -65,7 +65,7 @@ destinations:
     url: http://loki.otel-lab.svc.cluster.local:3100/loki/api/v1/push
     # Stamped on every log stream pushed by the Helm chart's Alloy agents.
     extraLabels:
-      deployment_environment: signal-forge-dev
+      deployment_environment_name: signal-forge-dev
 
   # OTLP gRPC — receives traces forwarded by alloy-receiver.
   # Jaeger is deployed with COLLECTOR_OTLP_ENABLED=true; port 4317 accepts gRPC OTLP.
@@ -84,7 +84,7 @@ destinations:
       insecure: true        # Jaeger has no TLS in the lab
     # Stamped on every trace forwarded by alloy-receiver.
     extraLabels:
-      deployment_environment: signal-forge-dev
+      deployment_environment_name: signal-forge-dev
     metrics:
       enabled: false
     logs:

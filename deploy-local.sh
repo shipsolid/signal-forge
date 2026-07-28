@@ -99,7 +99,7 @@ MONITORING_MODE="$(yq monitoring.mode)"
 SECRET_NAME="$(yq monitoring.secret_name)"
 [[ -n "$SECRET_NAME" ]] || SECRET_NAME="grafana-cloud-secrets"
 
-DEPLOYMENT_ENV="$(yq monitoring.deployment_environment)"
+DEPLOYMENT_ENV="$(yq monitoring.deployment_environment_name)"
 [[ -n "$DEPLOYMENT_ENV" ]] || DEPLOYMENT_ENV="signal-forge-dev"
 
 if [[ -n "$CA_PATH" && "$CA_PATH" != /* ]]; then
@@ -444,7 +444,7 @@ PY
 }
 
 # Render and apply the shared ConfigMap that every app Deployment consumes via
-# envFrom. Derives the alloy-receiver URL + deployment_environment from conf.yml.
+# envFrom. Derives the alloy-receiver URL + deployment_environment_name from conf.yml.
 apply_app_env_configmap() {
   local helm_ns helm_release
   helm_ns="$(yq monitoring.helm.namespace)"

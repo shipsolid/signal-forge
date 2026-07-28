@@ -63,7 +63,7 @@ def setup_telemetry() -> None:
             SERVICE_NAME: SERVICE,
             "service.namespace": "otel-lab",
             "service.version": "1.0.0",
-            "deployment.environment": os.getenv("DEPLOYMENT_ENVIRONMENT", "local"),
+            "deployment.environment.name": os.getenv("DEPLOYMENT_ENVIRONMENT", "local"),
         }
     )
 

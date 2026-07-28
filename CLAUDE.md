@@ -51,7 +51,7 @@ explanation.
 - `monitoring.grafana_cloud.akv.*` — consumed only by the AKV fetch script
 - `monitoring.helm.values_file_by_mode.{local, cloud}` — mode-selected values file; `.tmpl` suffix
   triggers render
-- `monitoring.deployment_environment` — stamped on every signal (Helm `extraLabels`, app env via
+- `monitoring.deployment_environment_name` — stamped on every signal (Helm `extraLabels`, app env via
   ConfigMap)
 - `security.tls.{enabled, hostname, cert_manager}` — gates cert-manager install
 - `observability.slo_rules.{enabled, manifest}` — gates PrometheusRule apply

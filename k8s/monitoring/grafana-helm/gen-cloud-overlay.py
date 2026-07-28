@@ -75,7 +75,7 @@ destinations = [
         "traces": {"enabled": True},
         "metrics": {"enabled": False},
         "logs": {"enabled": False},
-        "extraLabels": {"deployment_environment": "signal-forge-dev"},
+        "extraLabels": {"deployment_environment_name": "signal-forge-dev"},
     },
     # App metrics → Grafana Cloud Mimir (Prometheus remote_write, converted from OTLP by Alloy)
     # NOTE: prometheus-us-central2.grafana.net is a Prometheus-compatible endpoint (remote_write),
@@ -91,7 +91,7 @@ destinations = [
         "url": mimir_prom_url,
         "auth": {"type": "basic", "username": mimir_user, "password": api_key},
         "openTelemetryConversion": {"resourceToTelemetryConversion": True},
-        "extraLabels": {"deployment_environment": "signal-forge-dev"},
+        "extraLabels": {"deployment_environment_name": "signal-forge-dev"},
     },
     # Infra metrics → Grafana Cloud Mimir (Prometheus remote_write, scraped by alloy-metrics)
     {
@@ -100,7 +100,7 @@ destinations = [
         "url": mimir_prom_url,
         "auth": {"type": "basic", "username": mimir_user, "password": api_key},
         "openTelemetryConversion": {"resourceToTelemetryConversion": True},
-        "extraLabels": {"deployment_environment": "signal-forge-dev"},
+        "extraLabels": {"deployment_environment_name": "signal-forge-dev"},
     },
     # Logs → Grafana Cloud Loki (pod/node logs tailed by alloy-logs)
     {
@@ -108,7 +108,7 @@ destinations = [
         "type": "loki",
         "url": loki_url,
         "auth": {"type": "basic", "username": loki_user, "password": api_key},
-        "extraLabels": {"deployment_environment": "signal-forge-dev"},
+        "extraLabels": {"deployment_environment_name": "signal-forge-dev"},
     },
 ]
 

@@ -113,18 +113,18 @@ data:
       }
     }
 
-    // env_label: stamps deployment.environment as a resource attribute.
+    // env_label: stamps deployment.environment.name as a resource attribute.
     otelcol.processor.transform "env_label" {
       error_mode = "ignore"
 
       trace_statements {
         context    = "resource"
-        statements = ["set(attributes[\"deployment.environment\"], \"signal-forge-dev\") where attributes[\"deployment.environment\"] == nil"]
+        statements = ["set(attributes[\"deployment.environment.name\"], \"signal-forge-dev\") where attributes[\"deployment.environment.name\"] == nil"]
       }
 
       metric_statements {
         context    = "resource"
-        statements = ["set(attributes[\"deployment.environment\"], \"signal-forge-dev\") where attributes[\"deployment.environment\"] == nil"]
+        statements = ["set(attributes[\"deployment.environment.name\"], \"signal-forge-dev\") where attributes[\"deployment.environment.name\"] == nil"]
       }
 
       // Promote resource attributes to datapoint-level so the Prometheus exporter
@@ -136,7 +136,7 @@ data:
           "set(attributes[\"service.name\"],              resource.attributes[\"service.name\"])              where resource.attributes[\"service.name\"] != nil",
           "set(attributes[\"service.namespace\"],         resource.attributes[\"service.namespace\"])         where resource.attributes[\"service.namespace\"] != nil",
           "set(attributes[\"service.version\"],           resource.attributes[\"service.version\"])           where resource.attributes[\"service.version\"] != nil",
-          "set(attributes[\"deployment.environment\"],    resource.attributes[\"deployment.environment\"])    where resource.attributes[\"deployment.environment\"] != nil",
+          "set(attributes[\"deployment.environment.name\"],    resource.attributes[\"deployment.environment.name\"])    where resource.attributes[\"deployment.environment.name\"] != nil",
           "set(attributes[\"k8s.namespace.name\"],        resource.attributes[\"k8s.namespace.name\"])        where resource.attributes[\"k8s.namespace.name\"] != nil",
           "set(attributes[\"k8s.deployment.name\"],       resource.attributes[\"k8s.deployment.name\"])       where resource.attributes[\"k8s.deployment.name\"] != nil",
         ]
@@ -144,7 +144,7 @@ data:
 
       log_statements {
         context    = "resource"
-        statements = ["set(attributes[\"deployment.environment\"], \"signal-forge-dev\") where attributes[\"deployment.environment\"] == nil"]
+        statements = ["set(attributes[\"deployment.environment.name\"], \"signal-forge-dev\") where attributes[\"deployment.environment.name\"] == nil"]
       }
 
       output {
@@ -367,6 +367,6 @@ ${TRACE_CORRELATION_STAGES}
         }
       }
       external_labels = {
-        deployment_environment = "signal-forge-dev",
+        deployment_environment_name = "signal-forge-dev",
       }
     }
