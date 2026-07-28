@@ -117,7 +117,7 @@ builder.Services.AddCors(opts =>
 // ── OpenTelemetry ─────────────────────────────────────────────────────────────
 // ResourceBuilder provides the service identity that appears on every span,
 // metric, and log record. OTEL_RESOURCE_ATTRIBUTES env var is picked up by
-// AddEnvironmentVariableDetector() and merges deployment.environment.name,
+// AddEnvironmentVariableDetector() and merges deployment.environment,
 // service.namespace, and service.version without code changes per environment.
 var resourceBuilder = ResourceBuilder.CreateDefault()
     .AddService(DiagnosticsConfig.ServiceName)

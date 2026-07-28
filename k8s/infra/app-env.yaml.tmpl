@@ -10,7 +10,7 @@
 #   Before this, every app Deployment hardcoded the OTLP endpoint
 #   (`grafana-k8s-alloy-receiver.monitoring.svc.cluster.local:4317`) and the
 #   OTEL_RESOURCE_ATTRIBUTES string. Any change to helm.release / helm.namespace
-#   / cluster.namespace / deployment_environment_name would silently drift three
+#   / cluster.namespace / deployment_environment would silently drift three
 #   deployment YAMLs. Centralising here makes conf.yml the single source.
 apiVersion: v1
 kind: ConfigMap
@@ -26,4 +26,4 @@ data:
   OTEL_LOGS_EXPORTER: "none"
   OTEL_METRICS_EXEMPLAR_FILTER: "trace_based"
   # Resource attributes stamped on every signal leaving the app.
-  OTEL_RESOURCE_ATTRIBUTES: "service.namespace=${APP_NAMESPACE},service.version=1.0.0,deployment.environment.name=${DEPLOYMENT_ENVIRONMENT}"
+  OTEL_RESOURCE_ATTRIBUTES: "service.namespace=${APP_NAMESPACE},service.version=1.0.0,deployment.environment=${DEPLOYMENT_ENVIRONMENT}"

@@ -29,7 +29,7 @@ Set these resource attributes so Alloy can identify the service:
 
 ```
 OTEL_SERVICE_NAME=<service-name>
-OTEL_RESOURCE_ATTRIBUTES=service.namespace=otel-lab,service.version=1.0.0,deployment.environment.name=signal-forge-dev
+OTEL_RESOURCE_ATTRIBUTES=service.namespace=otel-lab,service.version=1.0.0,deployment.environment=signal-forge-dev
 ```
 
 #### Metrics
@@ -100,7 +100,7 @@ Required env vars in `deployment.yaml`:
 - name: OTEL_METRICS_EXEMPLAR_FILTER
   value: "trace_based"
 - name: OTEL_RESOURCE_ATTRIBUTES
-  value: "service.namespace=otel-lab,service.version=1.0.0,deployment.environment.name=signal-forge-dev"
+  value: "service.namespace=otel-lab,service.version=1.0.0,deployment.environment=signal-forge-dev"
 ```
 
 Add a `readinessProbe` and `livenessProbe` pointing at `/healthz`.

@@ -187,9 +187,9 @@ monitoring:
   # Deployment (FARO_COLLECTOR_URL env var).
   secret_name: grafana-cloud-secrets
 
-  # Stamped as the `deployment_environment_name` label on every signal leaving the
+  # Stamped as the `deployment_environment` label on every signal leaving the
   # cluster (metrics labels, log streams, trace resource attrs).
-  deployment_environment_name: signal-forge-dev
+  deployment_environment: signal-forge-dev
 
   manifests:
     # Manifests applied only in mode=local. In mode=cloud the Helm release
@@ -208,7 +208,7 @@ monitoring:
   # ─── Grafana Cloud credentials ───────────────────────────────────────────
   # deploy-local.sh materializes the nine leaf values into the
   # {monitoring.secret_name} Secret. values-cloud.yaml.tmpl is rendered with
-  # the URLs/deployment_environment_name sourced from this file.
+  # the URLs/deployment_environment sourced from this file.
   grafana_cloud:
     # Path to an env file to source (relative to conf.yml's directory unless
     # it starts with "/"). Required — deploy-local.sh and
@@ -242,7 +242,7 @@ monitoring:
     timeout: "5m"
 
     # Per-mode values file. The `cloud` file is a template (${...} placeholders)
-    # rendered by deploy-local.sh from monitoring.grafana_cloud / deployment_environment_name.
+    # rendered by deploy-local.sh from monitoring.grafana_cloud / deployment_environment.
     values_file_by_mode:
       local: k8s/monitoring/grafana-helm/values-local.yaml
       cloud: k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl

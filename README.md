@@ -65,7 +65,7 @@ All services push OTLP to `alloy-receiver` (Helm-managed DaemonSet, `monitoring`
 flowchart TD
     SDK["App SDK"] -->|OTLP gRPC :4317| Receiver[alloy-receiver]
     Receiver --> K8sAttrs[k8sattributes enrichment]
-    K8sAttrs --> Transform["transform (stamp deployment.environment.name)"]
+    K8sAttrs --> Transform["transform (stamp deployment.environment)"]
     Transform --> Filter["filter (drop /healthz spans)"]
     Filter --> SpanMetrics[spanmetrics connector]
     SpanMetrics --> RED["RED metrics (before sampling)"]
@@ -271,12 +271,12 @@ make validate
 
 **Logs:**
 
-| Service                 | How to access                                                                                     |
-| ----------------------- | ------------------------------------------------------------------------------------------------- |
-| Any app pod             | `kubectl -n otel-lab logs deploy/<service-name>`                                                  |
-| Alloy receiver          | `kubectl -n monitoring logs daemonset/grafana-k8s-alloy-receiver`                                 |
-| Loki query (local mode) | `{namespace="otel-lab"}` in Grafana Explore or via Loki API on `:3100`                            |
-| Loki query (cloud mode) | `{namespace="otel-lab", deployment_environment_name="signal-forge-dev"}` in Grafana Cloud Explore |
+| Service                 | How to access                                                                                |
+| ----------------------- | -------------------------------------------------------------------------------------------- |
+| Any app pod             | `kubectl -n otel-lab logs deploy/<service-name>`                                             |
+| Alloy receiver          | `kubectl -n monitoring logs daemonset/grafana-k8s-alloy-receiver`                            |
+| Loki query (local mode) | `{namespace="otel-lab"}` in Grafana Explore or via Loki API on `:3100`                       |
+| Loki query (cloud mode) | `{namespace="otel-lab", deployment_environment="signal-forge-dev"}` in Grafana Cloud Explore |
 
 All services write structured JSON logs. Alloy's `alloy-logs` DaemonSet extracts `TraceId`/`SpanId`
 fields and attaches them as Loki structured metadata, enabling "Logs for this span" in Grafana.
