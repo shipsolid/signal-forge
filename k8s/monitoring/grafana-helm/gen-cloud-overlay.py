@@ -75,7 +75,17 @@ destinations = [
         "traces": {"enabled": True},
         "metrics": {"enabled": False},
         "logs": {"enabled": False},
-        "extraLabels": {"deployment_environment": "signal-forge-dev"},
+        # extraLabels is a no-op on otlp-type destinations in this chart version —
+        # only prometheus/loki/pyroscope destination templates implement it.
+        "processors": {
+            "transform": {
+                "traces": {
+                    "resource": [
+                        'set(attributes["deployment_environment"], "signal-forge-dev")'
+                    ]
+                }
+            }
+        },
     },
     # App metrics → Grafana Cloud Mimir (Prometheus remote_write, converted from OTLP by Alloy)
     # NOTE: prometheus-us-central2.grafana.net is a Prometheus-compatible endpoint (remote_write),

@@ -193,13 +193,14 @@ secrets-fetch-akv:
 	TEMPO_HOST="$$TEMPO_HOST" TEMPO_USER="$$TEMPO_USER" \
 	MIMIR_BASE="$$MIMIR_BASE" MIMIR_USER="$$MIMIR_USER" \
 	LOKI_BASE="$$LOKI_BASE"   LOKI_USER="$$LOKI_USER" \
+	python3 k8s/monitoring/grafana-helm/render-values-local.py > /tmp/values-local-rendered.yaml && \
 	python3 k8s/monitoring/grafana-helm/gen-cloud-overlay.py > /tmp/gc-overlay.yaml && \
 	helm upgrade --install $(HELM_RELEASE) $(HELM_CHART) \
 	  --version $(HELM_VERSION) \
 	  -n $(HELM_NAMESPACE) \
-	  -f k8s/monitoring/grafana-helm/values-local.yaml \
+	  -f /tmp/values-local-rendered.yaml \
 	  -f /tmp/gc-overlay.yaml && \
-	rm -f /tmp/gc-overlay.yaml
+	rm -f /tmp/gc-overlay.yaml /tmp/values-local-rendered.yaml
 	@echo "Credentials applied and Helm release updated with Grafana Cloud destinations."
 	@echo "Rolling frontend to pick up updated FARO_URL..."
 	kubectl rollout restart deployment/otel-frontend -n $(NAMESPACE)
@@ -227,13 +228,14 @@ secrets-apply:
 	GRAFANA_CLOUD_TEMPO_ENDPOINT="$${GRAFANA_CLOUD_TEMPO_ENDPOINT}" GRAFANA_CLOUD_TEMPO_USER="$${GRAFANA_CLOUD_TEMPO_USER}" \
 	GRAFANA_CLOUD_MIMIR_ENDPOINT="$${GRAFANA_CLOUD_MIMIR_ENDPOINT}" GRAFANA_CLOUD_MIMIR_USER="$${GRAFANA_CLOUD_MIMIR_USER}" \
 	GRAFANA_CLOUD_LOKI_ENDPOINT="$${GRAFANA_CLOUD_LOKI_ENDPOINT}"   GRAFANA_CLOUD_LOKI_USER="$${GRAFANA_CLOUD_LOKI_USER}" \
+	python3 k8s/monitoring/grafana-helm/render-values-local.py > /tmp/values-local-rendered.yaml && \
 	python3 k8s/monitoring/grafana-helm/gen-cloud-overlay.py > /tmp/gc-overlay.yaml && \
 	helm upgrade --install $(HELM_RELEASE) $(HELM_CHART) \
 	  --version $(HELM_VERSION) \
 	  -n $(HELM_NAMESPACE) \
-	  -f k8s/monitoring/grafana-helm/values-local.yaml \
+	  -f /tmp/values-local-rendered.yaml \
 	  -f /tmp/gc-overlay.yaml && \
-	rm -f /tmp/gc-overlay.yaml
+	rm -f /tmp/gc-overlay.yaml /tmp/values-local-rendered.yaml
 	@echo "Credentials applied and Helm release updated with Grafana Cloud destinations."
 	@echo "Rolling frontend to pick up updated FARO_URL..."
 	kubectl rollout restart deployment/otel-frontend -n $(NAMESPACE)

@@ -108,9 +108,9 @@ choices.
 | `alloy-receiver`  | DaemonSet   | OTLP push receiver (app telemetry) | Cloud Tempo + Mimir | in-cluster Jaeger + Prom |
 | `alloy-profiles`  | DaemonSet   | Disabled — no Pyroscope            | —                   | —                        |
 
-Values: [values-local.yaml](k8s/monitoring/grafana-helm/values-local.yaml) or
-[values-cloud.yaml.tmpl](k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl) (rendered at deploy
-time from conf.yml).
+Values: [values-local.yaml.tmpl](k8s/monitoring/grafana-helm/values-local.yaml.tmpl) or
+[values-cloud.yaml.tmpl](k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl) — both rendered at
+deploy time from conf.yml.
 
 ### Trace propagation
 

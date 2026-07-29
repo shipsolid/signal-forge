@@ -71,8 +71,13 @@ destinations:
     type: otlp
     protocol: grpc
     url: ${TEMPO_ENDPOINT}
-    extraLabels:
-      deployment_environment: ${DEPLOYMENT_ENVIRONMENT}
+    # extraLabels is a no-op on otlp-type destinations in this chart version —
+    # only prometheus/loki/pyroscope destination templates implement it.
+    processors:
+      transform:
+        traces:
+          resource:
+            - 'set(attributes["deployment_environment"], "${DEPLOYMENT_ENVIRONMENT}")'
     metrics:
       enabled: false
     logs:

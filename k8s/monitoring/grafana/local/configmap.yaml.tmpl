@@ -119,12 +119,15 @@ data:
 
       trace_statements {
         context    = "resource"
-        statements = ["set(attributes[\"deployment.environment\"], \"signal-forge-dev\") where attributes[\"deployment.environment\"] == nil"]
+        statements = [
+          "set(attributes[\"deployment.environment\"], \"${DEPLOYMENT_ENVIRONMENT}\") where attributes[\"deployment.environment\"] == nil",
+          "set(attributes[\"deployment_environment\"], \"${DEPLOYMENT_ENVIRONMENT}\") where attributes[\"deployment_environment\"] == nil",
+        ]
       }
 
       metric_statements {
         context    = "resource"
-        statements = ["set(attributes[\"deployment.environment\"], \"signal-forge-dev\") where attributes[\"deployment.environment\"] == nil"]
+        statements = ["set(attributes[\"deployment.environment\"], \"${DEPLOYMENT_ENVIRONMENT}\") where attributes[\"deployment.environment\"] == nil"]
       }
 
       // Promote resource attributes to datapoint-level so the Prometheus exporter
@@ -144,7 +147,7 @@ data:
 
       log_statements {
         context    = "resource"
-        statements = ["set(attributes[\"deployment.environment\"], \"signal-forge-dev\") where attributes[\"deployment.environment\"] == nil"]
+        statements = ["set(attributes[\"deployment.environment\"], \"${DEPLOYMENT_ENVIRONMENT}\") where attributes[\"deployment.environment\"] == nil"]
       }
 
       output {
@@ -367,6 +370,6 @@ ${TRACE_CORRELATION_STAGES}
         }
       }
       external_labels = {
-        deployment_environment = "signal-forge-dev",
+        deployment_environment = "${DEPLOYMENT_ENVIRONMENT}",
       }
     }

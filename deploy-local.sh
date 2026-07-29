@@ -421,18 +421,20 @@ apply_monitoring() {
 # Render the local-mode Alloy DaemonSet's ConfigMap: splices the shared
 # trace-correlation fragment (k8s/monitoring/grafana/shared/) into
 # configmap.yaml.tmpl's ${TRACE_CORRELATION_STAGES} placeholder, indented to
-# match its nesting inside loki.process. See render_helm_values() below for
-# the cloud-mode counterpart (same fragment, Helm-tpl-escaped instead).
+# match its nesting inside loki.process, and stamps ${DEPLOYMENT_ENVIRONMENT}
+# (env_label's trace/metric/log statements + loki.write's external_labels).
+# See render_helm_values() below for the Helm-chart-values counterpart (same
+# fragment, Helm-tpl-escaped instead).
 render_local_alloy_configmap() {
   local fragment="${SCRIPT_DIR}/k8s/monitoring/grafana/shared/trace-correlation-stages.alloy"
   local tmpl="${SCRIPT_DIR}/k8s/monitoring/grafana/local/configmap.yaml.tmpl"
   [[ -f "$fragment" ]] || die "missing shared fragment: $fragment"
   [[ -f "$tmpl" ]] || die "missing template: $tmpl"
   local rendered; rendered="$(mktemp --suffix=.alloy-configmap.yaml)"
-  python3 - "$fragment" "$tmpl" "$rendered" <<'PY'
+  python3 - "$fragment" "$tmpl" "$rendered" "$DEPLOYMENT_ENV" <<'PY'
 import sys
 from string import Template
-fragment_path, tmpl_path, out_path = sys.argv[1:4]
+fragment_path, tmpl_path, out_path, deploy_env = sys.argv[1:5]
 with open(fragment_path) as f: lines = f.read().rstrip("\n").splitlines()
 # Drop the fragment file's own doc-comment header — only splice the actual
 # stage.* code, so the deployed ConfigMap doesn't carry documentation meant
@@ -441,7 +443,10 @@ code = lines[next(i for i, l in enumerate(lines) if l.lstrip().startswith("stage
 indented = "\n".join(("      " + line if line else line) for line in code)
 with open(tmpl_path) as f: tmpl = f.read()
 with open(out_path, "w") as f:
-    f.write(Template(tmpl).substitute(TRACE_CORRELATION_STAGES=indented))
+    f.write(Template(tmpl).substitute(
+        TRACE_CORRELATION_STAGES=indented,
+        DEPLOYMENT_ENVIRONMENT=deploy_env,
+    ))
 PY
   log "kubectl apply — ConfigMap alloy-config (local mode, trace-correlation from shared/) → ns/otel-lab"
   kubectl apply -f "$rendered"

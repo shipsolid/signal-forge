@@ -241,10 +241,10 @@ monitoring:
     wait: true
     timeout: "5m"
 
-    # Per-mode values file. The `cloud` file is a template (${...} placeholders)
-    # rendered by deploy-local.sh from monitoring.grafana_cloud / deployment_environment.
+    # Per-mode values file. Both are templates (${...} placeholders) rendered by
+    # deploy-local.sh from monitoring.grafana_cloud / deployment_environment.
     values_file_by_mode:
-      local: k8s/monitoring/grafana-helm/values-local.yaml
+      local: k8s/monitoring/grafana-helm/values-local.yaml.tmpl
       cloud: k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl
 
     repo:
