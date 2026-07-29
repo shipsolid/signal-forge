@@ -54,18 +54,14 @@ def setup_telemetry() -> None:
     """
 
     # Resource describes the entity producing telemetry.
-    # OTEL_RESOURCE_ATTRIBUTES env var can extend this dict without
-    # code changes (e.g. adding k8s.pod.name at runtime in K8s via
-    # the downward API — though Alloy's k8sattributes processor handles
-    # that at the collector level for us).
-    resource = Resource.create(
-        {
-            SERVICE_NAME: SERVICE,
-            "service.namespace": "otel-lab",
-            "service.version": "1.0.0",
-            "deployment.environment": os.getenv("DEPLOYMENT_ENVIRONMENT", "local"),
-        }
-    )
+    # service.namespace / service.version / deployment.environment come from
+    # OTEL_RESOURCE_ATTRIBUTES (set by the shared signal-forge-app-env ConfigMap,
+    # see k8s/infra/app-env.yaml.tmpl) via the SDK's env-var resource detector.
+    # Resource.create()'s explicit dict takes precedence over that detector, so
+    # hardcoding those keys here silently shadowed the ConfigMap's value —
+    # deployment.environment showed "local" (this function's own default)
+    # instead of signal-forge-dev regardless of what conf.yml set.
+    resource = Resource.create({SERVICE_NAME: SERVICE})
 
     # ── TracerProvider ────────────────────────────────────────────────────────
     # BatchSpanProcessor buffers spans and sends them in configurable batches.
