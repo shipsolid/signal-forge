@@ -93,6 +93,11 @@ NAMESPACE="$(yq cluster.namespace)"
 
 CA_PATH="$(yq corporate_ca.path)"
 CA_SETTLE="$(yq corporate_ca.settle_seconds)"
+# Name of the ConfigMap carrying the corporate CA into the alloy-logs pod
+# (see apply_corporate_ca_configmap() + the alloy-logs: block in
+# values-cloud.yaml.tmpl). Not a conf.yml knob — internal wiring constant,
+# same treatment as the hardcoded "frontend-env-js" ConfigMap name.
+CORPORATE_CA_CONFIGMAP_NAME="corporate-ca-cert"
 IMG_TAG="$(yq images.tag)"
 MONITORING_MODE="$(yq monitoring.mode)"
 
@@ -538,6 +543,38 @@ PY
   done
 }
 
+# Corporate CA (Zscaler) trust — alloy-logs ONLY. logs-prod-018.grafana.net is
+# intercepted by Zscaler SSL inspection on this network; alloy-metrics/
+# alloy-receiver's grafana.net hosts are not, so only alloy-logs needs this.
+#
+# The chart's Alloy subchart has no direct "trust this CA" knob — it exposes
+# controller.volumes.extra / alloy.mounts.extra, which need a ConfigMap to
+# reference by name. Must exist before `helm upgrade` runs.
+#
+# No-op in local mode, and a logged no-op in cloud mode when CA_PATH doesn't
+# resolve to a real, non-empty file — zero new K8s objects for a
+# non-corporate contributor running this same lab.
+apply_corporate_ca_configmap() {
+  [[ "${MONITORING_MODE:-local}" == "cloud" ]] || return 0
+
+  if [[ ! -f "$CA_PATH" || ! -s "$CA_PATH" ]]; then
+    log "no corporate CA at $CA_PATH — skipping ${CORPORATE_CA_CONFIGMAP_NAME} ConfigMap (alloy-logs will use its stock CA bundle)"
+    return 0
+  fi
+
+  local helm_ns; helm_ns="$(yq monitoring.helm.namespace)"
+  [[ -n "$helm_ns" ]] || die "monitoring.helm.namespace is required"
+  kubectl get ns "$helm_ns" >/dev/null 2>&1 || kubectl create namespace "$helm_ns"
+
+  log "kubectl apply — ${CORPORATE_CA_CONFIGMAP_NAME} ConfigMap (zcert.crt) → ns/$helm_ns"
+  # data key "zcert.crt" must match the subPath used in values-cloud.yaml.tmpl's
+  # alloy-logs.alloy.mounts.extra entry — keep both in sync.
+  kubectl create configmap "$CORPORATE_CA_CONFIGMAP_NAME" \
+    --from-file="zcert.crt=${CA_PATH}" \
+    -n "$helm_ns" \
+    --dry-run=client -o yaml | kubectl apply -f -
+}
+
 # Frontend runtime config (env.js). Rendered straight from the already-resolved
 # GC_FARO_ENDPOINT value — no K8s Secret round-trip needed, this ConfigMap IS
 # the delivery mechanism now, mounted read-only via subPath so the frontend
@@ -582,12 +619,14 @@ render_helm_values() {
   local out="$2"    # abs path for rendered output
   local fragment="${SCRIPT_DIR}/k8s/monitoring/grafana/shared/trace-correlation-stages.alloy"
   python3 - "$CONF" "$tmpl" "$out" "$fragment" "$CLUSTER" "$NAMESPACE" "$SECRET_NAME" "$DEPLOYMENT_ENV" \
-    "$GC_MIMIR_ENDPOINT" "$GC_LOKI_ENDPOINT" "$GC_TEMPO_ENDPOINT" <<'PY'
+    "$GC_MIMIR_ENDPOINT" "$GC_LOKI_ENDPOINT" "$GC_TEMPO_ENDPOINT" \
+    "$CA_PATH" "$CORPORATE_CA_CONFIGMAP_NAME" <<'PY'
+import os
 import sys, yaml
 from string import Template
 
 (conf_path, tmpl_path, out_path, fragment_path, cluster_name, ns, secret_name, deploy_env,
- mimir_url, loki_url, tempo_endpoint) = sys.argv[1:12]
+ mimir_url, loki_url, tempo_endpoint, ca_path, ca_configmap_name) = sys.argv[1:14]
 with open(conf_path) as f:
     doc = yaml.safe_load(f) or {}
 
@@ -615,6 +654,44 @@ trace_correlation_escaped = "\n".join(
     ("    " + line if line else line) for line in escaped
 )
 
+# Corporate CA (Zscaler) mount for alloy-logs only — see
+# apply_corporate_ca_configmap() and this template's alloy-logs: header
+# comment for the full "why". Emitted as two full-line block substitutions
+# (same technique as trace_correlation_escaped above): each fragment either
+# contains a complete, correctly-indented YAML key or is the empty string —
+# never a half-populated key — so a non-corporate render has zero
+# CA-related keys anywhere in the output, not just blank ones.
+ca_present = bool(ca_path) and os.path.isfile(ca_path) and os.path.getsize(ca_path) > 0
+if ca_present:
+    # Sibling of alloy-logs:'s enabled:/alloy:/remoteConfig: keys —
+    # controller.volumes.extra lives under the separate top-level
+    # controller: block, NOT nested under alloy:.
+    ca_controller_block = (
+        "  controller:\n"
+        "    volumes:\n"
+        "      extra:\n"
+        "        - name: corporate-ca\n"
+        "          configMap:\n"
+        f"            name: {ca_configmap_name}\n"
+    ).rstrip("\n")
+    # Nested inside alloy-logs.alloy: (sibling of extraEnv:) — mounted as a
+    # standalone file under /etc/ssl/certs/, NOT overwriting
+    # ca-certificates.crt itself, so Go's crypto/x509 SystemCertPool picks it
+    # up automatically (it scans certDirectories and appends every PEM file
+    # found there) with no Alloy River config change. subPath must match the
+    # data key apply_corporate_ca_configmap() writes into the ConfigMap.
+    ca_mounts_block = (
+        "    mounts:\n"
+        "      extra:\n"
+        "        - name: corporate-ca\n"
+        "          mountPath: /etc/ssl/certs/corporate-ca.crt\n"
+        "          subPath: zcert.crt\n"
+        "          readOnly: true\n"
+    ).rstrip("\n")
+else:
+    ca_controller_block = ""
+    ca_mounts_block = ""
+
 subs = {
     "CLUSTER_NAME":                      cluster_name,
     "DEPLOYMENT_ENVIRONMENT":            deploy_env,
@@ -624,6 +701,8 @@ subs = {
     "LOKI_URL":                          loki_url,
     "TEMPO_ENDPOINT":                    tempo_endpoint,
     "TRACE_CORRELATION_STAGES_ESCAPED":  trace_correlation_escaped,
+    "ALLOY_LOGS_CA_CONTROLLER_BLOCK":    ca_controller_block,
+    "ALLOY_LOGS_CA_MOUNTS_BLOCK":        ca_mounts_block,
 }
 
 with open(tmpl_path) as f:
@@ -887,6 +966,7 @@ fi
 apply_stage infra
 apply_app_env_configmap
 apply_grafana_cloud_secret
+apply_corporate_ca_configmap      # must run before install_helm; needs monitoring.helm.namespace
 apply_frontend_env_configmap
 install_cert_manager
 apply_stage datastores

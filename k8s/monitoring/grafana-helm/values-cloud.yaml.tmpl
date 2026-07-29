@@ -218,8 +218,22 @@ alloy-singleton:
   remoteConfig:
     enabled: false
 
+# ── alloy-logs: corporate CA (Zscaler) trust ──────────────────────────────
+# logs-prod-018.grafana.net is intercepted by Zscaler SSL inspection on this
+# network (McCain corporate network); alloy-metrics'/alloy-receiver's
+# grafana.net hosts are not intercepted, so only alloy-logs needs a CA mount
+# — see deploy-local.sh's apply_corporate_ca_configmap() for the ConfigMap
+# this references, and render_helm_values() for how the CA controller/mounts
+# blocks below are built (NOTE: not written as literal ${...} syntax here on
+# purpose — Template.safe_substitute has no notion of YAML comments, so a
+# literal placeholder mention in this prose would itself get substituted).
+# On a non-corporate machine (corporate_ca.path in conf.yml absent/empty)
+# both placeholders render as empty lines below — no controller:/mounts:
+# keys are emitted at all, so this block behaves exactly as it did before
+# this fix.
 alloy-logs:
   enabled: true
+${ALLOY_LOGS_CA_CONTROLLER_BLOCK}
   alloy:
     extraEnv:
       - name: CLUSTER_NAME
@@ -232,6 +246,7 @@ alloy-logs:
         valueFrom:
           fieldRef:
             fieldPath: spec.nodeName
+${ALLOY_LOGS_CA_MOUNTS_BLOCK}
   remoteConfig:
     enabled: false
 
