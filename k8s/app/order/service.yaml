@@ -7,5 +7,13 @@ spec:
   selector:
     app: order-api
   ports:
-    - port: 5001
+    - name: http
+      port: 5001
       targetPort: 5001
+    # gRPC (HTTP/2-only) — gateway-api's actual traffic to order-api. Without
+    # this the Service has no ClusterIP:5002 route at all: OrderApi__Address
+    # (http://order-api:5002) resolves the ClusterIP fine but the connection
+    # is refused, since kube-proxy never programs a port it wasn't told about.
+    - name: grpc
+      port: 5002
+      targetPort: 5002

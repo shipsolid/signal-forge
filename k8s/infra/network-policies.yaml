@@ -1,21 +1,27 @@
 # NetworkPolicies for the otel-lab namespace.
 #
-# IMPORTANT — k3d flannel does NOT enforce NetworkPolicies.
-# These manifests are written as the production baseline. On a real cluster
-# with Calico/Cilium/Weave they will be enforced; on default k3d they are
-# silently accepted but not evaluated. Verify in-cluster with a NetworkPolicy
-# tester (e.g. netshoot pod) before relying on these for isolation.
-# To enforce locally: k3d cluster create --k3s-arg '--flannel-backend=none@server:*'
-# and install calico/cilium.
+# IMPORTANT — these ARE enforced on this k3d cluster. k3s bundles kube-router
+# as a NetworkPolicy controller alongside flannel (confirmed via
+# `docker exec <server-node> iptables-save -t filter`: KUBE-ROUTER-*/
+# KUBE-NWPLCY-*/KUBE-POD-FW-* chains, REJECT-by-default per pod). The
+# previous version of this comment claimed flannel silently ignores these
+# manifests — that was wrong and let allow-app-to-app ship egress-only for a
+# long time (see below), which kube-router enforced literally: every tier:app
+# pod could send to another tier:app pod but had nothing granting it as an
+# accepted inbound source, so gateway-api → order-api / notification-svc came
+# back "connection refused" (REJECT --reject-with icmp-port-unreachable).
+# Verify in-cluster with a NetworkPolicy tester (e.g. netshoot pod) rather
+# than assuming either way.
 #
 # Policy model:
-#   default-deny         baseline for every pod in otel-lab (deny ingress + egress)
-#   allow-dns            every pod can resolve DNS (kube-system CoreDNS)
-#   allow-ingress        traefik controller → any pod in otel-lab
-#   allow-intra-app      app pods ↔ app pods (gateway→order, gateway→notification)
-#   allow-app-to-ds      app pods → datastore pods
-#   allow-app-to-alloy   app pods → grafana-k8s-alloy-receiver (monitoring ns)
-#   allow-egress-cloud   datastore + Alloy egress to the internet (Grafana Cloud)
+#   default-deny            baseline for every pod in otel-lab (deny ingress + egress)
+#   allow-dns                every pod can resolve DNS (kube-system CoreDNS)
+#   allow-ingress            traefik controller → any pod in otel-lab
+#   allow-app-to-app         app pods → app pods, egress side (gateway→order, gateway→notification)
+#   allow-app-ingress-from-app  app pods ← app pods, ingress side — the required other half
+#   allow-app-to-ds          app pods → datastore pods
+#   allow-app-to-alloy       app pods → grafana-k8s-alloy-receiver (monitoring ns)
+#   allow-egress-cloud       datastore + Alloy egress to the internet (Grafana Cloud)
 ---
 # DEFAULT DENY — every pod in otel-lab starts with zero allowed traffic.
 apiVersion: networking.k8s.io/v1
@@ -113,6 +119,39 @@ spec:
           # order-api's dedicated gRPC (HTTP/2-only) port — gateway-api's
           # actual traffic to order-api. 5001 above is order-api's separate
           # HTTP/1.1 port for kubelet's own /healthz probe, not app traffic.
+          port: 5002
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 8080
+---
+# App ↔ app, ingress side — the required companion to allow-app-to-app's
+# egress rule. NetworkPolicy is directional: an egress-allow on the caller
+# does not imply an ingress-allow on the callee. Without this, every
+# tier:app→tier:app call (gateway-api→order-api, gateway-api→notification-svc,
+# order-api→gateway-api) is rejected, because allow-ingress-from-controller
+# only grants ingress from kube-system (Traefik).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-ingress-from-app
+  namespace: otel-lab
+spec:
+  podSelector:
+    matchLabels:
+      tier: app
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              tier: app
+      ports:
+        - protocol: TCP
+          port: 5000
+        - protocol: TCP
+          port: 5001
+        - protocol: TCP
           port: 5002
         - protocol: TCP
           port: 8000
