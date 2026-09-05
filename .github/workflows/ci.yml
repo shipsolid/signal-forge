@@ -1,9 +1,19 @@
 name: CI
 
-on:
+'on':
   workflow_dispatch:
   push:
     branches: [main]
+    paths:
+      - 'src/**'
+      - 'k8s/**'
+      - 'scripts/**'
+      - '.github/workflows/ci.yml'
+      - '.gitleaks.toml'
+      - '.pre-commit-config.yaml'
+      - 'conf.yml'
+      - 'deploy-local.sh'
+      - 'Makefile'
 
 jobs:
   secret-scan:
@@ -29,7 +39,7 @@ jobs:
   # ── Pre-commit hooks (formatting/lint/hygiene/manifest sanity) ─────────────
   # Mirrors what `pre-commit install` runs locally on every commit — see
   # .pre-commit-config.yaml and CLAUDE.md's "Pre-commit hooks" section.
-  # Stays workflow_dispatch-only, consistent with the rest of this file.
+  # Runs for manual dispatches and relevant pushes to main.
   #
   # SKIP=gitleaks: the gitleaks hook's default entry scans `git diff --staged`
   # (built for the local commit-time hook) — that's empty on a fresh CI
