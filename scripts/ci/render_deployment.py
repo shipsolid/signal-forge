@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+"""Render a Kustomize stream for one immutable Signal Forge release."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+
+SERVICE_IMAGES = {
+    "otel-frontend": "otel-frontend",
+    "gateway-api": "gateway-api",
+    "order-api": "order-api",
+    "notification-svc": "notification-svc",
+}
+LOCAL_IMAGE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*:local$")
+DIGEST_REFERENCE_PATTERN = re.compile(
+    r"^ghcr\.io/[a-z0-9._-]+/signal-forge/[a-z0-9._-]+@sha256:[0-9a-f]{64}$"
+)
+ENVIRONMENT_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,31}$")
+
+
+class RenderError(RuntimeError):
+    """Raised when release metadata and deployment manifests do not agree."""
+
+
+class DeploymentRenderer:
+    def __init__(
+        self,
+        release: dict[str, Any],
+        namespace: str,
+        environment: str,
+        otel_endpoint: str,
+        faro_url: str,
+        api_base_url: str,
+    ) -> None:
+        self.release = release
+        self.namespace = namespace
+        self.environment = environment
+        self.otel_endpoint = otel_endpoint
+        self.faro_url = faro_url
+        self.api_base_url = api_base_url
+        self.git_sha = self._required_string(release, "git", "commit")
+        self.run_id = str(self._required_value(release, "build", "run_id"))
+        self.image_references = self._validate_release_images()
+
+        if not ENVIRONMENT_PATTERN.fullmatch(environment):
+            raise RenderError(f"invalid environment name: {environment!r}")
+        if not namespace or len(namespace) > 63:
+            raise RenderError("namespace must be a non-empty Kubernetes name")
+        if not otel_endpoint.startswith(("http://", "https://")):
+            raise RenderError("OTLP endpoint must use http:// or https://")
+        if not api_base_url.startswith(("/", "http://", "https://")):
+            raise RenderError("API base URL must be an absolute URL or root-relative path")
+
+    @staticmethod
+    def _required_value(document: dict[str, Any], *path: str) -> Any:
+        value: Any = document
+        for key in path:
+            if not isinstance(value, dict) or key not in value:
+                raise RenderError(f"release manifest is missing {'.'.join(path)}")
+            value = value[key]
+        return value
+
+    @classmethod
+    def _required_string(cls, document: dict[str, Any], *path: str) -> str:
+        value = cls._required_value(document, *path)
+        if not isinstance(value, str) or not value:
+            raise RenderError(f"release manifest field {'.'.join(path)} must be a string")
+        return value
+
+    def _validate_release_images(self) -> dict[str, str]:
+        if not re.fullmatch(r"[0-9a-f]{40}", self.git_sha):
+            raise RenderError("release git.commit must be a full 40-character SHA")
+
+        images = self._required_value(self.release, "images")
+        if not isinstance(images, dict):
+            raise RenderError("release manifest images must be an object")
+
+        references: dict[str, str] = {}
+        for service in SERVICE_IMAGES:
+            reference = self._required_string(images, service, "reference")
+            if not DIGEST_REFERENCE_PATTERN.fullmatch(reference):
+                raise RenderError(f"{service} is not an immutable GHCR digest reference")
+            expected_suffix = f"/signal-forge/{service}@"
+            if expected_suffix not in reference:
+                raise RenderError(f"{service} release reference points at the wrong repository")
+            references[service] = reference
+        return references
+
+    def render(self, source: str) -> list[dict[str, Any]]:
+        try:
+            documents = [doc for doc in yaml.safe_load_all(source) if doc is not None]
+        except yaml.YAMLError as exc:
+            raise RenderError(f"Kustomize output is invalid YAML: {exc}") from exc
+
+        rendered: list[dict[str, Any]] = []
+        replaced: set[str] = set()
+        namespace_seen = False
+
+        for document in documents:
+            if not isinstance(document, dict):
+                raise RenderError("Kustomize emitted a non-object YAML document")
+
+            kind = document.get("kind")
+            metadata = document.get("metadata") or {}
+            name = metadata.get("name")
+
+            if kind == "Namespace" and name == self.namespace:
+                namespace_seen = True
+
+            if kind == "Secret" and name in {"db-secrets", "grafana-cloud-secrets"}:
+                continue
+
+            if kind == "Deployment":
+                self._render_deployment(document, replaced)
+
+            rendered.append(document)
+
+        missing = sorted(set(SERVICE_IMAGES) - replaced)
+        if missing:
+            raise RenderError(f"Kustomize output did not contain app images: {', '.join(missing)}")
+        if not namespace_seen:
+            raise RenderError(f"Kustomize output does not define namespace {self.namespace}")
+
+        rendered.extend(self._runtime_configmaps())
+        return rendered
+
+    def _render_deployment(
+        self, document: dict[str, Any], replaced: set[str]
+    ) -> None:
+        metadata = document.setdefault("metadata", {})
+        annotations = metadata.setdefault("annotations", {})
+        annotations["signal-forge.io/git-sha"] = self.git_sha
+        annotations["signal-forge.io/ci-run-id"] = self.run_id
+
+        try:
+            pod_template = document["spec"]["template"]
+            pod_labels = pod_template.setdefault("metadata", {}).setdefault("labels", {})
+            containers = pod_template["spec"]["containers"]
+        except (KeyError, TypeError) as exc:
+            raise RenderError(f"Deployment {metadata.get('name')} has an invalid pod template") from exc
+
+        if not isinstance(containers, list):
+            raise RenderError(f"Deployment {metadata.get('name')} containers must be a list")
+
+        for container in containers:
+            if not isinstance(container, dict):
+                continue
+            image = container.get("image")
+            if not isinstance(image, str) or not LOCAL_IMAGE_PATTERN.fullmatch(image):
+                continue
+
+            service = image.removesuffix(":local")
+            if service not in self.image_references:
+                raise RenderError(f"no release image is defined for local image {image}")
+            if service in replaced:
+                raise RenderError(f"local image {image} occurs more than once")
+
+            container["image"] = self.image_references[service]
+            container["imagePullPolicy"] = "IfNotPresent"
+            pod_labels["app.kubernetes.io/version"] = self.git_sha
+            replaced.add(service)
+
+    def _runtime_configmaps(self) -> list[dict[str, Any]]:
+        deployment_environment = f"signal-forge-{self.environment}"
+        resource_attributes = ",".join(
+            (
+                f"service.namespace={self.namespace}",
+                f"service.version={self.git_sha}",
+                f"deployment.environment={deployment_environment}",
+            )
+        )
+        env_js = (
+            "window.__ENV = {\n"
+            f"  FARO_URL: {json.dumps(self.faro_url)},\n"
+            f"  API_BASE_URL: {json.dumps(self.api_base_url)}\n"
+            "};\n"
+        )
+
+        return [
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": "signal-forge-app-env",
+                    "namespace": self.namespace,
+                },
+                "data": {
+                    "OTEL_EXPORTER_OTLP_ENDPOINT": self.otel_endpoint,
+                    "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
+                    "OTEL_LOGS_EXPORTER": "none",
+                    "OTEL_METRICS_EXEMPLAR_FILTER": "trace_based",
+                    "OTEL_RESOURCE_ATTRIBUTES": resource_attributes,
+                },
+            },
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": "frontend-env-js",
+                    "namespace": self.namespace,
+                },
+                "data": {"env.js": env_js},
+            },
+        ]
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--release-manifest", type=Path, required=True)
+    parser.add_argument("--namespace", required=True)
+    parser.add_argument("--environment", required=True)
+    parser.add_argument("--otel-endpoint", required=True)
+    parser.add_argument("--faro-url", default="")
+    parser.add_argument("--api-base-url", default="/api")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        release = json.loads(args.release_manifest.read_text(encoding="utf-8"))
+        renderer = DeploymentRenderer(
+            release=release,
+            namespace=args.namespace,
+            environment=args.environment,
+            otel_endpoint=args.otel_endpoint,
+            faro_url=args.faro_url,
+            api_base_url=args.api_base_url,
+        )
+        documents = renderer.render(args.input.read_text(encoding="utf-8"))
+        args.output.write_text(
+            yaml.safe_dump_all(documents, explicit_start=True, sort_keys=False),
+            encoding="utf-8",
+        )
+    except (OSError, json.JSONDecodeError, RenderError) as exc:
+        print(f"render-deployment: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

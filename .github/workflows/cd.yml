@@ -3,21 +3,13 @@ name: CD
 'on':
   workflow_dispatch:
     inputs:
-      environment:
-        description: Deploy to DEV or promote an existing image SHA to UAT/PROD
+      ci_run_id:
+        description: Successful main-branch CI run containing release-manifest
         required: true
-        type: choice
-        options:
-          - dev
-          - uat
-          - prod
-      image_tag:
-        description: Published GHCR tag; required as a 40-character commit SHA for UAT/PROD
-        required: false
         type: string
       confirm_production:
-        description: Confirm a production deployment
-        required: false
+        description: Promote through the protected prod environment after QA
+        required: true
         default: false
         type: boolean
 
@@ -28,497 +20,147 @@ permissions:
   packages: read
 
 concurrency:
-  group: cd-${{ inputs.environment }}
+  group: signal-forge-release-promotion
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Deploy to ${{ inputs.environment }}
+  resolve-release:
+    name: Resolve immutable CI release
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
-    timeout-minutes: 20
-    env:
-      DEPLOY_ENABLED: ${{ vars.DEPLOY_ENABLED }}
-      ENVIRONMENT_URL: ${{ vars.ENVIRONMENT_URL }}
-      K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE }}
-      KUBE_CONTEXT: ${{ vars.KUBE_CONTEXT }}
-      OBSERVABILITY_GATE_ENABLED: ${{ vars.OBSERVABILITY_GATE_ENABLED }}
-      OBSERVABILITY_GATE_URL: ${{ vars.OBSERVABILITY_GATE_URL }}
-      REGISTRY_ROOT: ghcr.io/${{ github.repository_owner }}/signal-forge
+    outputs:
+      ci-run-id: ${{ steps.release.outputs.ci-run-id }}
+      git-sha: ${{ steps.release.outputs.git-sha }}
+      manifest: ${{ steps.release.outputs.manifest }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Resolve deployment configuration
-        id: config
-        shell: bash
+      - name: Validate CI run
         env:
-          REQUESTED_IMAGE_TAG: ${{ inputs.image_tag }}
-          CONFIRM_PRODUCTION: ${{ inputs.confirm_production }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
           set -euo pipefail
+          if [[ ! "$CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::ci_run_id must be a numeric GitHub Actions run ID"
+            exit 1
+          fi
 
-          case "${{ inputs.environment }}" in
-            dev)
-              overlay="k8s/overlays/dev"
-              source_environment=""
-              ;;
-            uat)
-              overlay="k8s/overlays/staging"
-              source_environment="dev"
-              ;;
-            prod)
-              overlay="k8s/overlays/prod"
-              source_environment="uat"
-              ;;
-            *)
-              echo "::error::Unsupported environment: ${{ inputs.environment }}"
+          run="$(curl --fail --silent --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN_ID")"
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" '
+              .name == "CI" and
+              .path == ".github/workflows/ci.yml" and
+              .head_branch == "main" and
+              .head_repository.full_name == $repository and
+              (.event == "push" or .event == "workflow_dispatch") and
+              .status == "completed" and
+              .conclusion == "success"
+            ' <<< "$run" > /dev/null || {
+              echo "::error::Run is not a successful trusted main-branch CI release"
               exit 1
-              ;;
-          esac
+            }
+          head_sha="$(jq -r '.head_sha' <<< "$run")"
+          echo "CI_HEAD_SHA=$head_sha" >> "$GITHUB_ENV"
+          jq '{id, head_sha, event, conclusion, html_url}' <<< "$run"
 
-          if [[ "${{ inputs.environment }}" == "prod" && "$CONFIRM_PRODUCTION" != "true" ]]; then
-            echo "::error::Production deployment requires confirm_production=true"
-            exit 1
-          fi
+      - name: Download release manifest from CI
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5
+        with:
+          name: release-manifest
+          path: release
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.ci_run_id }}
 
-          if [[ "${{ inputs.environment }}" != "dev" && -z "$REQUESTED_IMAGE_TAG" ]]; then
-            echo "::error::image_tag is required when promoting to UAT or production"
-            exit 1
-          fi
+      - name: Validate release manifest
+        id: release
+        env:
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=release/release-manifest.json
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          expected_root="ghcr.io/${owner}/signal-forge"
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg head_sha "$CI_HEAD_SHA" \
+            --argjson run_id "$CI_RUN_ID" \
+            --arg root "$expected_root" '
+              .schema_version == 1 and
+              .git.repository == $repository and
+              .git.ref == "refs/heads/main" and
+              .git.commit == $head_sha and
+              .build.workflow == ".github/workflows/ci.yml" and
+              .build.run_id == $run_id and
+              (.images | keys | sort == [
+                "gateway-api", "notification-svc", "order-api", "otel-frontend"
+              ]) and
+              all(
+                .images | to_entries[];
+                .value.repository == ($root + "/" + .key) and
+                (.value.digest | test("^sha256:[0-9a-f]{64}$")) and
+                .value.reference == (.value.repository + "@" + .value.digest)
+              )
+            ' "$manifest" > /dev/null
 
-          image_tag="${REQUESTED_IMAGE_TAG:-$GITHUB_SHA}"
-          if [[ ! "$image_tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
-            echo "::error::Invalid OCI image tag: $image_tag"
-            exit 1
-          fi
-
-          if [[ "${{ inputs.environment }}" != "dev" && ! "$image_tag" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::UAT and production promotion require the 40-character commit SHA deployed to DEV"
-            exit 1
-          fi
-
-          if [[ "${{ inputs.environment }}" == "dev" ]]; then
-            operation="deploy"
-          else
-            operation="promote"
-          fi
-
-          if [[ -n "$DEPLOY_ENABLED" && "$DEPLOY_ENABLED" != "true" && "$DEPLOY_ENABLED" != "false" ]]; then
-            echo "::error::DEPLOY_ENABLED must be true, false, or unset"
-            exit 1
-          fi
-
-          if [[ -n "$OBSERVABILITY_GATE_ENABLED" && "$OBSERVABILITY_GATE_ENABLED" != "true" && "$OBSERVABILITY_GATE_ENABLED" != "false" ]]; then
-            echo "::error::OBSERVABILITY_GATE_ENABLED must be true, false, or unset"
-            exit 1
-          fi
-
-          if [[ "$DEPLOY_ENABLED" == "true" && ! "$image_tag" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::A real deployment requires an immutable 40-character commit SHA"
-            exit 1
-          fi
-
+          git_sha="$(jq -r '.git.commit' "$manifest")"
+          compact_manifest="$(jq -c . "$manifest")"
           {
-            echo "overlay=$overlay"
-            echo "image_tag=$image_tag"
-            echo "namespace=${K8S_NAMESPACE:-otel-lab}"
-            echo "operation=$operation"
-            echo "source_environment=$source_environment"
+            echo "ci-run-id=$CI_RUN_ID"
+            echo "git-sha=$git_sha"
+            echo "manifest=$compact_manifest"
           } >> "$GITHUB_OUTPUT"
 
-      # The prod overlay intentionally needs a gitignored secret file. The
-      # committed example lets an environment-less repository prove that the
-      # overlay renders, but this file is never used by the real apply step.
-      - name: Stage render-only production placeholders
-        if: inputs.environment == 'prod'
-        run: cp k8s/overlays/prod/prod.secrets.env.example k8s/overlays/prod/prod.secrets.env
-
-      - name: Render and validate deployment plan
-        env:
-          OVERLAY: ${{ steps.config.outputs.overlay }}
-          IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
-        run: |
-          set -euo pipefail
-
-          kubectl kustomize "$OVERLAY" \
-            | sed \
-                -e "s|image: otel-frontend:local|image: ${REGISTRY_ROOT}/otel-frontend:${IMAGE_TAG}|" \
-                -e "s|image: gateway-api:local|image: ${REGISTRY_ROOT}/gateway-api:${IMAGE_TAG}|" \
-                -e "s|image: order-api:local|image: ${REGISTRY_ROOT}/order-api:${IMAGE_TAG}|" \
-                -e "s|image: notification-svc:local|image: ${REGISTRY_ROOT}/notification-svc:${IMAGE_TAG}|" \
-            > deployment-plan.yaml
-
-          if grep -Eq 'image: (otel-frontend|gateway-api|order-api|notification-svc):local' deployment-plan.yaml; then
-            echo "::error::At least one local image reference remains in the deployment plan"
-            exit 1
-          fi
-
-          resource_count="$(grep -c '^kind:' deployment-plan.yaml)"
-          if [[ "$resource_count" -eq 0 ]]; then
-            echo "::error::Kustomize rendered no Kubernetes resources"
-            exit 1
-          fi
-          echo "Rendered $resource_count Kubernetes resources"
-
-      - name: Upload deployment plan
-        uses: actions/upload-artifact@v4
-        with:
-          name: deployment-plan-${{ inputs.environment }}-${{ steps.config.outputs.image_tag }}
-          path: deployment-plan.yaml
-          retention-days: 7
-
-      - name: Explain render-only mode
-        if: vars.DEPLOY_ENABLED != 'true'
-        run: |
           {
-            echo "## Render-only deployment"
+            echo "## Release selected"
             echo
-            echo "The ${{ inputs.environment }} manifests rendered successfully."
-            echo "No cluster changes were made because DEPLOY_ENABLED is not true."
-            echo "Operation: ${{ steps.config.outputs.operation }} image ${{ steps.config.outputs.image_tag }}."
+            echo "- CI run: $CI_RUN_ID"
+            echo "- Git commit: $git_sha"
             echo
-            echo "Configure the GitHub Environment named '${{ inputs.environment }}' with:"
-            echo "- variable DEPLOY_ENABLED=true"
-            echo "- variable ENVIRONMENT_URL (optional)"
-            echo "- variable K8S_NAMESPACE (optional; defaults to otel-lab)"
-            echo "- variable KUBE_CONTEXT (optional)"
-            echo "- variable OBSERVABILITY_GATE_ENABLED=true (optional)"
-            echo "- variable OBSERVABILITY_GATE_URL (required when the observability gate is enabled)"
-            echo "- secret KUBE_CONFIG (raw kubeconfig YAML)"
-            echo "- secret OBSERVABILITY_GATE_TOKEN (optional bearer token)"
-            if [[ "${{ inputs.environment }}" == "prod" ]]; then
-              echo "- secret DB_SECRETS_ENV (KEY=VALUE lines matching prod.secrets.env.example)"
-            fi
+            jq -r '.images | to_entries[] | "- \(.key): \(.value.reference)"' "$manifest"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Gate — successful CI for image SHA
-        if: vars.DEPLOY_ENABLED == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
-        run: |
-          set -euo pipefail
+  deploy-dev:
+    name: Promote immutable release to DEV
+    needs: resolve-release
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: dev
+      overlay: k8s/overlays/dev
+      git_sha: ${{ needs.resolve-release.outputs.git-sha }}
+      ci_run_id: ${{ needs.resolve-release.outputs.ci-run-id }}
+      release_manifest: ${{ needs.resolve-release.outputs.manifest }}
+    secrets: inherit
 
-          response="$(curl --fail --silent --show-error --get \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
-            --data-urlencode "head_sha=$IMAGE_TAG" \
-            --data-urlencode "branch=main" \
-            --data-urlencode "event=push" \
-            --data-urlencode "per_page=100" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs")"
+  deploy-qa:
+    name: Promote same immutable release to QA
+    needs:
+      - resolve-release
+      - deploy-dev
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: qa
+      overlay: k8s/overlays/staging
+      git_sha: ${{ needs.resolve-release.outputs.git-sha }}
+      ci_run_id: ${{ needs.resolve-release.outputs.ci-run-id }}
+      release_manifest: ${{ needs.resolve-release.outputs.manifest }}
+    secrets: inherit
 
-          if ! jq -e '.workflow_runs | any(.conclusion == "success")' <<< "$response" > /dev/null; then
-            echo "::error::No successful main-branch CI run found for $IMAGE_TAG"
-            exit 1
-          fi
-
-          ci_url="$(jq -r '.workflow_runs | map(select(.conclusion == "success")) | first | .html_url' <<< "$response")"
-          echo "CI gate passed: $ci_url"
-
-      - name: Gate — source environment promotion
-        if: vars.DEPLOY_ENABLED == 'true' && inputs.environment != 'dev'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
-          SOURCE_ENVIRONMENT: ${{ steps.config.outputs.source_environment }}
-        run: |
-          set -euo pipefail
-
-          deployments="$(curl --fail --silent --show-error --get \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
-            --data-urlencode "sha=$IMAGE_TAG" \
-            --data-urlencode "environment=$SOURCE_ENVIRONMENT" \
-            --data-urlencode "task=signal-forge-cd-apply" \
-            --data-urlencode "per_page=100" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/deployments")"
-
-          promoted=false
-          while IFS= read -r deployment_id; do
-            [[ -n "$deployment_id" ]] || continue
-            state="$(curl --fail --silent --show-error \
-              --header "Accept: application/vnd.github+json" \
-              --header "Authorization: Bearer $GH_TOKEN" \
-              --header "X-GitHub-Api-Version: 2022-11-28" \
-              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/deployments/$deployment_id/statuses?per_page=1" \
-              | jq -r '.[0].state // ""')"
-            if [[ "$state" == "success" ]]; then
-              promoted=true
-              break
-            fi
-          done < <(jq -r '.[].id' <<< "$deployments")
-
-          if [[ "$promoted" != "true" ]]; then
-            echo "::error::$IMAGE_TAG has no successful $SOURCE_ENVIRONMENT deployment to promote"
-            exit 1
-          fi
-          echo "Promotion gate passed: $IMAGE_TAG was successfully deployed to $SOURCE_ENVIRONMENT"
-
-      - name: Gate — observability and SLO policy
-        if: vars.DEPLOY_ENABLED == 'true' && vars.OBSERVABILITY_GATE_ENABLED == 'true'
-        env:
-          IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
-          OBSERVABILITY_GATE_TOKEN: ${{ secrets.OBSERVABILITY_GATE_TOKEN }}
-          TARGET_ENVIRONMENT: ${{ inputs.environment }}
-        run: |
-          set -euo pipefail
-
-          if [[ -z "$OBSERVABILITY_GATE_URL" ]]; then
-            echo "::error::OBSERVABILITY_GATE_URL is required when OBSERVABILITY_GATE_ENABLED=true"
-            exit 1
-          fi
-
-          curl_args=(
-            --fail
-            --silent
-            --show-error
-            --get
-            --data-urlencode "environment=$TARGET_ENVIRONMENT"
-            --data-urlencode "image_sha=$IMAGE_TAG"
-          )
-          if [[ -n "$OBSERVABILITY_GATE_TOKEN" ]]; then
-            curl_args+=(--header "Authorization: Bearer $OBSERVABILITY_GATE_TOKEN")
-          fi
-          response="$(curl "${curl_args[@]}" "$OBSERVABILITY_GATE_URL")"
-          status="$(jq -r '.status // ""' <<< "$response")"
-          summary="$(jq -r '.summary // "No summary provided"' <<< "$response")"
-
-          case "$status" in
-            pass)
-              echo "Observability gate passed: $summary"
-              ;;
-            warn)
-              if [[ "$TARGET_ENVIRONMENT" == "prod" ]]; then
-                echo "::error::Production observability warning: $summary"
-                exit 1
-              fi
-              echo "::warning title=Observability gate::$summary"
-              ;;
-            block)
-              echo "::error::Observability gate blocked deployment: $summary"
-              exit 1
-              ;;
-            *)
-              echo "::error::Observability gate returned an unknown status: $status"
-              exit 1
-              ;;
-          esac
-
-      # ci.yml builds, scans, signs, and publishes each SHA once. UAT and PROD
-      # consume that exact artifact; CD never rebuilds environment-specific
-      # images. This is the Signal Forge equivalent of singlebuild promotion.
-      - name: Login to GHCR
-        if: vars.DEPLOY_ENABLED == 'true'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install cosign
-        if: vars.DEPLOY_ENABLED == 'true'
-        uses: sigstore/cosign-installer@v3
-
-      - name: Gate — published images, signatures, and SBOM attestations
-        if: vars.DEPLOY_ENABLED == 'true'
-        env:
-          IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
-        run: |
-          set -euo pipefail
-
-          services=(otel-frontend gateway-api order-api notification-svc)
-          for service in "${services[@]}"; do
-            image="${REGISTRY_ROOT}/${service}:${IMAGE_TAG}"
-            docker manifest inspect "$image" > /dev/null
-            cosign verify \
-              --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/ci.yml@refs/heads/main" \
-              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-              "$image" > /dev/null
-            cosign verify-attestation \
-              --type cyclonedx \
-              --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/ci.yml@refs/heads/main" \
-              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-              "$image" > /dev/null
-            echo "Verified $image"
-          done
-
-      - name: Configure cluster access
-        if: vars.DEPLOY_ENABLED == 'true'
-        env:
-          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
-        run: |
-          set -euo pipefail
-
-          if [[ -z "$KUBE_CONFIG" ]]; then
-            echo "::error::KUBE_CONFIG is required when DEPLOY_ENABLED=true"
-            exit 1
-          fi
-
-          kubeconfig="$RUNNER_TEMP/kubeconfig"
-          printf '%s\n' "$KUBE_CONFIG" > "$kubeconfig"
-          chmod 600 "$kubeconfig"
-          echo "KUBECONFIG=$kubeconfig" >> "$GITHUB_ENV"
-
-          if [[ -n "$KUBE_CONTEXT" ]]; then
-            kubectl --kubeconfig "$kubeconfig" config use-context "$KUBE_CONTEXT"
-          fi
-
-          kubectl --kubeconfig "$kubeconfig" cluster-info
-
-      - name: Stage production secrets for deployment
-        if: vars.DEPLOY_ENABLED == 'true' && inputs.environment == 'prod'
-        env:
-          DB_SECRETS_ENV: ${{ secrets.DB_SECRETS_ENV }}
-        run: |
-          set -euo pipefail
-
-          if [[ -z "$DB_SECRETS_ENV" || "$DB_SECRETS_ENV" == *CHANGE_ME* ]]; then
-            echo "::error::DB_SECRETS_ENV is missing or still contains CHANGE_ME"
-            exit 1
-          fi
-
-          required_keys=(
-            MYSQL_PASSWORD
-            MYSQL_ROOT_PASSWORD
-            POSTGRES_PASSWORD
-            RABBITMQ_PASSWORD
-            GATEWAY_DB_CONNECTION
-            ORDER_DB_CONNECTION
-          )
-          for key in "${required_keys[@]}"; do
-            if ! grep -Eq "^${key}=.+" <<< "$DB_SECRETS_ENV"; then
-              echo "::error::DB_SECRETS_ENV is missing $key"
-              exit 1
-            fi
-          done
-
-          printf '%s\n' "$DB_SECRETS_ENV" > k8s/overlays/prod/prod.secrets.env
-          chmod 600 k8s/overlays/prod/prod.secrets.env
-
-      - name: Create deployment audit record
-        id: deployment_record
-        if: vars.DEPLOY_ENABLED == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
-          TARGET_ENVIRONMENT: ${{ inputs.environment }}
-        run: |
-          set -euo pipefail
-
-          payload="$(jq -n \
-            --arg ref "$IMAGE_TAG" \
-            --arg environment "$TARGET_ENVIRONMENT" \
-            --arg description "Signal Forge deployment of $IMAGE_TAG" \
-            '{
-              ref: $ref,
-              environment: $environment,
-              task: "signal-forge-cd-apply",
-              description: $description,
-              auto_merge: false,
-              required_contexts: []
-            }')"
-          deployment="$(curl --fail --silent --show-error \
-            --request POST \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
-            --data "$payload" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/deployments")"
-          deployment_id="$(jq -r '.id' <<< "$deployment")"
-
-          status_payload="$(jq -n \
-            --arg log_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            '{state: "in_progress", description: "Deployment started", log_url: $log_url}')"
-          curl --fail --silent --show-error \
-            --request POST \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
-            --data "$status_payload" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/deployments/$deployment_id/statuses" \
-            > /dev/null
-
-          echo "deployment_id=$deployment_id" >> "$GITHUB_OUTPUT"
-
-      - name: Apply manifests
-        id: apply
-        if: vars.DEPLOY_ENABLED == 'true'
-        env:
-          OVERLAY: ${{ steps.config.outputs.overlay }}
-          IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
-          TARGET_NAMESPACE: ${{ steps.config.outputs.namespace }}
-        run: |
-          set -euo pipefail
-          deployment_manifest="$RUNNER_TEMP/deployment.yaml"
-          trap 'rm -f "$deployment_manifest" k8s/overlays/prod/prod.secrets.env' EXIT
-
-          kubectl kustomize "$OVERLAY" \
-            | sed \
-                -e "s|image: otel-frontend:local|image: ${REGISTRY_ROOT}/otel-frontend:${IMAGE_TAG}|" \
-                -e "s|image: gateway-api:local|image: ${REGISTRY_ROOT}/gateway-api:${IMAGE_TAG}|" \
-                -e "s|image: order-api:local|image: ${REGISTRY_ROOT}/order-api:${IMAGE_TAG}|" \
-                -e "s|image: notification-svc:local|image: ${REGISTRY_ROOT}/notification-svc:${IMAGE_TAG}|" \
-            > "$deployment_manifest"
-
-          manifest_namespace="$(awk '/^  namespace: / { print $2; exit }' "$deployment_manifest")"
-          if [[ "$TARGET_NAMESPACE" != "$manifest_namespace" ]]; then
-            echo "::error::K8S_NAMESPACE=$TARGET_NAMESPACE does not match the overlay namespace $manifest_namespace"
-            exit 1
-          fi
-
-          kubectl apply -f "$deployment_manifest"
-          deployments=(gateway-api order-api notification-svc otel-frontend redis)
-          statefulsets=(mysql postgres rabbitmq)
-          for workload in "${deployments[@]}"; do
-            kubectl -n "$TARGET_NAMESPACE" rollout status \
-              "deployment/$workload" --timeout=300s
-          done
-          for workload in "${statefulsets[@]}"; do
-            kubectl -n "$TARGET_NAMESPACE" rollout status \
-              "statefulset/$workload" --timeout=300s
-          done
-
-          {
-            echo "## Deployment complete"
-            echo
-            echo "- Environment: ${{ inputs.environment }}"
-            echo "- Operation: ${{ steps.config.outputs.operation }}"
-            echo "- Namespace: $TARGET_NAMESPACE"
-            echo "- Image tag: $IMAGE_TAG"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Record deployment result
-        if: always() && vars.DEPLOY_ENABLED == 'true' && steps.deployment_record.outputs.deployment_id != ''
-        env:
-          APPLY_OUTCOME: ${{ steps.apply.outcome }}
-          DEPLOYMENT_ID: ${{ steps.deployment_record.outputs.deployment_id }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          if [[ "$APPLY_OUTCOME" == "success" ]]; then
-            state="success"
-            description="Deployment and rollout checks passed"
-          else
-            state="failure"
-            description="Deployment or rollout checks failed"
-          fi
-
-          status_payload="$(jq -n \
-            --arg state "$state" \
-            --arg description "$description" \
-            --arg log_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            --arg environment_url "$ENVIRONMENT_URL" \
-            '{state: $state, description: $description, log_url: $log_url}
-             + if $environment_url == "" then {} else {environment_url: $environment_url} end')"
-          curl --fail --silent --show-error \
-            --request POST \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
-            --data "$status_payload" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/deployments/$DEPLOYMENT_ID/statuses" \
-            > /dev/null
+  deploy-prod:
+    name: Promote same immutable release to PROD
+    if: inputs.confirm_production
+    needs:
+      - resolve-release
+      - deploy-qa
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: prod
+      overlay: k8s/overlays/prod
+      git_sha: ${{ needs.resolve-release.outputs.git-sha }}
+      ci_run_id: ${{ needs.resolve-release.outputs.ci-run-id }}
+      release_manifest: ${{ needs.resolve-release.outputs.manifest }}
+    secrets: inherit

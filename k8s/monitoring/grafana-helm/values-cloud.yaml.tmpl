@@ -3,7 +3,7 @@
 # exporting to Grafana Cloud.
 #
 # TEMPLATE FILE. Do not pass this to helm directly — it is rendered by
-# deploy-local.sh, which substitutes ${...} placeholders from conf.yml's
+# deploy-local.sh, which substitutes the declared placeholders from conf.yml's
 # monitoring.grafana_cloud / deployment_environment / secret_name / cluster.name
 # / helm.namespace, writes the rendered YAML to a tmp file, and passes that to
 # `helm upgrade -f`.
@@ -229,7 +229,7 @@ alloy-singleton:
 # grafana.net hosts are not intercepted, so only alloy-logs needs a CA mount
 # — see deploy-local.sh's apply_corporate_ca_configmap() for the ConfigMap
 # this references, and render_helm_values() for how the CA controller/mounts
-# blocks below are built (NOTE: not written as literal ${...} syntax here on
+# blocks below are built (NOTE: placeholder syntax is not repeated here on
 # purpose — Template.safe_substitute has no notion of YAML comments, so a
 # literal placeholder mention in this prose would itself get substituted).
 # On a non-corporate machine (corporate_ca.path in conf.yml absent/empty)
