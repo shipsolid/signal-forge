@@ -73,7 +73,7 @@
 
 ## Phase A — build the engine (`/home/amit/repos/shipsolid/docs-site`)
 
-### Task A1: Scaffold the engine repo, move verbatim files
+### Task 1: Scaffold the engine repo, move verbatim files
 
 **Files:**
 - Create: `docs-site/package.json`, `docs-site/.nvmrc`, `docs-site/.gitignore`, `docs-site/tsconfig.json`, `docs-site/vitest.config.mjs`
@@ -158,7 +158,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ---
 
-### Task A2: `lib/config.mjs` — load, validate, default
+### Task 2: `lib/config.mjs` — load, validate, default
 
 **Files:**
 - Create: `docs-site/lib/config.mjs`
@@ -329,7 +329,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ---
 
-### Task A3: Refactor `lib/wiki-resolve.mjs` to a factory
+### Task 3: Refactor `lib/wiki-resolve.mjs` to a factory
 
 **Files:**
 - Create: `docs-site/lib/wiki-resolve.mjs` (adapted from `signal-forge/website/wiki-resolve.mjs`)
@@ -560,7 +560,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ---
 
-### Task A4: Port `lib/apply-wiki-links.mjs` and `lib/remark-rewrite-md-links.mjs` to take config
+### Task 4: Port `lib/apply-wiki-links.mjs` and `lib/remark-rewrite-md-links.mjs` to take config
 
 **Files:**
 - Create: `docs-site/lib/apply-wiki-links.mjs`, `docs-site/lib/remark-rewrite-md-links.mjs`
@@ -674,7 +674,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ---
 
-### Task A5: `scripts/gen-docs.mjs` — env-driven roots + config
+### Task 5: `scripts/gen-docs.mjs` — env-driven roots + config
 
 **Files:**
 - Create: `docs-site/scripts/gen-docs.mjs`
@@ -749,7 +749,7 @@ if (unresolved.length) {
 
 - [ ] **Step 2: Smoke-run against the (not-yet-existing) fixture**
 
-This task has no unit test; it is exercised by `tests/fixture-build.test.mjs` in Task A7. For now just verify it parses:
+This task has no unit test; it is exercised by `tests/fixture-build.test.mjs` in Task 7. For now just verify it parses:
 
 Run: `node --check scripts/gen-docs.mjs`
 Expected: no output, exit 0.
@@ -765,7 +765,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ---
 
-### Task A6: `scripts/check-links.mjs` — env-driven roots + config
+### Task 6: `scripts/check-links.mjs` — env-driven roots + config
 
 **Files:**
 - Create: `docs-site/scripts/check-links.mjs`
@@ -824,7 +824,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ---
 
-### Task A7: `astro.config.mjs` + fixture repo + end-to-end build test
+### Task 7: `astro.config.mjs` + fixture repo + end-to-end build test
 
 **Files:**
 - Create: `docs-site/astro.config.mjs`
@@ -1005,7 +1005,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ---
 
-### Task A8: Reusable pipeline + engine self-test workflow + README
+### Task 8: Reusable pipeline + engine self-test workflow + README
 
 **Files:**
 - Create: `docs-site/.github/workflows/build-deploy.yml`
@@ -1013,7 +1013,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Modify: `docs-site/README.md`
 
 **Interfaces:**
-- Produces: a `workflow_call` workflow at `shipsolid/docs-site/.github/workflows/build-deploy.yml` with input `deploy` (boolean, default `true`), consumed by `signal-forge/.github/workflows/docs.yml` (Task B2).
+- Produces: a `workflow_call` workflow at `shipsolid/docs-site/.github/workflows/build-deploy.yml` with input `deploy` (boolean, default `true`), consumed by `signal-forge/.github/workflows/docs.yml` (Task 10).
 
 - [ ] **Step 1: Write `.github/workflows/build-deploy.yml`**
 
@@ -1143,13 +1143,13 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ## Phase B — wire up `signal-forge` (`/home/amit/repos/shipsolid/signal-forge`, branch `docs-site-extraction`)
 
-### Task B1: Add `docs-site.yaml`
+### Task 9: Add `docs-site.yaml`
 
 **Files:**
 - Create: `signal-forge/docs-site.yaml`
 
 **Interfaces:**
-- Consumes: the schema in `lib/config.mjs` (Task A2).
+- Consumes: the schema in `lib/config.mjs` (Task 2).
 - Produces: the consumer config the pipeline reads.
 
 - [ ] **Step 1: Transcribe from the current engine config**
@@ -1241,14 +1241,14 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ---
 
-### Task B2: Caller workflow + PR docs check
+### Task 10: Caller workflow + PR docs check
 
 **Files:**
 - Create: `signal-forge/.github/workflows/docs.yml`
 - Modify: `signal-forge/.github/workflows/ci.yml`
 
 **Interfaces:**
-- Consumes: `shipsolid/docs-site/.github/workflows/build-deploy.yml@main` (Task A8).
+- Consumes: `shipsolid/docs-site/.github/workflows/build-deploy.yml@main` (Task 8).
 
 - [ ] **Step 1: Write `.github/workflows/docs.yml`**
 
@@ -1311,7 +1311,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ---
 
-### Task B3: Remove `website/`, retire `deploy-docs.yml`, update references
+### Task 11: Remove `website/`, retire `deploy-docs.yml`, update references
 
 **Files:**
 - Delete: `signal-forge/website/` (whole tree), `signal-forge/.github/workflows/deploy-docs.yml`
@@ -1368,7 +1368,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ---
 
-### Task B4: Byte-comparable output check against the old build
+### Task 12: Byte-comparable output check against the old build
 
 **Files:** none (verification only)
 
@@ -1378,7 +1378,7 @@ From `git show HEAD~4:...` is impractical; instead check out the pre-removal `we
 
 ```bash
 cd /home/amit/repos/shipsolid/signal-forge
-git worktree add /tmp/sf-oldsite docs-site-extraction~1   # commit before Task B3
+git worktree add /tmp/sf-oldsite docs-site-extraction~1   # commit before Task 11
 cd /tmp/sf-oldsite/website && npm ci && npm run build
 find dist -name '*.html' | sed 's#^dist/##' | sort > /tmp/routes-old.txt
 ```
@@ -1422,15 +1422,15 @@ rm -rf /home/amit/repos/shipsolid/docs-site/dist /home/amit/repos/shipsolid/docs
 ## Self-Review
 
 **Spec coverage:**
-- §1 engine layout → Tasks A1–A8. ✅
-- §1 `lib/config.mjs` contract → Task A2 (test + impl match the spec's field list). ✅
-- §1 sidebar auto-generation → Task A7 `buildSidebar` (numeric-prefix ordering, Overview + Reference groups). ✅
-- §1 `wiki-resolve.mjs` parametrization table → Task A3 (`createWikiResolver` params map 1:1 to the table). ✅
-- §2 `docs-site.yaml` interface → Task B1 (full field set, full `external_namespaces` list). ✅
-- §3 reusable pipeline steps 1–8 → Task A8 `build-deploy.yml` (dual checkout, env contract, gated deploy job). ✅
-- §4 caller `docs.yml` + PR build check → Task B2. ✅
-- §4 removed/updated/unchanged file lists → Task B3. ✅
-- §5 engine self-test + fixture contents → Task A7 (fixture) + A8 (`ci.yml`). Fixture exercises nested tree, folder README→index, resolvable `[[wiki-link]]` + external namespace, `../sibling.md`, sidebar override, `wiki_links` block. ✅
+- §1 engine layout → Tasks 1–8. ✅
+- §1 `lib/config.mjs` contract → Task 2 (test + impl match the spec's field list). ✅
+- §1 sidebar auto-generation → Task 7 `buildSidebar` (numeric-prefix ordering, Overview + Reference groups). ✅
+- §1 `wiki-resolve.mjs` parametrization table → Task 3 (`createWikiResolver` params map 1:1 to the table). ✅
+- §2 `docs-site.yaml` interface → Task 9 (full field set, full `external_namespaces` list). ✅
+- §3 reusable pipeline steps 1–8 → Task 8 `build-deploy.yml` (dual checkout, env contract, gated deploy job). ✅
+- §4 caller `docs.yml` + PR build check → Task 10. ✅
+- §4 removed/updated/unchanged file lists → Task 11. ✅
+- §5 engine self-test + fixture contents → Task 7 (fixture) + A8 (`ci.yml`). Fixture exercises nested tree, folder README→index, resolvable `[[wiki-link]]` + external namespace, `../sibling.md`, sidebar override, `wiki_links` block. ✅
 - §6 risk mitigations → fixture build gate (A7), fail-fast config (A2), base derivation (A2), slug folding verbatim (A1), byte-compare (B4). ✅
 - §7 rollout order → Phase A before Phase B; post-plan handoff notes. ✅
 
