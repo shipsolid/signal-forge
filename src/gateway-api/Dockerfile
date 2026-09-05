@@ -27,7 +27,7 @@ RUN dotnet publish -c Release -o /app/publish
 
 # Runtime — use the aspnet:8.0 image's built-in non-root `app` user (UID 1654).
 # K8s Deployment's securityContext.runAsUser must match.
-FROM mcr.microsoft.com/dotnet/aspnet:8.0@sha256:f88c77644f4c480a62d3b46dc74db8d5472a24e282df8b1e56195c689d35a6db AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:8.0@sha256:787c228ea85457bec43c8b084e6ac360b26ea43b5c2fcbe861f721f2e8670dd3 AS runtime
 WORKDIR /app
 COPY --from=build --chown=1654:1654 /app/publish .
 USER 1654:1654
