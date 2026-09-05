@@ -193,9 +193,10 @@ traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
 
 ### Credentials
 
-Default credentials: `signalforge/guest` (purpose-named application user, not the reserved `guest`
-account — see `RABBITMQ_USER`/`RABBITMQ_PASSWORD` in the `db-secrets` Secret). Rotate both in
-production the same way the DB passwords are rotated.
+For local development, sign in as the purpose-named application user `signalforge` using the
+placeholder value `guest` (this is not RabbitMQ's reserved `guest` account). The values come from
+`RABBITMQ_USER` and `RABBITMQ_PASSWORD` in the `db-secrets` Secret and must be rotated for
+production alongside the database passwords.
 
 ### Inspecting message flow
 
