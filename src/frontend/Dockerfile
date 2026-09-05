@@ -20,10 +20,19 @@ ARG FARO_API_KEY
 ENV FARO_API_KEY=${FARO_API_KEY}
 RUN npm run build
 
-FROM nginxinc/nginx-unprivileged:alpine@sha256:ede1d5af209ef9d29c902e0775ae850ce231d810a6980b1762f81110e757aa96 AS runtime
+FROM nginxinc/nginx-unprivileged:alpine@sha256:aa8c9087d36d93e9d650c5365f883b421e8214aedbad24ade52b844c583358f1 AS runtime
 # nginx-unprivileged runs as UID 101 and binds 8080 by default.
 # Our nginx.conf already listens on 8080.
 USER root
+RUN --mount=type=secret,id=corporate_ca,required=false \
+    if [ -s /run/secrets/corporate_ca ]; then \
+      ca_bundle="$(mktemp)"; \
+      cat /etc/ssl/certs/ca-certificates.crt /run/secrets/corporate_ca > "$ca_bundle"; \
+      SSL_CERT_FILE="$ca_bundle" apk upgrade --no-cache; \
+      rm -f "$ca_bundle"; \
+    else \
+      apk upgrade --no-cache; \
+    fi
 COPY --from=build /app/dist/otel-frontend /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 # Baked-in default env.js — used as-is for a bare `docker run` (no runtime
