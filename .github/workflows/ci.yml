@@ -96,10 +96,16 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore
-        run: dotnet restore src/
+        run: |
+          while IFS= read -r project; do
+            dotnet restore "$project"
+          done < <(find src -mindepth 2 -maxdepth 2 -name '*.csproj' -print | sort)
 
       - name: Build
-        run: dotnet build src/ --no-restore --configuration Release
+        run: |
+          while IFS= read -r project; do
+            dotnet build "$project" --no-restore --configuration Release
+          done < <(find src -mindepth 2 -maxdepth 2 -name '*.csproj' -print | sort)
 
       - name: Test — order-api
         run: dotnet test src/order-api.Tests/order-api.Tests.csproj --no-build --configuration Release --logger "trx;LogFileName=order-api-results.trx"
@@ -169,39 +175,35 @@ jobs:
         working-directory: src/frontend
 
 
-  proto-sync:
-  # ── Proto sync ───────────────────────────────────────────────────────────────
-  # orders.proto lives in three places: src/proto/ (canonical), and is copied
-  # into each service's Protos/ directory at build time. Comments and field
-  # alignment may differ between copies; field types, numbers, and names must not.
-    name: Proto sync check
+  proto-contract:
+  # ── Proto contract ───────────────────────────────────────────────────────────────
+  # orders.proto has one canonical copy. Both .NET services must generate their
+  # client/server stubs directly from it rather than introducing local copies.
+    name: Proto contract check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check orders.proto copies are structurally identical
+      - name: Check services consume the canonical orders.proto
         run: |
-          # Strip comment-only lines, collapse horizontal whitespace, drop blank lines.
-          strip_proto() {
-            sed 's|//[^"]*||g' "$1" | tr -s ' \t' ' ' | \
-              sed 's/^ //; s/ $//' | grep -v '^$'
-          }
           ok=true
-          if ! diff <(strip_proto src/proto/orders.proto) \
-                    <(strip_proto src/gateway-api/Protos/orders.proto) > /dev/null; then
-            echo "::error::src/gateway-api/Protos/orders.proto has drifted from src/proto/orders.proto"
-            diff <(strip_proto src/proto/orders.proto) \
-                 <(strip_proto src/gateway-api/Protos/orders.proto)
+          if [[ ! -f src/proto/orders.proto ]]; then
+            echo "::error file=src/proto/orders.proto::Canonical proto contract is missing"
             ok=false
           fi
-          if ! diff <(strip_proto src/proto/orders.proto) \
-                    <(strip_proto src/order-api/Protos/orders.proto) > /dev/null; then
-            echo "::error::src/order-api/Protos/orders.proto has drifted from src/proto/orders.proto"
-            diff <(strip_proto src/proto/orders.proto) \
-                 <(strip_proto src/order-api/Protos/orders.proto)
-            ok=false
-          fi
-          $ok && echo "All proto copies are structurally in sync."
+          for project in src/gateway-api/gateway-api.csproj src/order-api/order-api.csproj; do
+            if ! grep -Fq '<Protobuf Include="..\proto\orders.proto"' "$project"; then
+              echo "::error file=${project}::Project must reference the canonical src/proto/orders.proto"
+              ok=false
+            fi
+          done
+          for duplicate in src/gateway-api/Protos/orders.proto src/order-api/Protos/orders.proto; do
+            if [[ -e "$duplicate" ]]; then
+              echo "::error file=${duplicate}::Remove the duplicate and consume src/proto/orders.proto directly"
+              ok=false
+            fi
+          done
+          $ok && echo "Both services consume the canonical proto contract."
           $ok
 
 
@@ -217,11 +219,18 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore .NET packages
-        run: dotnet restore src/
+        run: |
+          while IFS= read -r project; do
+            dotnet restore "$project"
+          done < <(find src -mindepth 2 -maxdepth 2 -name '*.csproj' -print | sort)
 
       - name: Scan .NET packages for known vulnerabilities
         run: |
-          dotnet list src/ package --vulnerable --include-transitive 2>&1 | tee vuln-dotnet.txt
+          : > vuln-dotnet.txt
+          while IFS= read -r project; do
+            echo "Scanning ${project}" | tee -a vuln-dotnet.txt
+            dotnet list "$project" package --vulnerable --include-transitive 2>&1 | tee -a vuln-dotnet.txt
+          done < <(find src -mindepth 2 -maxdepth 2 -name '*.csproj' -print | sort)
           if grep -q "has the following vulnerable packages" vuln-dotnet.txt; then
             echo "::error::Vulnerable .NET packages found"
             exit 1
@@ -268,6 +277,7 @@ jobs:
       contents: read
       id-token: write   # cosign keyless OIDC
       packages: write   # push to ghcr.io on main
+      security-events: write  # upload Trivy SARIF
     strategy:
       fail-fast: false
       matrix:
@@ -313,7 +323,7 @@ jobs:
       # Fail the job on HIGH or CRITICAL vulnerabilities with a fix available.
       # Unfixed are reported but don't block (nothing we can do about them).
       - name: Trivy scan — ${{ matrix.service.name }}
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ matrix.service.name }}:ci
           format: sarif
@@ -325,7 +335,7 @@ jobs:
 
       - name: Upload Trivy SARIF to GitHub code-scanning
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-${{ matrix.service.name }}.sarif
           category: trivy-${{ matrix.service.name }}
