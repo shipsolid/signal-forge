@@ -14,6 +14,9 @@ HELM_RELEASE   := grafana-k8s
 HELM_CHART     := grafana/k8s-monitoring
 HELM_VERSION   := 3.8.4
 IMAGES         := otel-frontend gateway-api order-api notification-svc
+CORPORATE_CA   ?= /usr/local/share/ca-certificates/zcert.crt
+comma          := ,
+CA_BUILD_SECRET = $(if $(wildcard $(CORPORATE_CA)),--secret "id=corporate_ca$(comma)src=$(CORPORATE_CA)")
 
 .PHONY: cluster-up cluster-down build import teardown test logs validate \
         secrets-fetch-akv secrets-apply secrets-show \
@@ -49,31 +52,16 @@ cluster-down:
 	k3d cluster delete $(CLUSTER)
 
 build:
-	# Copy corporate CA (Zscaler) into each build context so `npm ci` (Node),
-	# `dotnet restore` (NuGet), and `pip install` (PyPI) can reach registries
-	# through Zscaler's TLS interception. Empty placeholder is staged on
-	# non-corporate machines so the Dockerfile COPY never fails.
-	# Cert is cleaned up after each build so it is never committed.
-	@if [ -f /usr/local/share/ca-certificates/zcert.crt ]; then \
-	  cp /usr/local/share/ca-certificates/zcert.crt ./src/frontend/zcert.crt; \
-	else \
-	  : > ./src/frontend/zcert.crt; \
-	fi
+	# Pass the corporate CA as an optional BuildKit secret. It is mounted only
+	# for dependency restore and never enters a build context or image layer.
 	# FARO_API_KEY is forwarded when set so the webpack plugin uploads source maps.
 	# Leave unset for local builds; set from AKV in CI before running make import.
-	docker build --network=host -t otel-frontend:local \
+	docker build --network=host $(CA_BUILD_SECRET) -t otel-frontend:local \
 	  $$([ -n "$$FARO_API_KEY" ] && echo "--build-arg FARO_API_KEY=$$FARO_API_KEY") \
 	  ./src/frontend
-	rm -f ./src/frontend/zcert.crt
-	cp /usr/local/share/ca-certificates/zcert.crt ./src/gateway-api/zcert.crt
-	docker build --network=host -t gateway-api:local     ./src/gateway-api
-	rm ./src/gateway-api/zcert.crt
-	cp /usr/local/share/ca-certificates/zcert.crt ./src/order-api/zcert.crt
-	docker build --network=host -t order-api:local       ./src/order-api
-	rm ./src/order-api/zcert.crt
-	cp /usr/local/share/ca-certificates/zcert.crt ./src/notification-svc/zcert.crt
-	docker build --network=host -t notification-svc:local ./src/notification-svc
-	rm ./src/notification-svc/zcert.crt
+	docker build --network=host $(CA_BUILD_SECRET) -t gateway-api:local      ./src/gateway-api
+	docker build --network=host $(CA_BUILD_SECRET) -t order-api:local        ./src/order-api
+	docker build --network=host $(CA_BUILD_SECRET) -t notification-svc:local ./src/notification-svc
 
 import: build
 	k3d image import $(addsuffix :local,$(IMAGES)) -c $(CLUSTER)

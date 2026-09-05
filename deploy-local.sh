@@ -302,17 +302,11 @@ build_images() {
     local ctx_abs="${SCRIPT_DIR}/${ctx}"
 
     log "build: $name:$IMG_TAG  (context: $ctx)"
-    # When the Dockerfile expects a zcert.crt in the context, always stage one:
-    # real cert if available, empty placeholder otherwise. The Dockerfile's
-    # size check skips trust-store updates for the empty case.
-    local staged_ca=""
-    if [[ "$inject" == "True" || "$inject" == "true" ]]; then
-      staged_ca="${ctx_abs}/zcert.crt"
-      if [[ -f "$CA_PATH" ]]; then
-        cp "$CA_PATH" "$staged_ca"
-      else
-        : > "$staged_ca"
-      fi
+    # BuildKit mounts this only for dependency restore. Nothing is copied into
+    # the context, and non-corporate machines simply omit the optional secret.
+    local build_secrets=()
+    if [[ ( "$inject" == "True" || "$inject" == "true" ) && -s "$CA_PATH" ]]; then
+      build_secrets+=( --secret "id=corporate_ca,src=${CA_PATH}" )
     fi
 
     # Docker build context is scoped to $ctx_abs — order-api/gateway-api's
@@ -333,7 +327,6 @@ build_images() {
     fi
 
     trap '
-      [[ -n "${staged_ca:-}" && -f "$staged_ca" ]] && rm -f "$staged_ca"
       [[ -n "${staged_proto:-}" && -d "$staged_proto" ]] && rm -rf "$staged_proto"
     ' EXIT
 
@@ -354,12 +347,8 @@ build_images() {
       fi
     done < <(yq "images.builds[$i].build_args_from_env")
 
-    docker build --network=host -t "${name}:${IMG_TAG}" "${build_args[@]}" "$ctx_abs"
+    docker build --network=host -t "${name}:${IMG_TAG}" "${build_secrets[@]}" "${build_args[@]}" "$ctx_abs"
 
-    if [[ -n "$staged_ca" && -f "$staged_ca" ]]; then
-      rm -f "$staged_ca"
-      staged_ca=""
-    fi
     if [[ -n "$staged_proto" && -d "$staged_proto" ]]; then
       rm -rf "$staged_proto"
       staged_proto=""

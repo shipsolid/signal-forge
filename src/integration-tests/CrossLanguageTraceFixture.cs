@@ -1,7 +1,7 @@
+using System.Diagnostics;
 using System.Text.Json;
 using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
-using DotNet.Testcontainers.Images;
 using DotNet.Testcontainers.Networks;
 using Testcontainers.PostgreSql;
 using Testcontainers.RabbitMq;
@@ -22,14 +22,14 @@ public sealed class CrossLanguageTraceFixture : IAsyncLifetime
     private const string PostgresPassword = "inttest";
     private const string RabbitMqUser = "signalforge";
     private const string RabbitMqPassword = "inttest";
+    private const string OrderApiImage = "order-api:inttest";
+    private const string NotificationSvcImage = "notification-svc:inttest";
 
     private INetwork _network = null!;
     private PostgreSqlContainer _postgres = null!;
     private RabbitMqContainer _rabbitMq = null!;
     private IContainer _redis = null!;
     private IContainer _jaeger = null!;
-    private IFutureDockerImage _orderApiImage = null!;
-    private IFutureDockerImage _notificationSvcImage = null!;
     private IContainer _orderApi = null!;
     private IContainer _notificationSvc = null!;
 
@@ -102,14 +102,9 @@ public sealed class CrossLanguageTraceFixture : IAsyncLifetime
             _redis.StartAsync(),
             _jaeger.StartAsync());
 
-        // Stage the same build-context workarounds deploy-local.sh's
-        // build_images() applies for a real cluster build — the Dockerfiles
-        // COPY zcert.crt (Zscaler CA, empty placeholder off corporate
-        // networks) and, for order-api, COPY proto/ (src/proto/ lives
-        // outside this Docker build context; see src/order-api/Dockerfile's
-        // own comment on why).
-        StageFile(caPath, Path.Combine(orderApiCtx, "zcert.crt"));
-        StageFile(caPath, Path.Combine(notificationSvcCtx, "zcert.crt"));
+        // order-api references src/proto/, which is outside its scoped build
+        // context. Stage only that shared source; the corporate CA is passed
+        // separately as an optional BuildKit secret.
         var stagedProtoDir = Path.Combine(orderApiCtx, "proto");
         Directory.CreateDirectory(stagedProtoDir);
         File.Copy(Path.Combine(protoDir, "orders.proto"), Path.Combine(stagedProtoDir, "orders.proto"), overwrite: true);
@@ -117,30 +112,15 @@ public sealed class CrossLanguageTraceFixture : IAsyncLifetime
 
         try
         {
-            _orderApiImage = new ImageFromDockerfileBuilder()
-                .WithDockerfileDirectory(orderApiCtx)
-                .WithDockerfile("Dockerfile")
-                .WithName("order-api:inttest")
-                .WithDeleteIfExists(false)
-                .Build();
-            await _orderApiImage.CreateAsync();
-
-            _notificationSvcImage = new ImageFromDockerfileBuilder()
-                .WithDockerfileDirectory(notificationSvcCtx)
-                .WithDockerfile("Dockerfile")
-                .WithName("notification-svc:inttest")
-                .WithDeleteIfExists(false)
-                .Build();
-            await _notificationSvcImage.CreateAsync();
+            await BuildImageAsync(orderApiCtx, OrderApiImage, caPath);
+            await BuildImageAsync(notificationSvcCtx, NotificationSvcImage, caPath);
         }
         finally
         {
-            File.Delete(Path.Combine(orderApiCtx, "zcert.crt"));
-            File.Delete(Path.Combine(notificationSvcCtx, "zcert.crt"));
             Directory.Delete(stagedProtoDir, recursive: true);
         }
 
-        _orderApi = new ContainerBuilder(_orderApiImage)
+        _orderApi = new ContainerBuilder(OrderApiImage)
             .WithNetwork(_network)
             .WithNetworkAliases("order-api")
             .WithPortBinding(5001, true)
@@ -168,7 +148,7 @@ public sealed class CrossLanguageTraceFixture : IAsyncLifetime
             .Build();
         await _orderApi.StartAsync();
 
-        _notificationSvc = new ContainerBuilder(_notificationSvcImage)
+        _notificationSvc = new ContainerBuilder(NotificationSvcImage)
             .WithNetwork(_network)
             .WithNetworkAliases("notification-svc")
             .WithPortBinding(8000, true)
@@ -200,12 +180,38 @@ public sealed class CrossLanguageTraceFixture : IAsyncLifetime
         await SafeDispose(() => _network?.DeleteAsync() ?? Task.CompletedTask);
     }
 
-    private static void StageFile(string source, string dest)
+    private static async Task BuildImageAsync(string context, string image, string caPath)
     {
-        if (File.Exists(source))
-            File.Copy(source, dest, overwrite: true);
-        else
-            File.WriteAllBytes(dest, Array.Empty<byte>());
+        var startInfo = new ProcessStartInfo("docker")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("build");
+        startInfo.ArgumentList.Add("--tag");
+        startInfo.ArgumentList.Add(image);
+        if (File.Exists(caPath) && new FileInfo(caPath).Length > 0)
+        {
+            startInfo.ArgumentList.Add("--secret");
+            startInfo.ArgumentList.Add($"id=corporate_ca,src={caPath}");
+        }
+        startInfo.ArgumentList.Add(context);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start docker build");
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"docker build failed for {image} (exit {process.ExitCode})\n{stdout}\n{stderr}");
+        }
     }
 
     private static string FindRepoRoot()

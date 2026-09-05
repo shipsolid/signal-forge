@@ -80,6 +80,9 @@ corporate_ca:
 #   Map of build-arg name → conf.yml dotted path. Value is read from this file
 #   at build time; no shell export required. Precedence: build_args_from_env
 #   wins over build_args_from_conf (shell override beats file).
+# inject_ca:
+#   Pass corporate_ca.path as an optional BuildKit secret for dependency
+#   restore. Missing or empty files are omitted; the CA never enters the image.
 images:
   tag: local
   builds:
@@ -96,8 +99,8 @@ images:
       # Docker build context is scoped to this directory, but the .csproj
       # references the shared ../proto (single source of truth for
       # orders.proto + OrderValidation.cs — see src/proto/). Staged into
-      # context/proto/ before build, cleaned up after, same pattern as
-      # inject_ca's zcert.crt staging.
+      # context/proto/ before build, then cleaned up. Unlike inject_ca, this is
+      # source code required by the project and must be inside the context.
       stage_shared_proto: true
     - name: order-api
       context: src/order-api

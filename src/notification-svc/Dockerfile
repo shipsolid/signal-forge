@@ -1,14 +1,21 @@
+# syntax=docker/dockerfile:1.7
+
 FROM python:3.12-slim@sha256:520153e2deb359602c9cffd84e491e3431d76e7bf95a3255c9ce9433b76ab99a
 
 WORKDIR /app
 
-# Install corporate CA (Zscaler) so pip can reach PyPI over SSL.
-# zcert.crt is copied to the build context by the Makefile build target.
-COPY zcert.crt /usr/local/share/ca-certificates/zcert.crt
-RUN update-ca-certificates
-
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# The local build path may expose the corporate CA as a BuildKit secret. The
+# temporary combined bundle exists only for this install command; CI omits it.
+RUN --mount=type=secret,id=corporate_ca,required=false \
+    if [ -s /run/secrets/corporate_ca ]; then \
+      ca_bundle="$(mktemp)"; \
+      cat /etc/ssl/certs/ca-certificates.crt /run/secrets/corporate_ca > "$ca_bundle"; \
+      PIP_CERT="$ca_bundle" pip install --no-cache-dir -r requirements.txt; \
+      rm -f "$ca_bundle"; \
+    else \
+      pip install --no-cache-dir -r requirements.txt; \
+    fi
 
 COPY app/ ./app/
 

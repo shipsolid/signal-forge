@@ -1,11 +1,19 @@
+# syntax=docker/dockerfile:1.7
+
 FROM mcr.microsoft.com/dotnet/sdk:8.0@sha256:4b1cdaa57eed2cecabcf29bdb9bce11e8ca1c287d39dfd2c8b534663ea94d493 AS build
 WORKDIR /src
-# Install corporate CA (Zscaler) so dotnet restore can reach NuGet over SSL.
-# zcert.crt is copied to the build context by the Makefile build target.
-COPY zcert.crt /usr/local/share/ca-certificates/zcert.crt
-RUN update-ca-certificates
 COPY gateway-api.csproj .
-RUN dotnet restore
+# The local build path may expose the corporate CA as a BuildKit secret. The
+# temporary combined bundle exists only for this restore command; CI omits it.
+RUN --mount=type=secret,id=corporate_ca,required=false \
+    if [ -s /run/secrets/corporate_ca ]; then \
+      ca_bundle="$(mktemp)"; \
+      cat /etc/ssl/certs/ca-certificates.crt /run/secrets/corporate_ca > "$ca_bundle"; \
+      SSL_CERT_FILE="$ca_bundle" dotnet restore; \
+      rm -f "$ca_bundle"; \
+    else \
+      dotnet restore; \
+    fi
 COPY . .
 # gateway-api.csproj references ../proto (src/proto/ at the repo root — see
 # that directory's OrderValidation.cs for why) via a relative <Protobuf

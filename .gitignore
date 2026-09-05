@@ -2,8 +2,8 @@
 # it scaffolds Grafana Cloud + Azure credentials for the learning lab. Treat
 # values as public; rotate / replace anything ever committed with real creds.
 #
-# zcert.crt (corporate CA) and rendered Helm values under
-# k8s/monitoring/grafana-helm/generated/ ARE tracked by monorepo convention.
+# zcert.crt is local-only and ignored. Rendered Helm values under
+# k8s/monitoring/grafana-helm/generated/ are tracked by monorepo convention.
 
 # .NET build output
 src/**/bin/

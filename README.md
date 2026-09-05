@@ -247,7 +247,7 @@ kubectl apply -k k8s/overlays/dev           # apply dev overlay
 | Azure CLI 2.50+                                 | tooling  | cloud mode only                   | `./scripts/fetch-grafana-cloud-conf-from-akv.sh` — not needed if credentials are already in conf.yml                                 |
 | Grafana Cloud stack (`example-org.grafana.net`) | upstream | cloud mode only                   | Tempo, Mimir, Loki endpoints; credentials in AKV                                                                                     |
 | Azure Key Vault (`example-org-prd-kv`)          | upstream | cloud mode only                   | Stores Grafana Cloud API key + endpoint URLs                                                                                         |
-| Zscaler CA (`zcert.crt`)                        | infra    | corporate networks only           | Staged into Docker builds; empty placeholder used on non-corporate machines — Dockerfiles' `COPY zcert.crt` will not fail without it |
+| Zscaler CA (`zcert.crt`)                        | infra    | corporate networks only           | Passed to local builds as an optional BuildKit secret; omitted in CI and never copied into a build context or image                   |
 | `grafana/k8s-monitoring` Helm chart v3.8.4      | infra    | cloud mode (auto-installed)       | Pulled at deploy time; no local vendored copy                                                                                        |
 | cert-manager v1.18.2 (jetstack chart)           | infra    | when `security.tls.enabled: true` | Installs into `cert-manager` namespace; skip by setting `security.tls.enabled: false`                                                |
 
