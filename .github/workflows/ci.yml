@@ -2,19 +2,17 @@ name: CI
 
 on:
   workflow_dispatch:
-  # push:
-  #   branches: [main]
-  # pull_request:
-  #   branches: [main]
+  push:
+    branches: [main]
 
 jobs:
+  secret-scan:
   # ── Secret scanning ──────────────────────────────────────────────────────────
   # Catches committed secrets before they land in history — the exact class of
   # exposure (a live Grafana Cloud token + an Azure SP client secret, both in
   # conf.yml.bak/.env) that required a one-time git-history rewrite to fix. See
   # docs/reviews/2026-07-08-principal-staff-review.md §1. .gitleaks.toml
   # allowlists k8s/infra/secrets.yaml's known dev-only placeholder credentials.
-  secret-scan:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
     steps:
@@ -26,6 +24,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+
+  pre-commit:
   # ── Pre-commit hooks (formatting/lint/hygiene/manifest sanity) ─────────────
   # Mirrors what `pre-commit install` runs locally on every commit — see
   # .pre-commit-config.yaml and CLAUDE.md's "Pre-commit hooks" section.
@@ -37,7 +37,6 @@ jobs:
   # scanning anything. Full-history secret scanning is already covered by
   # the secret-scan job above (gitleaks-action, fetch-depth 0); no need to
   # duplicate it here with a check that can't actually catch anything.
-  pre-commit:
     name: Pre-commit hooks (all files)
     runs-on: ubuntu-latest
     steps:
@@ -84,8 +83,9 @@ jobs:
         env:
           SKIP: gitleaks
 
-  # ── .NET services ────────────────────────────────────────────────────────────
+
   test-dotnet:
+  # ── .NET services ────────────────────────────────────────────────────────────
     name: .NET tests
     runs-on: ubuntu-latest
     steps:
@@ -114,8 +114,9 @@ jobs:
           name: dotnet-test-results
           path: src/**/*.trx
 
-  # ── Python service ───────────────────────────────────────────────────────────
+
   test-python:
+  # ── Python service ───────────────────────────────────────────────────────────
     name: Python tests
     runs-on: ubuntu-latest
     steps:
@@ -133,8 +134,9 @@ jobs:
       - name: Test — notification-svc
         run: python -m pytest src/notification-svc/tests/ -v --tb=short
 
-  # ── Angular frontend ─────────────────────────────────────────────────────────
+
   test-frontend:
+  # ── Angular frontend ─────────────────────────────────────────────────────────
     name: Frontend tests
     runs-on: ubuntu-latest
     steps:
@@ -166,11 +168,12 @@ jobs:
         run: npm audit --omit=dev --audit-level=critical
         working-directory: src/frontend
 
+
+  proto-sync:
   # ── Proto sync ───────────────────────────────────────────────────────────────
   # orders.proto lives in three places: src/proto/ (canonical), and is copied
   # into each service's Protos/ directory at build time. Comments and field
   # alignment may differ between copies; field types, numbers, and names must not.
-  proto-sync:
     name: Proto sync check
     runs-on: ubuntu-latest
     steps:
@@ -201,8 +204,9 @@ jobs:
           $ok && echo "All proto copies are structurally in sync."
           $ok
 
-  # ── Vulnerability scanning ───────────────────────────────────────────────────
+
   vuln-scan:
+  # ── Vulnerability scanning ───────────────────────────────────────────────────
     name: Vulnerability scan
     runs-on: ubuntu-latest
     steps:
@@ -252,11 +256,12 @@ jobs:
             vuln-dotnet.txt
             vuln-python.json
 
+
+  build-images:
   # ── Docker builds + supply-chain ─────────────────────────────────────────
   # Every image is built, scanned (Trivy), SBOM'd (Syft), and signed (cosign).
   # Signing uses keyless OIDC — no long-lived secrets. Requires `id-token: write`
   # at the job level so the runner can fetch a Sigstore OIDC token.
-  build-images:
     name: Build + scan + SBOM + sign
     runs-on: ubuntu-latest
     permissions:
