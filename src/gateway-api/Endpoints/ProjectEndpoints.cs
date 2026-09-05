@@ -190,7 +190,7 @@ public static class ProjectEndpoints
         {
             sw.Stop();
             fanout?.SetStatus(ActivityStatusCode.Error, ex.Status.Detail);
-            fanout?.RecordException(ex);
+            fanout?.AddException(ex);
             logger.LogError(ex, "order-api rejected GetOrdersByProject {ProjectId} with {GrpcStatus}. TraceId: {TraceId}",
                 id, ex.StatusCode, Activity.Current?.TraceId.ToString());
             return ex.ToProblem("Failed to retrieve orders");
@@ -198,11 +198,11 @@ public static class ProjectEndpoints
         catch (Exception ex)
         {
             sw.Stop();
-            // SetStatus + RecordException is the OTel convention for error spans.
-            // RecordException creates a span event with exception.type,
+            // SetStatus + AddException is the OTel convention for error spans.
+            // AddException creates a span event with exception.type,
             // exception.message, exception.stacktrace attributes.
             fanout?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            fanout?.RecordException(ex);
+            fanout?.AddException(ex);
             logger.LogError(ex, "Failed to get orders for project {ProjectId}. TraceId: {TraceId}", id,
                 Activity.Current?.TraceId.ToString());
             return Results.Problem("Failed to retrieve orders", statusCode: 502);

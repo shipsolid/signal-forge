@@ -179,7 +179,7 @@ public class OrderPublisher : IOrderPublisher, IDisposable
         catch (Exception ex)
         {
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            activity?.RecordException(ex);
+            activity?.AddException(ex);
             _logger.LogError(ex, "Failed to publish order.created to RabbitMQ");
             throw;
         }

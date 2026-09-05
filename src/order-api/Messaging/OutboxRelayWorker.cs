@@ -202,7 +202,7 @@ public class OutboxRelayWorker : BackgroundService
             catch (Exception ex)
             {
                 activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-                activity?.RecordException(ex);
+                activity?.AddException(ex);
                 _logger.LogError(ex,
                     "Failed to relay outbox message {MessageId} for order {OrderId}; will retry next poll",
                     msg.Id, msg.Order.Id);

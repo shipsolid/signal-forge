@@ -78,7 +78,7 @@ public static class OrderEndpoints
         {
             sw.Stop();
             activity?.SetStatus(ActivityStatusCode.Error, ex.Status.Detail);
-            activity?.RecordException(ex);
+            activity?.AddException(ex);
             logger.LogError(ex, "order-api rejected CreateOrder for project {ProjectId} with {GrpcStatus}. TraceId: {TraceId}",
                 dto.ProjectId, ex.StatusCode, Activity.Current?.TraceId.ToString());
             return ex.ToProblem("Failed to create order");
@@ -87,7 +87,7 @@ public static class OrderEndpoints
         {
             sw.Stop();
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            activity?.RecordException(ex);
+            activity?.AddException(ex);
             logger.LogError(ex, "Failed to create order for project {ProjectId}. TraceId: {TraceId}",
                 dto.ProjectId, Activity.Current?.TraceId.ToString());
             return Results.Problem("Failed to create order", statusCode: 502);
@@ -121,7 +121,7 @@ public static class OrderEndpoints
         catch (RpcException ex)
         {
             activity?.SetStatus(ActivityStatusCode.Error, ex.Status.Detail);
-            activity?.RecordException(ex);
+            activity?.AddException(ex);
             logger.LogError(ex, "order-api rejected GetOrder {OrderId} with {GrpcStatus}. TraceId: {TraceId}",
                 id, ex.StatusCode, Activity.Current?.TraceId.ToString());
             return ex.ToProblem("Failed to retrieve order");
@@ -129,7 +129,7 @@ public static class OrderEndpoints
         catch (Exception ex)
         {
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            activity?.RecordException(ex);
+            activity?.AddException(ex);
             logger.LogError(ex, "Failed to get order {OrderId}. TraceId: {TraceId}",
                 id, Activity.Current?.TraceId.ToString());
             return Results.Problem("Failed to retrieve order", statusCode: 502);
@@ -182,7 +182,7 @@ public static class OrderEndpoints
         {
             sw.Stop();
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            activity?.RecordException(ex);
+            activity?.AddException(ex);
             logger.LogError(ex, "notification-svc returned {StatusCode} while fetching notifications. TraceId: {TraceId}",
                 (int)code, Activity.Current?.TraceId.ToString());
             return Results.Problem("Failed to retrieve notifications", statusCode: (int)code);
@@ -191,7 +191,7 @@ public static class OrderEndpoints
         {
             sw.Stop();
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            activity?.RecordException(ex);
+            activity?.AddException(ex);
             logger.LogError(ex, "Failed to get notifications. TraceId: {TraceId}", Activity.Current?.TraceId.ToString());
             return Results.Problem("Failed to retrieve notifications", statusCode: 502);
         }
@@ -213,7 +213,7 @@ public static class OrderEndpoints
         using var activity = DiagnosticsConfig.ActivitySource.StartActivity("gateway.error");
         var ex = new InvalidOperationException("Intentional error for OTel validation");
         activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-        activity?.RecordException(ex);
+        activity?.AddException(ex);
         logger.LogError(ex, "Error endpoint triggered intentionally. TraceId: {TraceId}",
             Activity.Current?.TraceId.ToString());
         throw ex;
