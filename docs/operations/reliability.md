@@ -21,7 +21,7 @@ PodDisruptionBudgets, pod anti-affinity, graceful shutdown.
 ## PodDisruptionBudgets
 
 All PDBs live in a single manifest for easy inspection:
-[k8s/infra/pdb.yaml](https://github.com/shipsolid/app-signal-forge/blob/main/k8s/infra/pdb.yaml).
+[k8s/infra/pdb.yaml](https://github.com/shipsolid/signal-forge/blob/main/k8s/infra/pdb.yaml).
 
 ### App tier — 2 replicas, `minAvailable: 1`
 
@@ -92,7 +92,7 @@ This is almost always what you want in dev.
 ### Prod — hard requirement
 
 The Kustomize prod overlay
-([k8s/overlays/prod/kustomization.yaml](https://github.com/shipsolid/app-signal-forge/blob/main/k8s/overlays/prod/kustomization.yaml))
+([k8s/overlays/prod/kustomization.yaml](https://github.com/shipsolid/signal-forge/blob/main/k8s/overlays/prod/kustomization.yaml))
 upgrades anti-affinity from soft to **required**:
 
 ```yaml
@@ -176,11 +176,11 @@ accurate than an HTTP healthz because it exercises the actual client protocol an
 - **VerticalPodAutoscaler.** Fixed resource requests/limits per env. Add if right-sizing becomes a
   concern.
 - **SLO-burn-rate-driven HorizontalPodAutoscaler.** The prod overlay
-  ([hpa.yaml](https://github.com/shipsolid/app-signal-forge/blob/main/k8s/overlays/prod/hpa.yaml))
+  ([hpa.yaml](https://github.com/shipsolid/signal-forge/blob/main/k8s/overlays/prod/hpa.yaml))
   has an illustrative CPU-utilization HPA on gateway-api/order-api, but a real SLO-driven one
   (scaling on the burn-rate
   [[prometheus/06-alerting/01-recording-rules/01-recording-rules|recording rules]] in
-  [slo-rules.yaml](https://github.com/shipsolid/app-signal-forge/blob/main/k8s/monitoring/slo-rules.yaml)
+  [slo-rules.yaml](https://github.com/shipsolid/signal-forge/blob/main/k8s/monitoring/slo-rules.yaml)
   instead of raw CPU) needs a custom-metrics adapter (e.g. `prometheus-adapter`) — not wired up.
   Requires metrics-server in the target cluster either way; not installed by `deploy-local.sh` since
   local dev has no autoscaling need.

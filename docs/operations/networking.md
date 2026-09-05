@@ -19,7 +19,7 @@ documented gaps.
 ## NetworkPolicy model
 
 The manifests in
-[k8s/infra/network-policies.yaml](https://github.com/shipsolid/app-signal-forge/blob/main/k8s/infra/network-policies.yaml)
+[k8s/infra/network-policies.yaml](https://github.com/shipsolid/signal-forge/blob/main/k8s/infra/network-policies.yaml)
 implement a **default-deny-plus-tiered-allows** model for the `otel-lab` namespace.
 
 ### ⚠️ k3d caveat
@@ -180,7 +180,7 @@ spec:
 ### Disabling TLS
 
 Set `security.tls.enabled: false` in
-[conf.yml](https://github.com/shipsolid/app-signal-forge/blob/main/conf.yml). `deploy-local.sh` then
+[conf.yml](https://github.com/shipsolid/signal-forge/blob/main/conf.yml). `deploy-local.sh` then
 skips the cert-manager Helm install and the Issuer apply. The Ingress's hostless rule keeps HTTP
 working; the TLS host rule is still present in the manifest but cert-manager has no Issuer to
 reconcile.

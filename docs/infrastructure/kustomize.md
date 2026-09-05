@@ -14,7 +14,7 @@ relations:
 ## Kustomize layout
 
 signal-forge ships a Kustomize base + per-env overlays alongside the `deploy-local.sh` driver.
-Consumers that prefer [[tech/gitops|GitOps]] ([[tech/argocd|ArgoCD]], Flux, Rancher Fleet) or
+Consumers that prefer GitOps (ArgoCD, Flux, Rancher Fleet) or
 `kubectl apply -k` can use the Kustomize path directly. `deploy-local.sh` is aware of this and will
 `kubectl apply -k <dir>` whenever a directory contains a `kustomization.yaml`.
 
@@ -80,7 +80,7 @@ spec:
 **Prerequisite for TLS:** the Ingress in this layout references a `ClusterIssuer`
 (`cert-manager.io/cluster-issuer: signal-forge-ca`) that this Kustomize tree does **not** create —
 see the `cert-manager-issuer.yaml` gotcha below. Apply
-[k8s/infra/cert-manager-issuer.yaml](https://github.com/shipsolid/app-signal-forge/blob/main/k8s/infra/cert-manager-issuer.yaml)
+[k8s/infra/cert-manager-issuer.yaml](https://github.com/shipsolid/signal-forge/blob/main/k8s/infra/cert-manager-issuer.yaml)
 with cert-manager already installed in the target cluster before or alongside your GitOps sync, or
 certs never provision and the Ingress silently sits without TLS.
 
@@ -110,7 +110,7 @@ commented-out example showing how to add a patch without having to re-discover t
 ## How `deploy-local.sh` interacts with this
 
 `apply_stage` (in
-[deploy-local.sh](https://github.com/shipsolid/app-signal-forge/blob/main/deploy-local.sh)) checks
+[deploy-local.sh](https://github.com/shipsolid/signal-forge/blob/main/deploy-local.sh)) checks
 each configured path:
 
 ```bash

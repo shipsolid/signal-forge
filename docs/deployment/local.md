@@ -63,7 +63,7 @@ For subsequent iterations once the cluster exists:
 ./deploy-local.sh --skip-cluster --skip-build   # manifests-only, <1 min
 ```
 
-See [CLAUDE.md](https://github.com/shipsolid/app-signal-forge/blob/main/CLAUDE.md) for the full flag
+See [CLAUDE.md](https://github.com/shipsolid/signal-forge/blob/main/CLAUDE.md) for the full flag
 list and the safety checks `deploy-local.sh` runs before every apply (k3d context guard, NodePort
 drift check, Secret-key contract validation).
 
@@ -177,8 +177,8 @@ Edit `monitoring.mode` in `conf.yml`, then re-run:
 | ------------------------------- | ------------------------ | ------------- |
 | Angular SPA                     | `http://localhost:8080`  | —             |
 | Grafana                         | `http://localhost:3000`  | admin / admin |
-| [[tech/jaeger\|Jaeger]]         | `http://localhost:16686` | —             |
-| [[tech/prometheus\|Prometheus]] | `http://localhost:9090`  | —             |
+| Jaeger         | `http://localhost:16686` | —             |
+| Prometheus | `http://localhost:9090`  | —             |
 | RabbitMQ                        | `http://localhost:15672` | guest / guest |
 
 Alloy debug UI (pipeline graph, component status) — both modes, once the Helm chart is installed:

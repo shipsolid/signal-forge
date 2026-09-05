@@ -85,7 +85,7 @@ curl http://localhost:8080/api/slow
 3. Panel → Options → Data links → add link: type = Jaeger datasource, URL = `${__value.raw}` (the
    raw traceId)
 4. After traffic runs, exemplar dots appear as diamonds on the time series
-5. Click a dot → Grafana opens [[tech/jaeger|Jaeger]] with the specific trace loaded
+5. Click a dot → Grafana opens Jaeger with the specific trace loaded
 
 ## Grafana Cloud mode
 

@@ -3,7 +3,7 @@
 SignalForge is a personal lab / portfolio project (single owner, no production deployment, no
 SLA — see [README.md § Ownership Boundary](README.md#ownership-boundary)). This page covers how to
 report a vulnerability. For the threat model, secrets lifecycle, and hardening controls, see
-[Security](https://shipsolid.github.io/notes/projects/app-signal-forge/operations/security/)
+[Security](https://shipsolid.github.io/signal-forge/operations/security/)
 in the docs.
 
 ## Scope
@@ -30,7 +30,7 @@ there directly.
 
 ## Reporting a vulnerability
 
-Preferred: open a [GitHub Security Advisory](https://github.com/shipsolid/app-signal-forge/security/advisories/new)
+Preferred: open a [GitHub Security Advisory](https://github.com/shipsolid/signal-forge/security/advisories/new)
 (repo → Security tab → "Report a vulnerability"). This is private until a fix is available.
 
 If advisories are unavailable to you, open a regular GitHub issue with the non-sensitive summary

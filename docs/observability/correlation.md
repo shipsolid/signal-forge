@@ -21,7 +21,7 @@ relations:
 > and span_id as Loki structured metadata — through a different mechanism: the same JSON-extraction
 > and template logic is injected via the `grafana/k8s-monitoring` Helm chart's
 > `podLogs.extraLogProcessingStages` hook in
-> [`values-cloud.yaml.tmpl`](https://github.com/shipsolid/app-signal-forge/blob/main/k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl),
+> [`values-cloud.yaml.tmpl`](https://github.com/shipsolid/signal-forge/blob/main/k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl),
 > since the chart doesn't expose named custom components the way a hand-rolled config does. See
 > [[pipeline#Cloud mode pipeline|pipeline.md's Cloud mode pipeline section]] for that mechanism. The
 > field names, coalesce logic, and structured-metadata rationale below apply to both.
@@ -134,7 +134,7 @@ loki.process "trace_correlation" {
 
 ### Why structured metadata, not stream labels
 
-Loki stream labels must be low-[[tech/cardinality|cardinality]] (namespace, pod, container, app,
+Loki stream labels must be low-cardinality (namespace, pod, container, app,
 level). `trace_id` has the same cardinality as the number of traces — millions per day. Using it as
 a stream label would:
 

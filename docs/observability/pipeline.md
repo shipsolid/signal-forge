@@ -279,7 +279,7 @@ loki.source.kubernetes "pod_logs" {
 
 The `trace_correlation` processor extracts trace IDs from JSON log lines of both .NET and Python
 services. Its trace_id/span_id extraction + structured-metadata stages are single-sourced at
-[`k8s/monitoring/grafana/shared/trace-correlation-stages.alloy`](https://github.com/shipsolid/app-signal-forge/blob/main/k8s/monitoring/grafana/shared/trace-correlation-stages.alloy)
+[`k8s/monitoring/grafana/shared/trace-correlation-stages.alloy`](https://github.com/shipsolid/signal-forge/blob/main/k8s/monitoring/grafana/shared/trace-correlation-stages.alloy)
 and spliced into `configmap.yaml.tmpl` at deploy time (`deploy-local.sh`'s
 `render_local_alloy_configmap()`) — the same fragment cloud mode uses, see
 [Log↔trace correlation (cloud mode)](#logtrace-correlation-cloud-mode) below. Only the `level`
@@ -345,7 +345,7 @@ flowchart LR
 ## Cloud mode pipeline
 
 Cloud mode has no hand-authored River config at all. `deploy-local.sh` renders
-[`values-cloud.yaml.tmpl`](https://github.com/shipsolid/app-signal-forge/blob/main/k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl)
+[`values-cloud.yaml.tmpl`](https://github.com/shipsolid/signal-forge/blob/main/k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl)
 (substituting `${...}` placeholders from `conf.yml`) and passes it to `helm upgrade` for the
 `grafana/k8s-monitoring` chart. The chart's `applicationObservability` feature generates its own
 **fixed, templated pipeline** from those values — not something this repo controls stage-by-stage
@@ -367,7 +367,7 @@ and `receivers.otlp`, `clusterMetrics`, `clusterEvents`, and `nodeLogs`/`podLogs
 `podLogs.extraLogProcessingStages` in `values-cloud.yaml.tmpl` carries the same JSON-extraction +
 structured-metadata logic as local mode's `trace_correlation` stage above — both are rendered from
 the single shared fragment,
-[`k8s/monitoring/grafana/shared/trace-correlation-stages.alloy`](https://github.com/shipsolid/app-signal-forge/blob/main/k8s/monitoring/grafana/shared/trace-correlation-stages.alloy),
+[`k8s/monitoring/grafana/shared/trace-correlation-stages.alloy`](https://github.com/shipsolid/signal-forge/blob/main/k8s/monitoring/grafana/shared/trace-correlation-stages.alloy),
 spliced in by `deploy-local.sh`'s `render_helm_values()`, through the chart's raw-River-snippet hook
 (the same mechanism already used there for ANSI-stripping and kube-system log-level dropping). The
 Helm chart runs `tpl` on this value, so `render_helm_values()` escapes the fragment's Go-template
@@ -382,7 +382,7 @@ has no tail-sampling or probabilistic-sampling processor anywhere in its values 
 reading every processor/connector option in the chart's `feature-application-observability`
 subchart, v3.8.4) — head-based or tail-based. Adding one would require forking the chart's
 templates, which this repo deliberately doesn't do (no vendored chart copy). Cloud mode sends **100%
-of trace volume** to Tempo today. This is a real cost/[[tech/cardinality|cardinality]] tradeoff
+of trace volume** to Tempo today. This is a real cost/cardinality tradeoff
 worth naming explicitly rather than leaving silent: acceptable at this lab's traffic volume, but
 would need revisiting (either accepting the cost, or forking the chart) before treating cloud mode
 as production-representative at higher volume. See [[sampling|sampling.md]] for the local-mode

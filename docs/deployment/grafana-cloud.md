@@ -25,7 +25,7 @@ When credentials are absent, cloud exporters are no-ops — local backends are u
 ## Credential architecture
 
 Grafana Cloud uses **per-signal instance IDs** as Basic Auth usernames — one for
-[[tech/tempo|Tempo]] (traces), one for [[tech/mimir|Mimir]] (metrics), one for Loki (logs). A single
+Tempo (traces), one for Mimir (metrics), one for Loki (logs). A single
 shared API key is the password for all three signals.
 
 ```mermaid
@@ -79,7 +79,7 @@ expects a host:port endpoint without a URL scheme.
 
 Credentials are stored in Azure Key Vault (`example-org-prd-kv`) under the `grafana-example-org-*`
 prefix. The AKV coordinates (tenant/subscription/RG/vault name) live in the env file named by
-[conf.yml](https://github.com/shipsolid/app-signal-forge/blob/main/conf.yml)'s
+[conf.yml](https://github.com/shipsolid/signal-forge/blob/main/conf.yml)'s
 `monitoring.grafana_cloud.use_env` — as `ARM_TENANT_ID` / `ARM_SUBSCRIPTION_ID` / `Resource_Group` /
 `Azure_KeyVault`, the same keys the legacy Makefile flow (`make secrets-fetch-akv`) already reads
 from there. Safe to track in git — these are IDs/names, not credentials.
@@ -129,7 +129,7 @@ the script logs in as that principal automatically.
 The script updates **only** the nine `GRAFANA_CLOUD_*`/`FARO_*` keys in the env file named by
 `use_env` (appending any that don't exist yet). Comments, ordering, and every other line (including
 the `ARM_*`/`Resource_Group`/`Azure_KeyVault` coordinates) are preserved — see
-[smoke-test-conf-updater.sh](https://github.com/shipsolid/app-signal-forge/blob/main/scripts/smoke-test-conf-updater.sh)
+[smoke-test-conf-updater.sh](https://github.com/shipsolid/signal-forge/blob/main/scripts/smoke-test-conf-updater.sh)
 for the regression test that enforces this.
 
 ### 3. Deploy (re-materialises the Secret)

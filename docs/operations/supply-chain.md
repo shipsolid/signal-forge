@@ -20,7 +20,7 @@ and keyless signing.
 
 ## The pipeline
 
-[`.github/workflows/ci.yml`](https://github.com/shipsolid/app-signal-forge/blob/main/.github/workflows/ci.yml)
+[`.github/workflows/ci.yml`](https://github.com/shipsolid/signal-forge/blob/main/.github/workflows/ci.yml)
 — job `build-images` runs a matrix across the four services (`otel-frontend`, `gateway-api`,
 `order-api`, `notification-svc`) and, for each:
 
@@ -39,7 +39,7 @@ PRs run steps 1–3 only; push/sign/verify require `id-token: write` + GHCR auth
 `main`.
 
 A separate scheduled workflow,
-[`scheduled-vuln-rescan.yml`](https://github.com/shipsolid/app-signal-forge/blob/main/.github/workflows/scheduled-vuln-rescan.yml),
+[`scheduled-vuln-rescan.yml`](https://github.com/shipsolid/signal-forge/blob/main/.github/workflows/scheduled-vuln-rescan.yml),
 re-scans the last-published `:latest` image for each service weekly — same Trivy severities, but
 _without_ `ignore-unfixed`, so a CVE that had no fix at build time still gets caught once one
 appears upstream. Report-only (`exit-code: "0"`), visible in the Security tab; it doesn't block

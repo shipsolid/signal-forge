@@ -205,7 +205,7 @@ The Alloy collector configuration is separate per mode:
   `deploy-local.sh`)
 - Local: `k8s/monitoring/grafana/local/configmap.yaml` (hand-rolled DaemonSet — reference artifact)
 
-See [CLAUDE.md](https://github.com/shipsolid/app-signal-forge/blob/main/CLAUDE.md) for the full
+See [CLAUDE.md](https://github.com/shipsolid/signal-forge/blob/main/CLAUDE.md) for the full
 command reference and safety checks built into `deploy-local.sh`.
 
 ## Port map (after `./deploy-local.sh`)

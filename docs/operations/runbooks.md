@@ -314,7 +314,7 @@ kubectl -n monitoring logs daemonset/grafana-k8s-alloy-receiver --tail=100 \
 > entirely, and `secrets-apply` in particular is only as correct as whatever you put in `.env`
 > manually. `secrets-fetch-akv` writes the correct Mimir endpoint format (`.../api/prom/push`,
 > matching
-> [values-cloud.yaml.tmpl](https://github.com/shipsolid/app-signal-forge/blob/main/k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl)'s
+> [values-cloud.yaml.tmpl](https://github.com/shipsolid/signal-forge/blob/main/k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl)'s
 > Prometheus remote_write destination) as of this fix, but the script-based flow remains the
 > canonical path — see [[grafana-cloud|docs/deployment/grafana-cloud.md]] for the full credential
 > model.

@@ -181,6 +181,6 @@ cross-cutting follow-up since it surfaced while tracing gateway-api's propagatio
 - [`../../k8s/app/gateway/deployment.yaml`](../../k8s/app/gateway/deployment.yaml),
   [`../../k8s/infra/app-env.yaml.tmpl`](../../k8s/infra/app-env.yaml.tmpl)
 - ADRs (canonical source: `architecture/adrs/` on the
-  [platform notes site](https://shipsolid.github.io/notes/projects/app-signal-forge/architecture/adrs/)):
+  [platform notes site](https://shipsolid.github.io/signal-forge/architecture/adrs/)):
   ADR-001 (log tailing, not OTLP export), ADR-003 (spanmetrics before tail sampling), ADR-004
   (Helm-managed Alloy stack), ADR-009 (k8s attribute enrichment at the collector)

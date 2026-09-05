@@ -571,7 +571,7 @@ gateway-api span — a single trace starting in the browser and ending in the My
 
 ## 12. Grafana Cloud export (cloud mode)
 
-`monitoring.mode` in [conf.yml](https://github.com/shipsolid/app-signal-forge/blob/main/conf.yml) is
+`monitoring.mode` in [conf.yml](https://github.com/shipsolid/signal-forge/blob/main/conf.yml) is
 `local` or `cloud` — **mutually exclusive, never both.** There is no dual-export: `cloud` mode ships
 traces/metrics/logs to Grafana Cloud via the `grafana/k8s-monitoring` Helm chart's Alloy agents;
 `local` mode ships to the in-cluster Jaeger/Prometheus/Loki stack instead. Only one set of exporters
@@ -739,7 +739,7 @@ The Helm-managed `alloy-receiver` fully covers the application OTel pipeline.
 
 ### Helm values file
 
-[`k8s/monitoring/grafana-helm/values-local.yaml`](https://github.com/shipsolid/app-signal-forge/blob/main/k8s/monitoring/grafana-helm/values-local.yaml)
+[`k8s/monitoring/grafana-helm/values-local.yaml`](https://github.com/shipsolid/signal-forge/blob/main/k8s/monitoring/grafana-helm/values-local.yaml)
 configures the chart for local k3d. Key differences from the production `09-grafana-k8s` config:
 
 - Destinations point to in-cluster services (`otel-lab` namespace) not Grafana Cloud
