@@ -17,7 +17,7 @@ relations:
 
 What objectives signal-forge commits to, how they're measured, and how the alerts on them are
 structured. Rules as code live in
-[k8s/monitoring/slo-rules.yaml](https://github.com/shipsolid/app-signal-forge/blob/main/k8s/monitoring/slo-rules.yaml).
+[k8s/monitoring/slo-rules.yaml](https://github.com/shipsolid/signal-forge/blob/main/k8s/monitoring/slo-rules.yaml).
 
 ## Published SLOs
 
@@ -139,7 +139,7 @@ placeholder. Real runbook content would live in:
 ## What this doesn't cover
 
 - **Synthetic monitoring**. The k6 load-test Job in
-  [k8s/loadtest/](https://github.com/shipsolid/app-signal-forge/tree/main/k8s/loadtest) is manual.
+  [k8s/loadtest/](https://github.com/shipsolid/signal-forge/tree/main/k8s/loadtest) is manual.
   For continuous synthetic traffic, convert to a `CronJob` that runs every 5 minutes and points at
   `/healthz`.
 - **Client-perceived SLOs**. Frontend RUM (Faro) is ingested but not turned into SLIs. A real

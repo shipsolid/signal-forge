@@ -205,7 +205,7 @@ isn't covered (no automated fault-injection test exercises this path today).
 
 `CreateOrder`, `GetOrder`, and `GetOrdersByProject` all route `RpcException` through the shared
 `GrpcErrorMapping.ToProblem()` extension
-([Endpoints/GrpcErrorMapping.cs](https://github.com/shipsolid/app-signal-forge/blob/main/src/gateway-api/Endpoints/GrpcErrorMapping.cs))
+([Endpoints/GrpcErrorMapping.cs](https://github.com/shipsolid/signal-forge/blob/main/src/gateway-api/Endpoints/GrpcErrorMapping.cs))
 instead of each catching `Exception` and returning a flat 502:
 
 | gRPC status                                           | HTTP status | Detail relayed to client?                                      |

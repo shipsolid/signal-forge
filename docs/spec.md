@@ -18,7 +18,7 @@ relations:
 ## spec.md — SignalForge: OTel Microservices Validation Lab
 
 > This is the architecture spec. For deploy mechanics see
-> [CLAUDE.md](https://github.com/shipsolid/app-signal-forge/blob/main/CLAUDE.md); for the
+> [CLAUDE.md](https://github.com/shipsolid/signal-forge/blob/main/CLAUDE.md); for the
 > documentation index (per-service deep dives, ADRs, runbooks, security posture) see
 > [[projects/app-signal-forge/readme|docs/README.md]]; for the instrumentation-level deep dive on
 > every OTel decision see [[projects/app-signal-forge/otel-patterns|otel-patterns.md]].
@@ -32,7 +32,7 @@ propagation, sync + async communication (including the transactional outbox patt
 RUM — before rolling them into production workloads.
 
 **Mode is a single switch, not dual-export.** `monitoring.mode` in
-[conf.yml](https://github.com/shipsolid/app-signal-forge/blob/main/conf.yml) is either `cloud`
+[conf.yml](https://github.com/shipsolid/signal-forge/blob/main/conf.yml) is either `cloud`
 (default) or `local` — mutually exclusive. In `cloud` mode the Helm-managed Alloy agents ship
 directly to Grafana Cloud Tempo/Mimir/Loki and no in-cluster Jaeger/Prometheus/Loki/ Grafana are
 deployed. In `local` mode a bespoke Alloy DaemonSet exports to those in-cluster backends instead.
@@ -693,7 +693,7 @@ auto-instrumentation, Pyroscope profiling, `prometheusOperatorObjects`, Fleet Ma
 generating an overlay values file with an additional split `grafana-cloud-infra-metrics` destination
 — invoked by the Makefile's `secrets-fetch-akv`/`secrets-apply` targets, distinct from
 `deploy-local.sh`'s template-substitution flow. Both exist in the repo; `deploy-local.sh` is the
-primary path per [CLAUDE.md](https://github.com/shipsolid/app-signal-forge/blob/main/CLAUDE.md).
+primary path per [CLAUDE.md](https://github.com/shipsolid/signal-forge/blob/main/CLAUDE.md).
 
 `deploy-local.sh`'s `validate_secret_keys()` cross-checks every `usernameKey`/`passwordKey`/
 `tokenKey` the rendered values file references against the keys actually present in
@@ -872,7 +872,7 @@ five containers, and is invoked separately (see docs/testing.md).
 ## 10. Local Setup Flow
 
 `./deploy-local.sh` is the sole deploy path — see
-[CLAUDE.md](https://github.com/shipsolid/app-signal-forge/blob/main/CLAUDE.md) for the full flag
+[CLAUDE.md](https://github.com/shipsolid/signal-forge/blob/main/CLAUDE.md) for the full flag
 reference and safety-check list (context guard, NodePort-drift check, secret-key contract check).
 
 ```bash
@@ -891,7 +891,7 @@ reference and safety-check list (context guard, NodePort-drift check, secret-key
 
 Every knob — port mappings, image build args, which manifests apply in which mode, TLS/cert-manager
 gating, Grafana Cloud credentials, SLO rule loading — comes from
-[conf.yml](https://github.com/shipsolid/app-signal-forge/blob/main/conf.yml), not from flags or
+[conf.yml](https://github.com/shipsolid/signal-forge/blob/main/conf.yml), not from flags or
 hardcoded shell values. Switching `monitoring.mode: cloud` → `local` and re-running with
 `--skip-cluster --skip-build` is sufficient to flip the whole observability destination; no manifest
 edits required.
@@ -917,7 +917,7 @@ kubectl apply -k k8s/loadtest/
 ### 9.1 Grafana Cloud Mode
 
 Cloud and local mode are **mutually exclusive, not dual-export** — set by `monitoring.mode: cloud`
-in [conf.yml](https://github.com/shipsolid/app-signal-forge/blob/main/conf.yml) (the current
+in [conf.yml](https://github.com/shipsolid/signal-forge/blob/main/conf.yml) (the current
 default), not by populating a Secret directly. Credentials are pulled from Azure Key Vault via
 `./scripts/fetch-grafana-cloud-conf-from-akv.sh` (which writes them into the env file named by
 `monitoring.grafana_cloud.use_env`), then `./deploy-local.sh` sources that same file and
@@ -1080,7 +1080,7 @@ export default function () {
 ## 13. Repo Structure
 
 ```
-shipsolid--app-signal-forge/
+signal-forge/
 ├── CLAUDE.md                        # Claude Code guidance — deploy mechanics, safety checks
 ├── README.md                        # Project overview
 ├── CONTRIBUTING.md, SECURITY.md, LICENSE
@@ -1182,8 +1182,8 @@ shipsolid--app-signal-forge/
 ## 14. Makefile & Deploy Tooling
 
 `./deploy-local.sh` is the sole deploy path (cluster + builds + manifests + Helm, driven by
-`conf.yml`) — see [CLAUDE.md](https://github.com/shipsolid/app-signal-forge/blob/main/CLAUDE.md).
-The [`Makefile`](https://github.com/shipsolid/app-signal-forge/blob/main/Makefile) no longer deploys
+`conf.yml`) — see [CLAUDE.md](https://github.com/shipsolid/signal-forge/blob/main/CLAUDE.md).
+The [`Makefile`](https://github.com/shipsolid/signal-forge/blob/main/Makefile) no longer deploys
 anything; it builds images, runs tests, and fetches/applies Grafana Cloud credentials. Its
 `deploy`/`deploy-cloud`/`deploy-local`/`full` targets are explicit stubs that print a redirect to
 `./deploy-local.sh` and `exit 1` — they exist specifically to preempt GNU Make's implicit `%: %.sh`

@@ -47,7 +47,7 @@ The Helm chart manages RBAC, ServiceAccounts, versioned upgrades, and multi-role
 | ----------------- | ----------- | ------------------------------------------ | ----------------------------------------------------- |
 | `alloy-receiver`  | DaemonSet   | OTLP push (:4317/:4318), Faro RUM (:12347) | Jaeger / Grafana Cloud Tempo                          |
 | `alloy-logs`      | DaemonSet   | Pod stdout/stderr, node journal            | Loki / Grafana Cloud Loki                             |
-| `alloy-metrics`   | StatefulSet | kubelet, cAdvisor, KSM, node-exporter      | [[tech/prometheus\|Prometheus]] / Grafana Cloud Mimir |
+| `alloy-metrics`   | StatefulSet | kubelet, cAdvisor, KSM, node-exporter      | Prometheus / Grafana Cloud Mimir |
 | `alloy-singleton` | Deployment  | Cluster events, KSM API                    | Loki + Prometheus / cloud                             |
 | `alloy-profiles`  | DaemonSet   | Continuous profiling (Pyroscope)           | **Disabled locally**                                  |
 

@@ -102,7 +102,7 @@ The K8s `securityContext.runAsUser` **must** match the Dockerfile's `USER`. `run
 refuses mismatches at schedule time.
 
 Frontend is the documented exception to `readOnlyRootFilesystem: true` — see
-[Container hardening](https://shipsolid.github.io/notes/projects/app-signal-forge/infrastructure/hardening/) for why.
+[Container hardening](https://shipsolid.github.io/signal-forge/infrastructure/hardening/) for why.
 
 ## Commands
 
@@ -138,7 +138,7 @@ Auth: either `az login` first, or export `ARM_CLIENT_ID` + `ARM_CLIENT_SECRET` i
 `.env` loading).
 
 `push-slo-rules-to-mimir.sh` is the mode=cloud counterpart to `observability.slo_rules` — see
-[SLOs & burn-rate alerts](https://shipsolid.github.io/notes/projects/app-signal-forge/observability/slos/#where-the-alerts-are-evaluated).
+[SLOs & burn-rate alerts](https://shipsolid.github.io/signal-forge/observability/slos/#where-the-alerts-are-evaluated).
 mode=local needs no manual step; `deploy-local.sh` loads the same rules file automatically.
 
 ### Tests / CI
@@ -222,13 +222,14 @@ kubectl apply -k k8s/overlays/dev           # apply dev overlay
 
 ## Docs map
 
-Full docs for this app have moved to the ShipSolid platform notes site — `docs/` in this repo is
-now just a one-line pointer (`docs/README.md`), it no longer holds content.
+Full docs for this app live in **`docs/`** in this repo — that tree is the single source of truth.
+It is published to GitHub Pages at <https://shipsolid.github.io/signal-forge/> by the Starlight
+build in [`website/`](website/README.md) (`.github/workflows/deploy-docs.yml`); `website/` never
+holds content of its own — it generates `src/content/docs/` from `docs/` at build time.
 
-- **Canonical source** — read this absolute path directly with the `Read` tool, regardless of your
-  current working directory:
-  `app-signal-forge/docs/`
-  Start at `app-signal-forge/README.md` for the full index; the most load-bearing pages are:
+- **Canonical source** — `docs/` (start at `docs/README.md` for the full index). Read pages
+  directly with the `Read` tool regardless of your current working directory. The most load-bearing
+  pages are:
   - `infrastructure/hardening.md` — per-image UID table, Dockerfile conventions, frontend readOnly
     exception
   - `infrastructure/kustomize.md` — base + overlays layout, how deploy-local.sh consumes it

@@ -31,7 +31,9 @@ exclude: |
     src/frontend/(dist|coverage|\.angular|out-tsc)/.*|
     src/.*/(bin|obj)/.*|
     src/notification-svc/(\.venv|\.pytest_cache)/.*|
-    k8s/monitoring/grafana-helm/generated/.*
+    k8s/monitoring/grafana-helm/generated/.*|
+    website/package-lock\.json|
+    website/(node_modules|dist|\.astro|src/content/docs)/.*
   )
 
 fail_fast: false

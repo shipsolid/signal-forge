@@ -143,7 +143,7 @@ with tracer.start_as_current_span(
 detach(token)
 ```
 
-This produces a dashed arrow in [[tech/jaeger|Jaeger]] connecting the `order.publish` span
+This produces a dashed arrow in Jaeger connecting the `order.publish` span
 (order-api) to the `notification.process` span (notification-svc), both sharing the same `traceId`.
 
 ---
