@@ -1,0 +1,287 @@
+name: CD
+
+'on':
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deploy to DEV or promote an existing image SHA to UAT/PROD
+        required: true
+        type: choice
+        options:
+          - dev
+          - uat
+          - prod
+      image_tag:
+        description: Published GHCR tag; required as a 40-character commit SHA for UAT/PROD
+        required: false
+        type: string
+      confirm_production:
+        description: Confirm a production deployment
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: cd-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 20
+    env:
+      DEPLOY_ENABLED: ${{ vars.DEPLOY_ENABLED }}
+      K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE }}
+      KUBE_CONTEXT: ${{ vars.KUBE_CONTEXT }}
+      REGISTRY_ROOT: ghcr.io/${{ github.repository_owner }}/signal-forge
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve deployment configuration
+        id: config
+        shell: bash
+        env:
+          REQUESTED_IMAGE_TAG: ${{ inputs.image_tag }}
+          CONFIRM_PRODUCTION: ${{ inputs.confirm_production }}
+        run: |
+          set -euo pipefail
+
+          case "${{ inputs.environment }}" in
+            dev)  overlay="k8s/overlays/dev" ;;
+            uat)  overlay="k8s/overlays/staging" ;;
+            prod) overlay="k8s/overlays/prod" ;;
+            *)
+              echo "::error::Unsupported environment: ${{ inputs.environment }}"
+              exit 1
+              ;;
+          esac
+
+          if [[ "${{ inputs.environment }}" == "prod" && "$CONFIRM_PRODUCTION" != "true" ]]; then
+            echo "::error::Production deployment requires confirm_production=true"
+            exit 1
+          fi
+
+          if [[ "${{ inputs.environment }}" != "dev" && -z "$REQUESTED_IMAGE_TAG" ]]; then
+            echo "::error::image_tag is required when promoting to UAT or production"
+            exit 1
+          fi
+
+          image_tag="${REQUESTED_IMAGE_TAG:-$GITHUB_SHA}"
+          if [[ ! "$image_tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "::error::Invalid OCI image tag: $image_tag"
+            exit 1
+          fi
+
+          if [[ "${{ inputs.environment }}" != "dev" && ! "$image_tag" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::UAT and production promotion require the 40-character commit SHA deployed to DEV"
+            exit 1
+          fi
+
+          if [[ "${{ inputs.environment }}" == "dev" ]]; then
+            operation="deploy"
+          else
+            operation="promote"
+          fi
+
+          if [[ -n "$DEPLOY_ENABLED" && "$DEPLOY_ENABLED" != "true" && "$DEPLOY_ENABLED" != "false" ]]; then
+            echo "::error::DEPLOY_ENABLED must be true, false, or unset"
+            exit 1
+          fi
+
+          {
+            echo "overlay=$overlay"
+            echo "image_tag=$image_tag"
+            echo "namespace=${K8S_NAMESPACE:-otel-lab}"
+            echo "operation=$operation"
+          } >> "$GITHUB_OUTPUT"
+
+      # The prod overlay intentionally needs a gitignored secret file. The
+      # committed example lets an environment-less repository prove that the
+      # overlay renders, but this file is never used by the real apply step.
+      - name: Stage render-only production placeholders
+        if: inputs.environment == 'prod'
+        run: cp k8s/overlays/prod/prod.secrets.env.example k8s/overlays/prod/prod.secrets.env
+
+      - name: Render and validate deployment plan
+        env:
+          OVERLAY: ${{ steps.config.outputs.overlay }}
+          IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+
+          kubectl kustomize "$OVERLAY" \
+            | sed \
+                -e "s|image: otel-frontend:local|image: ${REGISTRY_ROOT}/otel-frontend:${IMAGE_TAG}|" \
+                -e "s|image: gateway-api:local|image: ${REGISTRY_ROOT}/gateway-api:${IMAGE_TAG}|" \
+                -e "s|image: order-api:local|image: ${REGISTRY_ROOT}/order-api:${IMAGE_TAG}|" \
+                -e "s|image: notification-svc:local|image: ${REGISTRY_ROOT}/notification-svc:${IMAGE_TAG}|" \
+            > deployment-plan.yaml
+
+          if grep -Eq 'image: (otel-frontend|gateway-api|order-api|notification-svc):local' deployment-plan.yaml; then
+            echo "::error::At least one local image reference remains in the deployment plan"
+            exit 1
+          fi
+
+          resource_count="$(grep -c '^kind:' deployment-plan.yaml)"
+          if [[ "$resource_count" -eq 0 ]]; then
+            echo "::error::Kustomize rendered no Kubernetes resources"
+            exit 1
+          fi
+          echo "Rendered $resource_count Kubernetes resources"
+
+      - name: Upload deployment plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-plan-${{ inputs.environment }}-${{ steps.config.outputs.image_tag }}
+          path: deployment-plan.yaml
+          retention-days: 7
+
+      - name: Explain render-only mode
+        if: vars.DEPLOY_ENABLED != 'true'
+        run: |
+          {
+            echo "## Render-only deployment"
+            echo
+            echo "The ${{ inputs.environment }} manifests rendered successfully."
+            echo "No cluster changes were made because DEPLOY_ENABLED is not true."
+            echo "Operation: ${{ steps.config.outputs.operation }} image ${{ steps.config.outputs.image_tag }}."
+            echo
+            echo "Configure the GitHub Environment named '${{ inputs.environment }}' with:"
+            echo "- variable DEPLOY_ENABLED=true"
+            echo "- variable K8S_NAMESPACE (optional; defaults to otel-lab)"
+            echo "- variable KUBE_CONTEXT (optional)"
+            echo "- secret KUBE_CONFIG (raw kubeconfig YAML)"
+            if [[ "${{ inputs.environment }}" == "prod" ]]; then
+              echo "- secret DB_SECRETS_ENV (KEY=VALUE lines matching prod.secrets.env.example)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ci.yml builds, scans, signs, and publishes each SHA once. UAT and PROD
+      # consume that exact artifact; CD never rebuilds environment-specific
+      # images. This is the Signal Forge equivalent of singlebuild promotion.
+      - name: Login to GHCR
+        if: vars.DEPLOY_ENABLED == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cosign
+        if: vars.DEPLOY_ENABLED == 'true'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Verify published images and signatures
+        if: vars.DEPLOY_ENABLED == 'true'
+        env:
+          IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+
+          services=(otel-frontend gateway-api order-api notification-svc)
+          for service in "${services[@]}"; do
+            image="${REGISTRY_ROOT}/${service}:${IMAGE_TAG}"
+            docker manifest inspect "$image" > /dev/null
+            cosign verify \
+              --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/ci.yml@refs/heads/main" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "$image" > /dev/null
+            echo "Verified $image"
+          done
+
+      - name: Configure cluster access
+        if: vars.DEPLOY_ENABLED == 'true'
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$KUBE_CONFIG" ]]; then
+            echo "::error::KUBE_CONFIG is required when DEPLOY_ENABLED=true"
+            exit 1
+          fi
+
+          kubeconfig="$RUNNER_TEMP/kubeconfig"
+          printf '%s\n' "$KUBE_CONFIG" > "$kubeconfig"
+          chmod 600 "$kubeconfig"
+          echo "KUBECONFIG=$kubeconfig" >> "$GITHUB_ENV"
+
+          if [[ -n "$KUBE_CONTEXT" ]]; then
+            kubectl --kubeconfig "$kubeconfig" config use-context "$KUBE_CONTEXT"
+          fi
+
+          kubectl --kubeconfig "$kubeconfig" cluster-info
+
+      - name: Stage production secrets for deployment
+        if: vars.DEPLOY_ENABLED == 'true' && inputs.environment == 'prod'
+        env:
+          DB_SECRETS_ENV: ${{ secrets.DB_SECRETS_ENV }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$DB_SECRETS_ENV" || "$DB_SECRETS_ENV" == *CHANGE_ME* ]]; then
+            echo "::error::DB_SECRETS_ENV is missing or still contains CHANGE_ME"
+            exit 1
+          fi
+
+          required_keys=(
+            MYSQL_PASSWORD
+            MYSQL_ROOT_PASSWORD
+            POSTGRES_PASSWORD
+            RABBITMQ_PASSWORD
+            GATEWAY_DB_CONNECTION
+            ORDER_DB_CONNECTION
+          )
+          for key in "${required_keys[@]}"; do
+            if ! grep -Eq "^${key}=.+" <<< "$DB_SECRETS_ENV"; then
+              echo "::error::DB_SECRETS_ENV is missing $key"
+              exit 1
+            fi
+          done
+
+          printf '%s\n' "$DB_SECRETS_ENV" > k8s/overlays/prod/prod.secrets.env
+          chmod 600 k8s/overlays/prod/prod.secrets.env
+
+      - name: Apply manifests
+        if: vars.DEPLOY_ENABLED == 'true'
+        env:
+          OVERLAY: ${{ steps.config.outputs.overlay }}
+          IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
+          TARGET_NAMESPACE: ${{ steps.config.outputs.namespace }}
+        run: |
+          set -euo pipefail
+          deployment_manifest="$RUNNER_TEMP/deployment.yaml"
+          trap 'rm -f "$deployment_manifest" k8s/overlays/prod/prod.secrets.env' EXIT
+
+          kubectl kustomize "$OVERLAY" \
+            | sed \
+                -e "s|image: otel-frontend:local|image: ${REGISTRY_ROOT}/otel-frontend:${IMAGE_TAG}|" \
+                -e "s|image: gateway-api:local|image: ${REGISTRY_ROOT}/gateway-api:${IMAGE_TAG}|" \
+                -e "s|image: order-api:local|image: ${REGISTRY_ROOT}/order-api:${IMAGE_TAG}|" \
+                -e "s|image: notification-svc:local|image: ${REGISTRY_ROOT}/notification-svc:${IMAGE_TAG}|" \
+            > "$deployment_manifest"
+
+          manifest_namespace="$(awk '/^  namespace: / { print $2; exit }' "$deployment_manifest")"
+          if [[ "$TARGET_NAMESPACE" != "$manifest_namespace" ]]; then
+            echo "::error::K8S_NAMESPACE=$TARGET_NAMESPACE does not match the overlay namespace $manifest_namespace"
+            exit 1
+          fi
+
+          kubectl apply -f "$deployment_manifest"
+          kubectl -n "$TARGET_NAMESPACE" wait \
+            --for=condition=Ready pod --all --timeout=300s
+
+          {
+            echo "## Deployment complete"
+            echo
+            echo "- Environment: ${{ inputs.environment }}"
+            echo "- Operation: ${{ steps.config.outputs.operation }}"
+            echo "- Namespace: $TARGET_NAMESPACE"
+            echo "- Image tag: $IMAGE_TAG"
+          } >> "$GITHUB_STEP_SUMMARY"
