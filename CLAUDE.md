@@ -228,8 +228,8 @@ Starlight engine in **`shipsolid/docs-site`** (its reusable
 `.github/workflows/build-deploy.yml@main`), invoked from
 [`.github/workflows/docs.yml`](.github/workflows/docs.yml). Per-repo settings — title, sidebar,
 cross-repo `[[wiki-link]]` resolution — live in [`docs-site.yaml`](docs-site.yaml). This repo holds
-**no Astro code**; `docs/` is the only docs input. The engine renders `docs/**` plus the top-level
-`README.md`; a `[[wiki-link]]` pass and a broken-link check run at build time.
+**no Astro code**; `docs/` is the only docs content tree. The engine renders `docs/**` plus the
+top-level `README.md`; a `[[wiki-link]]` pass and a broken-link check run at build time.
 
 - **Canonical source** — `docs/` (start at `docs/README.md` for the full index). Read pages
   directly with the `Read` tool regardless of your current working directory. The most load-bearing

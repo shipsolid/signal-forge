@@ -4,8 +4,9 @@ name: Docs
 # https://shipsolid.github.io/signal-forge/. Per-repo config: docs-site.yaml.
 #
 # @main is deliberate — this org owns shipsolid/docs-site and every consumer
-# tracks its main so engine fixes land without a version bump here. The engine's
-# own CI (tests/fixture-build.test.mjs) is the guard against a breaking change.
+# tracks its main so engine fixes land without a version bump here. The guard
+# against a breaking change is the engine repo's CI, which runs its end-to-end
+# fixture build (tests/fixture-build.test.mjs) on every change.
 #
 # One-time: repo Settings -> Pages -> Source = "GitHub Actions".
 
@@ -27,7 +28,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: pages-${{ github.ref }}
+  group: pages
   cancel-in-progress: false
 
 # No workflow-level permissions — the reusable workflow's build job needs only
@@ -42,4 +43,6 @@ jobs:
       id-token: write
     uses: shipsolid/docs-site/.github/workflows/build-deploy.yml@main
     with:
-      deploy: ${{ github.event_name != 'pull_request' }}
+      # Publish only from main: a push here is already main-filtered; a manual
+      # dispatch from a feature branch build-checks without touching prod Pages.
+      deploy: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
