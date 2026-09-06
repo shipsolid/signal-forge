@@ -8,7 +8,7 @@
 
 **Tech Stack:** Astro 7, `@astrojs/starlight` 0.42, `astro-mermaid`, `github-slugger`, `unist-util-visit`, `js-yaml`, Vitest, GitHub Actions (`workflow_call`, `actions/deploy-pages`).
 
-**Spec:** `docs/superpowers/specs/2026-09-06-centralized-docs-site-design.md` (in `signal-forge`)
+**Spec:** `superpowers/specs/2026-09-06-centralized-docs-site-design.md` (in `signal-forge`)
 
 ## Global Constraints
 
