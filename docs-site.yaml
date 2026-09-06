@@ -1,3 +1,6 @@
+# Consumer contract for the shared shipsolid/docs-site bespoke Astro engine. This
+# repository owns content and navigation policy only; theme/build implementation
+# remains in the shared engine invoked by .github/workflows/docs.yml.
 title: SignalForge
 description: >-
   OpenTelemetry microservices validation lab — architecture, services,
@@ -6,20 +9,25 @@ description: >-
 social:
   github: https://github.com/shipsolid/signal-forge
 
-sidebar:
-  - { label: Overview, link: / }
-  - { label: Architecture,   items: [{ autogenerate: { directory: architecture } }] }
-  - { label: Services,       items: [{ autogenerate: { directory: services } }] }
-  - { label: Observability,  items: [{ autogenerate: { directory: observability } }] }
-  - { label: Infrastructure, items: [{ autogenerate: { directory: infrastructure } }] }
-  - { label: Deployment,     items: [{ autogenerate: { directory: deployment } }] }
-  - { label: Operations,     items: [{ autogenerate: { directory: operations } }] }
-  - { label: API,            items: [{ autogenerate: { directory: api } }] }
-  - { label: Guides,         items: [{ autogenerate: { directory: guides } }] }
-  - label: Reference
-    items: [spec, otel-patterns, testing, project-readme]
+nav:
+  # Directory sections autogenerate so adding a page does not require a second
+  # navigation edit. Reference is explicit because its source pages live at the
+  # repository root or have stable curated names rather than one directory.
+  - { label: Architecture, dir: architecture }
+  - { label: Services, dir: services }
+  - { label: Observability, dir: observability }
+  - { label: Infrastructure, dir: infrastructure }
+  - { label: Deployment, dir: deployment }
+  - { label: Operations, dir: operations }
+  - { label: API, dir: api }
+  - { label: Guides, dir: guides }
+  - { label: Reference, items: [spec, otel-patterns, testing, project-readme] }
 
 wiki_links:
+  # Notes copied from the wider knowledge base may retain this source prefix;
+  # strip it before resolving local Signal Forge pages. Namespaces listed below
+  # deliberately resolve against the external notes site instead of being
+  # reported as broken local links.
   strip_prefixes: ["projects/app-signal-forge/"]
   external_base_url: https://shipsolid.github.io/notes
   external_namespaces:
