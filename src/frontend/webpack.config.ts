@@ -7,11 +7,13 @@ const FaroSourceMapUploaderPlugin = require('@grafana/faro-webpack-plugin');
 // ships the generated .js.map files to Grafana Cloud so that stack traces in
 // Faro error events are deobfuscated automatically.
 //
-// Required environment variables (set in CI, not locally):
+// Optional environment variable (supplied only by a deliberately configured
+// build; the current CI release workflow does not assume it exists):
 //   FARO_API_KEY  — Grafana Cloud stack API key with "sourcemaps:write" scope
 //
-// If FARO_API_KEY is absent the plugin is skipped so local / watch builds work
-// without credentials.
+// Source-map upload is independent of the immutable container digest. If the
+// key is absent, the plugin is skipped so builds still succeed, but browser
+// error stack traces remain minified until matching source maps are uploaded.
 
 const faroPlugins = process.env['FARO_API_KEY']
   ? [

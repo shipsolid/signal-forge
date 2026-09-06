@@ -5,6 +5,9 @@ metadata:
   namespace: otel-lab
 data:
   loki.yaml: |
+    # Single-process local profile: no auth, filesystem chunks, in-memory ring,
+    # and one replica. These values deliberately trade durability/HA/security for
+    # a quick lab bootstrap and must not be copied to a shared environment.
     auth_enabled: false
 
     server:
@@ -34,4 +37,6 @@ data:
             period: 24h
 
     ruler:
+      # There is no Alertmanager in this local stack. This preserves the normal
+      # Loki configuration shape but cannot deliver alerts until one is added.
       alertmanager_url: http://localhost:9093

@@ -88,24 +88,29 @@ k8s/app/<service-name>/
   service.yaml
 ```
 
-Required env vars in `deployment.yaml`:
+Required telemetry configuration in `deployment.yaml`:
 
 ```yaml
 - name: OTEL_SERVICE_NAME
   value: "<service-name>"
-- name: OTEL_EXPORTER_OTLP_ENDPOINT
-  value: "http://alloy-receiver.monitoring.svc.cluster.local:4317"
-- name: OTEL_EXPORTER_OTLP_PROTOCOL
-  value: "grpc"
-- name: OTEL_METRICS_EXEMPLAR_FILTER
-  value: "trace_based"
-- name: OTEL_RESOURCE_ATTRIBUTES
-  value: "service.namespace=otel-lab,service.version=1.0.0,deployment.environment=signal-forge-dev"
+envFrom:
+  - configMapRef:
+      name: signal-forge-app-env
 ```
 
-Add a `readinessProbe` and `livenessProbe` pointing at `/healthz`.
+`OTEL_SERVICE_NAME` remains service-specific in the Deployment. The shared
+ConfigMap carries the common OTLP endpoint, exemplar policy, and resource
+attributes; local deployment renders it from `k8s/infra/app-env.yaml.tmpl`,
+while CD creates the equivalent release-specific ConfigMap. Do not hardcode
+these common values in a new Deployment or bake environment configuration into
+an image.
 
-### 5. Register in the Makefile
+Add a lightweight `/healthz` liveness endpoint. Point the `livenessProbe` at it
+so an unavailable dependency does not cause a restart loop. If the service has
+critical runtime dependencies, expose a separate `/readyz` endpoint and point
+the `readinessProbe` there; otherwise both probes may use `/healthz`.
+
+### 5. Register the service in local and immutable-release build paths
 
 Add the image name to the `IMAGES` variable at the top of `Makefile`:
 
@@ -113,10 +118,23 @@ Add the image name to the `IMAGES` variable at the top of `Makefile`:
 IMAGES := otel-frontend gateway-api order-api notification-svc <service-name>
 ```
 
-Add the new manifest directory to both `deploy-cloud` and `deploy-local` targets:
+`deploy-local.sh` is the sole local deployment path; there are no Makefile
+`deploy-cloud` or `deploy-local` targets to extend. Register the new manifest
+directory in the Kustomize base/overlay composition and, if it has a local
+Docker build, add the image to `conf.yml` as well.
 
-```makefile
-kubectl apply -f k8s/app/<service-name>/
+The CI/CD release contract is intentionally explicit for the current four
+services. A fifth deployable image also requires updating the CI build matrix,
+release-manifest validation, `scripts/ci/render_deployment.py`, its policy
+tests, and the CD health/rollback service lists. This prevents a partial
+service set from being accidentally promoted.
+
+For the local base manifest, add the service directory to the appropriate
+Kustomization rather than using raw `kubectl apply`:
+
+```yaml
+# k8s/base/kustomization.yaml or the owning sub-kustomization
+- ../app/<service-name>
 ```
 
 ### 6. Write tests
@@ -151,7 +169,7 @@ Update the following cross-references:
 
 Before opening a PR:
 
-- [ ] `make test-unit` passes (all 73 + new tests green)
+- [ ] `make test-unit` passes (all existing and new unit suites green)
 - [ ] `make build` succeeds (all Docker images build cleanly)
 - [ ] New service has a `docs/services/<name>.md`
 - [ ] OTel contracts documented in `docs/observability/otel-contracts.md`

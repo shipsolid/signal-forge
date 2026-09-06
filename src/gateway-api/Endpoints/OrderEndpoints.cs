@@ -38,8 +38,10 @@ public static class OrderEndpoints
             return Results.ValidationProblem(new Dictionary<string, string[]>
             { ["description"] = [$"Description is required and must be {OrderLimits.MaxDescriptionLength} characters or fewer."] });
 
-        // ActivityKind.Client: this span initiates an outbound call to order-api.
-        // Kind=Client is the OTel convention for synchronous RPC/HTTP client spans.
+        // This is a business-operation wrapper around the generated gRPC client
+        // span, not a replacement for it. ActivityKind.Client makes the gateway
+        // fanout visible as outbound work while the instrumentation supplies the
+        // protocol-specific rpc.* attributes on its nested span.
         using var activity = DiagnosticsConfig.ActivitySource.StartActivity("gateway.fanout", ActivityKind.Client);
         activity?.SetTag("order.project_id", dto.ProjectId);
 

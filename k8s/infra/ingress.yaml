@@ -42,7 +42,9 @@ spec:
     # production ingress should not have a plaintext catch-all sitting next
     # to its TLS-enforced host rule. If you're promoting this manifest to a
     # real environment, delete this second rule entirely rather than "fixing"
-    # it with an ssl-redirect annotation.
+    # it with an ssl-redirect annotation. The supported CD path runs
+    # scripts/ci/render_deployment.py after Kustomize and removes this fallback
+    # for QA/PROD; applying a non-dev overlay directly is therefore unsupported.
     - http:
         paths:
           - path: /api

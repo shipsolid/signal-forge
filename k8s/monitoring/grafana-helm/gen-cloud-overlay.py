@@ -6,6 +6,11 @@ grafana/k8s-monitoring chart.  Pass it to `helm upgrade -f values-local.yaml -f 
 
 Two calling modes, selected by the MODE env var:
 
+This is a legacy local-dev helper, not the CI/CD promotion mechanism. Its
+resource transforms intentionally stamp ``signal-forge-dev`` because it is
+consumed by deploy-local.sh-style flows; environment promotion instead renders
+runtime identity from the immutable release manifest.
+
   MODE=akv   (called from secrets-fetch-akv — raw AKV values, paths not yet appended)
     TEMPO_HOST   — tempo host without scheme, e.g. tempo-prod-29-....grafana.net
     TEMPO_USER   — Tempo instance ID
@@ -13,7 +18,7 @@ Two calling modes, selected by the MODE env var:
     MIMIR_USER   — Mimir instance ID
     LOKI_BASE    — raw Loki URL,   e.g. https://logs-prod-037.grafana.net
     LOKI_USER    — Loki instance ID
-    API_KEY      — shared glsa_... API key
+    API_KEY      — shared glc_... access-policy token used for data-plane writes
 
   MODE=env   (called from secrets-apply — pre-formatted values from .env)
     GRAFANA_CLOUD_TEMPO_ENDPOINT  — already "host:443"
@@ -47,6 +52,9 @@ if mode == "akv":
     api_key = os.environ["API_KEY"]
     tempo_endpoint = os.environ["TEMPO_HOST"] + ":443"
     tempo_user = os.environ["TEMPO_USER"]
+    # The external environment contract still supplies an OTLP-shaped Mimir URL,
+    # but this generator emits Prometheus remote_write destinations only. Keep
+    # the parsed value for input compatibility; it is not emitted below.
     mimir_otlp_url = os.environ["MIMIR_BASE"] + "/api/v1/otlp"
     mimir_prom_url = os.environ["MIMIR_BASE"] + "/api/prom/push"
     mimir_user = os.environ["MIMIR_USER"]
@@ -56,6 +64,8 @@ elif mode == "env":
     api_key = os.environ["GRAFANA_CLOUD_API_KEY"]
     tempo_endpoint = os.environ["GRAFANA_CLOUD_TEMPO_ENDPOINT"]
     tempo_user = os.environ["GRAFANA_CLOUD_TEMPO_USER"]
+    # See the AKV branch: this is an input-contract value, not an active OTLP
+    # destination in the generated overlay.
     mimir_otlp_url = os.environ["GRAFANA_CLOUD_MIMIR_ENDPOINT"]
     mimir_prom_url = re.sub(r"/api/v1/otlp$", "/api/prom/push", mimir_otlp_url)
     mimir_user = os.environ["GRAFANA_CLOUD_MIMIR_USER"]

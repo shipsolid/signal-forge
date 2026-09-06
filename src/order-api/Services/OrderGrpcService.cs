@@ -2,33 +2,25 @@
 // OrderGrpcService — gRPC service implementation
 // ============================================================
 // Implements the three RPCs defined in orders.proto:
-//   • CreateOrder  — unary: write DB + publish to RabbitMQ
+//   • CreateOrder  — unary: atomically write Order + OutboxMessage to PostgreSQL
 //   • GetOrdersByProject — server-streaming: stream rows from DB
 //   • GetOrder     — unary: single row lookup
 //
-// OTel trace shape for CreateOrder (the most important call), post-outbox-refactor:
+// OTel trace shape for CreateOrder (the most important call):
 //
 //   gateway-api: orders.OrderService/CreateOrder (gRPC client, Kind=CLIENT)
 //     └─ order-api: orders.OrderService/CreateOrder (gRPC server, Kind=SERVER)
 //          └─ order-api: order.create (custom, Kind=INTERNAL)
 //               └─ order-api: db.postgresql (EF Core INSERT of Order + OutboxMessage
-//                             in one SaveChanges call — the RabbitMQ publish is NOT
-//                             in this trace; see OutboxRelayWorker.cs)
+//                             in one atomic SaveChangesAsync unit)
 //
-// order.publish no longer lives here. It happens later, out-of-band, when
-// OutboxRelayWorker's poll picks up the OutboxMessage row and calls
-// OrderPublisher.PublishAsync — by which point this request has already
-// returned. That call starts its own root span (outbox.relay, see
-// OutboxRelayWorker.cs), disconnected from this trace: order.publish is a
-// child of outbox.relay, not of order.create. The RabbitMQ message headers
-// still carry the *original* request's traceparent (captured from
-// Activity.Current?.Id at write time, stored on OutboxMessage.TraceParent,
-// injected directly into headers — not via Activity/Propagators.Inject on
-// this now-long-gone Activity), so notification-svc's CONSUMER span links
-// back to order.create correctly. But nothing on the order-api side ties
-// order.publish/outbox.relay back to this trace — from here, a broker
-// outage or relay failure is invisible; you'd only see it in outbox.relay's
-// own orphaned trace or in the OutboxRelayWorker pod logs.
+// The RabbitMQ publish occurs later when OutboxRelayWorker polls the committed
+// row. It restores OutboxMessage.TraceParent as the parent context for
+// outbox.relay and order.publish, then also adds an ActivityLink to represent
+// the asynchronous boundary. As a result, a trace query can show
+// order.create -> outbox.relay -> order.publish -> notification processing,
+// while retry attempts remain separately observable sibling spans. See
+// OutboxRelayWorker.cs for the at-least-once and retry trade-offs.
 //
 // The gRPC server span is created automatically by AddAspNetCoreInstrumentation()
 // which hooks into the gRPC middleware.  The rpc.system, rpc.service, rpc.method
@@ -82,8 +74,9 @@ public class OrderGrpcService : Protos.OrderService.OrderServiceBase
 
         var sw = Stopwatch.StartNew();
 
-        // Custom span wrapping the full business operation (DB write + publish).
-        // The gRPC server span is the PARENT; this is a CHILD.
+        // Custom span wraps the synchronous business operation: Order + outbox
+        // persistence. RabbitMQ delivery is deliberately deferred to the relay
+        // so broker availability cannot split a committed order from its event.
         using var activity = DiagnosticsConfig.ActivitySource.StartActivity("order.create");
         activity?.SetTag("order.project_id", request.ProjectId);
         activity?.SetTag("order.amount", request.Amount);
@@ -119,7 +112,7 @@ public class OrderGrpcService : Protos.OrderService.OrderServiceBase
             IdempotencyKey = idempotencyKey
         };
 
-        // Write order + outbox message in a single SaveChanges call (one DB transaction).
+        // Persist Order + OutboxMessage in one atomic SaveChangesAsync unit.
         // If this pod crashes after this point, OutboxRelayWorker will pick up the
         // unprocessed OutboxMessage on restart — guaranteeing at-least-once delivery.
         _db.Orders.Add(order);

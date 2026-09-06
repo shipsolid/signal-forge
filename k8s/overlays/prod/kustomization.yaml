@@ -13,12 +13,15 @@ labels:
   - pairs:
       signal-forge.environment: prod
 
-# Fail-closed override of base's db-secrets: base ships the placeholder dev
+# Direct Kustomize usage: fail-closed override of base's db-secrets. Base ships
+# the placeholder dev
 # credentials from k8s/infra/secrets.yaml (gateway_pw, root_pw, ...) with no
 # structural gate stopping prod from silently inheriting them. prod.secrets.env
 # is gitignored (ship only prod.secrets.env.example) — without a real one in
 # place, `kubectl kustomize`/`apply -k k8s/overlays/prod` fails outright instead
-# of deploying prod-sized replicas with dev-grade secrets. `behavior: replace`
+# of deploying prod-sized replicas with dev-grade secrets. CD supplies a temporary
+# example input solely to render then strips all Secret objects, creating the real
+# `db-secrets` separately from protected GitHub Environment values. `behavior: replace`
 # + Kustomize's default hash suffix means every secretKeyRef: {name: db-secrets}
 # elsewhere in the build gets automatically repointed at the new hashed name.
 secretGenerator:

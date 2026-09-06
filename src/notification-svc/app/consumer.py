@@ -77,11 +77,16 @@ DLQ_QUEUE = "notifications.dlq"
 _counter = None
 _proc_hist = None
 _email_hist = None
+# Instrument creation is lazy because setup_telemetry() must install the global
+# MeterProvider first. The lock keeps the singleton contract correct if callback
+# execution later becomes concurrent or test runners invoke the helper in parallel.
 _instruments_lock = threading.Lock()
 
 # Readiness state: True only while start_consumer() is actively inside
 # channel.start_consuming(). Read by main.py's /readyz probe — a stuck or
 # backed-off consumer (see _consumer_loop's retry wrapper) must not report ready.
+# It is a local consumer-loop signal, not a guarantee that every future broker
+# operation or downstream notification write will succeed end to end.
 _connected = False
 
 
@@ -145,7 +150,8 @@ def handle_order_created(ch, method, properties, body: bytes) -> None:
 
     Idempotency: RabbitMQ may deliver a message more than once if the
     consumer crashes after processing but before ACKing.  The Redis dedup
-    key (TTL 1h) guards against duplicate notifications.
+    key (TTL 24h) guards against duplicate notifications across the lab's
+    retention window.
 
     Failure handling distinguishes transient infra failures from poison
     messages so a Redis blip doesn't permanently dead-letter live traffic:

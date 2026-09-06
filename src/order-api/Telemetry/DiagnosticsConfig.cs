@@ -39,5 +39,8 @@ public static class DiagnosticsConfig
         Meter.CreateHistogram<double>(
             "orders.processing.duration",
             unit: "ms",
-            description: "Time from order create to RabbitMQ publish");
+            // Stopwatch stops after the Order + OutboxMessage database commit.
+            // Broker delivery is asynchronous work measured by relay tracing, not
+            // part of the user-facing CreateOrder RPC latency.
+            description: "Time to persist an order and its outbox message");
 }

@@ -10,7 +10,8 @@ Startup sequence (order matters for OTel correctness):
 REST endpoints:
   GET /notifications      — list last 100 notifications from Redis
   GET /notifications/{id} — get a single notification by ID
-  GET /healthz            — liveness/readiness probe (excluded from traces)
+  GET /healthz            — process liveness probe (excluded from traces)
+  GET /readyz             — consumer/Redis dependency readiness probe
 
 The RabbitMQ consumer runs in a background daemon thread.  It blocks on
 pika's start_consuming() loop, which is incompatible with asyncio, hence
@@ -68,9 +69,10 @@ async def lifespan(app: FastAPI):
     t.start()
     logger.info("Notification service started, consumer thread running")
     yield
-    # FastAPI calls this on SIGTERM / KeyboardInterrupt.
-    # The consumer thread is a daemon so it exits automatically when the main
-    # process exits — no explicit cleanup needed for the lab.
+    # FastAPI calls this on SIGTERM / KeyboardInterrupt. The daemon thread exits
+    # with the process; this lab deliberately does not call stop_consuming() or
+    # flush telemetry. Kubernetes may redeliver an unacknowledged message after
+    # termination, which is why the consumer's Redis deduplication is required.
     logger.info("Notification service shutting down")
 
 
@@ -172,9 +174,9 @@ def list_notifications():
       • Each notification is stored as a Redis hash at
         "notifications:{id}" with TTL 24h.
 
-    OTel: the Redis GET and LRANGE commands appear as child spans under the
-    FastAPI server span, instrumented by RedisInstrumentation() called in
-    redis_client.py.
+    OTel: Redis GET and LRANGE commands appear as child spans under the FastAPI
+    server span. RedisInstrumentation is registered once by
+    telemetry.py::setup_telemetry before routes begin serving traffic.
     """
     r = get_redis()
     # LRANGE 0 99 = first 100 elements (most recent, since we LPUSH).

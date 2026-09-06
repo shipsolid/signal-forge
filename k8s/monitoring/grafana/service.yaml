@@ -1,3 +1,6 @@
+# Stable in-cluster receiver address for applications and the frontend Faro
+# proxy in local mode. It selects the node-local Alloy DaemonSet; cloud mode
+# obtains its collector endpoint from the Helm-managed k8s-monitoring stack.
 apiVersion: v1
 kind: Service
 metadata:

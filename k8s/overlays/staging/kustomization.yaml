@@ -1,4 +1,7 @@
-# Staging overlay — larger replica counts, stricter limits, staging ingress host.
+# Historical staging overlay reused by CD as the `qa` resource topology. The CD
+# renderer normalizes its inherited labels to `qa` and removes dev-only ingress
+# fallback routing. This overlay increases replicas and changes the hostname; it
+# does not define stricter resource limits.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

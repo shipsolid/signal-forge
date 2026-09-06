@@ -7,8 +7,9 @@
 //   • The order-api pod crashes between the DB write and the publish.
 //
 // Atomicity guarantee:
-//   OrderGrpcService writes Order + OutboxMessage in a single SaveChanges
-//   call (one DB transaction).  If the pod crashes, EnsureCreated() on
+//   OrderGrpcService writes Order + OutboxMessage in one atomic SaveChangesAsync
+//   unit. The provider owns the transaction details; if the pod crashes,
+//   EnsureCreated() on
 //   restart leaves the OutboxMessage unprocessed; this worker picks it up.
 //
 // Idempotency:

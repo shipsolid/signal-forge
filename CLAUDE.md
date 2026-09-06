@@ -156,9 +156,13 @@ Note the Testcontainers dependency: `order-api.Tests`' `OutboxRelayWorkerTests` 
 `postgres:16.4` container, so `dotnet test src/order-api.Tests/...` requires a running Docker
 daemon.
 
-CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs all four test stacks + `pip-audit` +
-`dotnet list package --vulnerable` + Trivy scan (HIGH/CRITICAL, fixed-only) + Syft SBOM
-(CycloneDX) + cosign keyless sign on `main` push.
+CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs Gitleaks,
+repository policy checks, .NET/Python/frontend tests, protobuf-contract
+validation, CodeQL, dependency analysis, Trivy IaC/container scans, and
+observability-as-policy validation. Only a successful trusted `main` run then
+builds each service image once, generates a CycloneDX SBOM, signs/attests the
+registry digest with keyless Cosign, and publishes the immutable release
+manifest consumed by CD.
 
 ### Pre-commit hooks
 
@@ -184,8 +188,9 @@ merge-conflict markers, large-file guard, YAML/JSON/TOML syntax). ESLint for the
 Ruff's full lint rule catalogue are intentionally deferred — see `.pre-commit-config.yaml`'s header
 comment for why.
 
-CI runs `pre-commit run --all-files` in its own job (`workflow_dispatch`-only, like the rest of
-`ci.yml`).
+CI runs `pre-commit run --all-files` in its own blocking job for matching pull
+requests, pushes to `main`, and manual dispatch. Image publication remains
+main-only after every blocking job succeeds.
 
 ### Kustomize
 

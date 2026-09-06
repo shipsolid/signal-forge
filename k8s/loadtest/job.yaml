@@ -1,15 +1,22 @@
+# Manual, data-generating lab workload. It creates projects/orders and injects a
+# controlled amount of slow/error traffic to exercise RED metrics and trace/log
+# correlation; do not apply it to production or treat it as a read-only smoke test.
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: k6-loadtest
   namespace: otel-lab
 spec:
+  # Retrying a failed Job would repeat writes and distort the intended traffic
+  # profile. Surface the first failure so an operator decides whether to rerun.
   backoffLimit: 0
   template:
     spec:
       restartPolicy: Never
       containers:
         - name: k6
+          # Pin this before using the Job for a reproducible performance baseline;
+          # `latest` is acceptable only for the disposable lab exercise here.
           image: grafana/k6:latest
           args: ["run", "/scripts/script.js"]
           resources:
@@ -38,6 +45,8 @@ data:
     import { check, sleep } from 'k6';
 
     export const options = {
+      // Warm-up, sustained load, then drain. The deliberately small numbers keep
+      // the lab inexpensive while still producing enough spans/metrics to inspect.
       stages: [
         { duration: '30s', target: 5 },
         { duration: '2m',  target: 20 },
@@ -71,6 +80,8 @@ data:
       http.get(`${BASE}/api/projects/${projectId}`);
       http.get(`${BASE}/api/projects/${projectId}/orders`);
 
+      // Intentional fault traffic validates that latency/error telemetry, alerts,
+      // and trace correlation distinguish expected experiments from background use.
       if (Math.random() < 0.1) http.get(`${BASE}/api/slow`);
       if (Math.random() < 0.05) http.get(`${BASE}/api/error`);
 

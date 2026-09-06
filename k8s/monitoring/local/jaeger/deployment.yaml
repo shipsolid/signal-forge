@@ -1,3 +1,5 @@
+# Local all-in-one trace backend. It keeps storage and collector/UI in one pod
+# for a disposable lab, so it provides neither HA nor durable trace retention.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,6 +17,8 @@ spec:
     spec:
       containers:
         - name: jaeger
+          # all-in-one is intentionally a developer topology; production trace
+          # storage/export is provided by the Grafana Cloud/Helm path instead.
           image: jaegertracing/all-in-one:1.55
           env:
             - name: COLLECTOR_OTLP_ENABLED
@@ -50,4 +54,6 @@ spec:
     - name: otlp-http
       port: 4318
       targetPort: 4318
+  # The UI NodePort is for a local browser only; OTLP is also available through
+  # in-cluster Service DNS for the app/Alloy pipeline.
   type: NodePort

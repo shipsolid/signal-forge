@@ -49,6 +49,9 @@ export const resilienceInterceptor: HttpInterceptorFn = (req, next) => {
       ? response$.pipe(
           retry({
             count: MAX_RETRIES,
+            // RxJS supplies a one-based retry index, yielding 500 ms then
+            // 1,000 ms here. Keep the calculation tied to GET-only retries so
+            // a transient downstream failure does not duplicate a mutation.
             delay: (_, retryIndex) => timer(retryIndex * RETRY_BASE_DELAY_MS),
           }),
         )

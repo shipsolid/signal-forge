@@ -1,3 +1,5 @@
+# Local single-replica Loki. The PVC keeps logs across a pod restart, but the
+# filesystem backend and in-memory ring provide no replication or HA guarantee.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -43,6 +45,9 @@ spec:
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:
+          # Capacity is intentionally small for a lab and has no retention policy;
+          # clear/recreate it when resetting experiments rather than relying on it
+          # as an operational log archive.
           requests:
             storage: 2Gi
 ---

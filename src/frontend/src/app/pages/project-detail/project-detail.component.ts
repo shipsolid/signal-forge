@@ -41,6 +41,10 @@ export class ProjectDetailComponent implements OnInit {
   ngOnInit(): void {
     const id = Number(this.route.snapshot.paramMap.get('id'));
     this.loading = true;
+    // Project metadata and its order stream can load concurrently. forkJoin
+    // emits one complete view-model only after both requests finish, and fails
+    // the combined result if either fails, which intentionally keeps the UI's
+    // loading/error state all-or-nothing rather than showing mismatched data.
     forkJoin({
       project: this.api.getProject(id),
       orders: this.api.getOrdersByProject(id),

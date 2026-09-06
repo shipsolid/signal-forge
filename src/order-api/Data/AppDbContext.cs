@@ -30,7 +30,10 @@ public class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id);
             entity.Property(e => e.TraceParent).HasMaxLength(55); // W3C traceparent is always 55 chars
-            entity.HasIndex(e => e.ProcessedAt); // relay worker queries WHERE ProcessedAt IS NULL
+            // Supports the relay's `WHERE ProcessedAt IS NULL` pending-message
+            // predicate and its FIFO CreatedAt polling path without scanning
+            // already-published rows as the outbox grows.
+            entity.HasIndex(e => e.ProcessedAt);
             // Cascade delete: removing an order also removes its outbox entry
             entity.HasOne(e => e.Order)
                   .WithMany()

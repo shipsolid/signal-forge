@@ -74,6 +74,9 @@ export class CreateOrderComponent implements OnInit {
           this.createdId = res.id;
           this.success = true;
           this.submitting = false;
+          // Presentation-only pause after a successful write. It is not a
+          // readiness/consistency wait: the API response already represents the
+          // committed order, while asynchronous notification delivery may follow.
           setTimeout(() => this.router.navigate(['/projects', this.projectId]), 1500);
         },
         error: (err) => {

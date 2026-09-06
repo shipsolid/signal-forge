@@ -1,9 +1,15 @@
+# Local-only Grafana profile. The single replica, NodePort, in-manifest
+# `admin/admin` credentials, and ConfigMap provisioning make first-run lab
+# exploration simple but are not a production authentication/HA design.
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-provisioning-datasources
   namespace: otel-lab
 data:
+  # These embedded provisioning files are mounted by the Grafana Deployment
+  # below, keeping the local data-source topology reproducible without a manual
+  # UI configuration step.
   datasources.yaml: |
     apiVersion: 1
     datasources:
@@ -68,6 +74,8 @@ spec:
     spec:
       containers:
         - name: grafana
+          # Static lab credentials only. Production must use a managed identity
+          # or secret-backed bootstrap flow and must not inherit this manifest.
           image: grafana/grafana:11.0.0
           env:
             - name: GF_SECURITY_ADMIN_USER
@@ -115,4 +123,6 @@ spec:
     - port: 3000
       targetPort: 3000
       nodePort: 30300
+  # Browser convenience for k3d. A production dashboard must use authenticated
+  # ingress rather than exposing Grafana through every cluster node.
   type: NodePort

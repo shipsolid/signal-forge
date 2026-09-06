@@ -37,11 +37,11 @@ export function scrubTelemetryItem(item: TransportItem): TransportItem | null {
   return item;
 }
 
-// Runtime env vars mounted into /assets/env.js via a K8s ConfigMap (see
-// deploy-local.sh's apply_frontend_env_configmap()).  Allows the collector URL
-// to be changed per environment without rebuilding the image.  Falls back to
-// the Grafana Cloud collector URL for production and the Angular environment
-// file for local `ng serve` development.
+// Runtime env vars are mounted into /assets/env.js through the frontend-env-js
+// ConfigMap. deploy-local.sh renders it for k3d and scripts/ci/render_deployment.py
+// renders it for immutable CI/CD promotion. This changes the collector/API URL
+// per environment without rebuilding the browser image. It falls back to the
+// Angular environment file for local `ng serve` development.
 // window.__ENV's type lives in src/window-env.d.ts, not here — see that file for why.
 
 export function initFaro(): void {

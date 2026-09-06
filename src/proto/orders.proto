@@ -5,14 +5,15 @@ package orders;
 option csharp_namespace = "OrderApi.Protos";
 
 // OrderService manages the order lifecycle for the otel-lab.
-// Called by gateway-api (gRPC client) over h2c (HTTP/2 cleartext) on port 5001.
+// Called by gateway-api (gRPC client) over h2c (HTTP/2 cleartext) on port 5002.
 // All three RPCs are instrumented automatically by Grpc.Net.Client and
 // AddGrpcClientInstrumentation(), producing rpc.system/rpc.service/rpc.method spans.
 service OrderService {
-  // CreateOrder validates the request, persists the order to PostgreSQL, and
-  // publishes an order.created event to RabbitMQ with W3C traceparent injected
-  // into the message headers for async trace propagation.
-  // Errors: INVALID_ARGUMENT (validation), INTERNAL (DB/broker failure).
+  // CreateOrder validates the request and atomically persists the Order plus an
+  // OutboxMessage to PostgreSQL. OutboxRelayWorker publishes order.created later,
+  // so a transient broker outage does not fail an already-committed RPC. The
+  // stored W3C traceparent preserves asynchronous trace continuity.
+  // Errors: INVALID_ARGUMENT (validation), INTERNAL (DB failure).
   rpc CreateOrder (CreateOrderRequest) returns (CreateOrderResponse);
 
   // GetOrdersByProject streams all orders for a project in insertion order.
