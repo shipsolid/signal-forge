@@ -28,7 +28,7 @@ jobs:
   deploy:
     name: Deploy + validate ${{ inputs.environment }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     environment:
       name: ${{ inputs.environment }}
       url: ${{ vars.ENVIRONMENT_URL }}
@@ -44,6 +44,10 @@ jobs:
       OBSERVABILITY_GATE_ENABLED: ${{ vars.OBSERVABILITY_GATE_ENABLED }}
       OBSERVABILITY_GATE_URL: ${{ vars.OBSERVABILITY_GATE_URL }}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
+      RELEASE_CI_RUN_ID: ${{ inputs.ci_run_id }}
+      RELEASE_GIT_SHA: ${{ inputs.git_sha }}
+      TARGET_ENVIRONMENT: ${{ inputs.environment }}
+      KUSTOMIZE_OVERLAY: ${{ inputs.overlay }}
     steps:
       - name: Checkout the exact release commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
@@ -63,12 +67,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! "${{ inputs.environment }}" =~ ^(dev|qa|prod)$ ]]; then
+          if [[ ! "$TARGET_ENVIRONMENT" =~ ^(dev|qa|prod)$ ]]; then
             echo "::error::Unsupported environment"
             exit 1
           fi
-          if [[ ! "${{ inputs.git_sha }}" =~ ^[0-9a-f]{40}$ ]]; then
+          if [[ ! "$RELEASE_GIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::Release commit must be a full SHA"
+            exit 1
+          fi
+          if [[ ! "$RELEASE_CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Release CI run ID must be numeric"
+            exit 1
+          fi
+          case "$TARGET_ENVIRONMENT" in
+            dev) expected_overlay=k8s/overlays/dev ;;
+            qa) expected_overlay=k8s/overlays/staging ;;
+            prod) expected_overlay=k8s/overlays/prod ;;
+          esac
+          if [[ "$KUSTOMIZE_OVERLAY" != "$expected_overlay" ]]; then
+            echo "::error::Overlay does not match the target environment"
             exit 1
           fi
           if [[ ! "$DEPLOY_ENABLED" =~ ^(true|false)?$ ]]; then
@@ -80,8 +97,8 @@ jobs:
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           expected_root="ghcr.io/${owner}/signal-forge"
           jq -e \
-            --arg sha "${{ inputs.git_sha }}" \
-            --argjson run_id "${{ inputs.ci_run_id }}" \
+            --arg sha "$RELEASE_GIT_SHA" \
+            --argjson run_id "$RELEASE_CI_RUN_ID" \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg root "$expected_root" '
               .schema_version == 1 and
@@ -103,6 +120,7 @@ jobs:
           if [[ "$DEPLOY_ENABLED" == "true" ]]; then
             required_values=(
               ENVIRONMENT_URL
+              FARO_COLLECTOR_URL
               OBSERVABILITY_GATE_URL
               OTEL_EXPORTER_OTLP_ENDPOINT
             )
@@ -143,23 +161,32 @@ jobs:
             fi
           }
           trap cleanup EXIT
-          if [[ "${{ inputs.environment }}" == "prod" && ! -f "$prod_secrets" ]]; then
+          if [[ "$TARGET_ENVIRONMENT" == "prod" && ! -f "$prod_secrets" ]]; then
             cp "${prod_secrets}.example" "$prod_secrets"
             created_prod_secrets=true
           fi
 
-          kubectl kustomize "${{ inputs.overlay }}" > raw-deployment-plan.yaml
+          kubectl kustomize "$KUSTOMIZE_OVERLAY" > raw-deployment-plan.yaml
           namespace="${K8S_NAMESPACE:-otel-lab}"
           otel_endpoint="${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy.monitoring.svc.cluster.local:4317}"
+          public_url="$ENVIRONMENT_URL"
+          if [[ -z "$public_url" ]]; then
+            if [[ "$TARGET_ENVIRONMENT" == "dev" ]]; then
+              public_url=http://signal-forge.local
+            else
+              public_url="https://${TARGET_ENVIRONMENT}.signal-forge.invalid"
+            fi
+          fi
           python scripts/ci/render_deployment.py \
             --input raw-deployment-plan.yaml \
             --output deployment-plan.yaml \
             --release-manifest release-manifest.json \
             --namespace "$namespace" \
-            --environment "${{ inputs.environment }}" \
+            --environment "$TARGET_ENVIRONMENT" \
             --otel-endpoint "$otel_endpoint" \
             --faro-url "$FARO_COLLECTOR_URL" \
-            --api-base-url /api
+            --api-base-url /api \
+            --public-url "$public_url"
 
           if grep -Eq 'image: .+:local|imagePullPolicy: Never' deployment-plan.yaml; then
             echo "::error::Local-only image configuration remains in the plan"
@@ -184,9 +211,9 @@ jobs:
           {
             echo "## Render-only deployment"
             echo
-            echo "Environment: ${{ inputs.environment }}"
-            echo "Release commit: ${{ inputs.git_sha }}"
-            echo "CI run: ${{ inputs.ci_run_id }}"
+            echo "Environment: $TARGET_ENVIRONMENT"
+            echo "Release commit: $RELEASE_GIT_SHA"
+            echo "CI run: $RELEASE_CI_RUN_ID"
             echo
             echo "No cluster changes were made because DEPLOY_ENABLED is not true."
             echo "Set environment-scoped variables and secrets before enabling deploys."
@@ -321,16 +348,29 @@ jobs:
         run: |
           set -euo pipefail
           namespace="${K8S_NAMESPACE:-otel-lab}"
+          kubectl apply --dry-run=server -f deployment-plan.yaml > /dev/null
           kubectl apply -f deployment-plan.yaml
 
-          for workload in mysql postgres rabbitmq; do
-            kubectl -n "$namespace" rollout status \
-              "statefulset/$workload" --timeout=300s
+          resources=(
+            statefulset/mysql
+            statefulset/postgres
+            statefulset/rabbitmq
+            deployment/gateway-api
+            deployment/order-api
+            deployment/notification-svc
+            deployment/otel-frontend
+            deployment/redis
+          )
+          pids=()
+          for resource in "${resources[@]}"; do
+            kubectl -n "$namespace" rollout status "$resource" --timeout=300s &
+            pids+=("$!")
           done
-          for workload in gateway-api order-api notification-svc otel-frontend redis; do
-            kubectl -n "$namespace" rollout status \
-              "deployment/$workload" --timeout=300s
+          rollout_status=0
+          for pid in "${pids[@]}"; do
+            wait "$pid" || rollout_status=1
           done
+          exit "$rollout_status"
 
       - name: Gate — deployment health and exact image digests
         if: vars.DEPLOY_ENABLED == 'true'
@@ -386,7 +426,7 @@ jobs:
             "$base_url/api/projects/" \
             | jq -e 'type == "array"' > /dev/null
 
-      - name: Gate — telemetry, golden signals, and SLO policy
+      - name: Gate — configured observability release policy
         if: vars.DEPLOY_ENABLED == 'true'
         env:
           OBSERVABILITY_GATE_TOKEN: ${{ secrets.OBSERVABILITY_GATE_TOKEN }}
@@ -397,11 +437,14 @@ jobs:
             --fail
             --silent
             --show-error
+            --connect-timeout 10
             --get
-            --data-urlencode "environment=${{ inputs.environment }}"
-            --data-urlencode "git_sha=${{ inputs.git_sha }}"
-            --data-urlencode "image_sha=${{ inputs.git_sha }}"
-            --data-urlencode "ci_run_id=${{ inputs.ci_run_id }}"
+            --max-time 60
+            --data-urlencode "environment=$TARGET_ENVIRONMENT"
+            --data-urlencode "git_sha=$RELEASE_GIT_SHA"
+            --data-urlencode "image_sha=$RELEASE_GIT_SHA"
+            --data-urlencode "ci_run_id=$RELEASE_CI_RUN_ID"
+            --data-urlencode "required_services=gateway-api,order-api,notification-svc"
             --data-urlencode "required_signals=metrics,logs,traces"
             --data-urlencode "required_attributes=service.name,service.version,deployment.environment"
           )
@@ -416,7 +459,7 @@ jobs:
               echo "Observability gate passed: $summary"
               ;;
             warn)
-              if [[ "${{ inputs.environment }}" == "prod" ]]; then
+              if [[ "$TARGET_ENVIRONMENT" == "prod" ]]; then
                 echo "::error::Production observability warning: $summary"
                 exit 1
               fi
@@ -434,6 +477,7 @@ jobs:
 
       - name: Gate — OWASP ZAP baseline (DEV only)
         if: inputs.environment == 'dev' && vars.DEPLOY_ENABLED == 'true'
+        timeout-minutes: 10
         uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25  # v0.15.0
         with:
           target: ${{ vars.ENVIRONMENT_URL }}
@@ -475,9 +519,14 @@ jobs:
             kubectl -n "$namespace" set image \
               "deployment/$service" "$service=$previous" || rollback_status=1
           done
+          pids=()
           for service in gateway-api order-api notification-svc otel-frontend; do
             kubectl -n "$namespace" rollout status \
-              "deployment/$service" --timeout=300s || rollback_status=1
+              "deployment/$service" --timeout=300s &
+            pids+=("$!")
+          done
+          for pid in "${pids[@]}"; do
+            wait "$pid" || rollback_status=1
           done
           if [[ "$rollback_status" -ne 0 ]]; then
             echo "::error::Rollback did not restore every workload"
@@ -491,9 +540,9 @@ jobs:
           {
             echo "## Deployment passed"
             echo
-            echo "- Environment: ${{ inputs.environment }}"
-            echo "- Git commit: ${{ inputs.git_sha }}"
-            echo "- CI run: ${{ inputs.ci_run_id }}"
+            echo "- Environment: $TARGET_ENVIRONMENT"
+            echo "- Git commit: $RELEASE_GIT_SHA"
+            echo "- CI run: $RELEASE_CI_RUN_ID"
             echo "- Images: immutable release-manifest digests"
             echo "- Rollout: health, smoke, and observability gates passed"
           } >> "$GITHUB_STEP_SUMMARY"

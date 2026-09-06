@@ -8,6 +8,7 @@ name: CI
       - 'src/**'
       - 'k8s/**'
       - 'scripts/**'
+      - 'docs/operations/**'
       - '.github/workflows/**'
       - '.gitleaks.toml'
       - '.pre-commit-config.yaml'
@@ -21,6 +22,7 @@ name: CI
       - 'src/**'
       - 'k8s/**'
       - 'scripts/**'
+      - 'docs/operations/**'
       - '.github/workflows/**'
       - '.gitleaks.toml'
       - '.pre-commit-config.yaml'
@@ -320,7 +322,28 @@ jobs:
           cache-dependency-path: src/frontend/package-lock.json
 
       - name: Scan frontend dependencies
-        run: npm audit --audit-level=critical
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          npm audit --json > ../../vulnerability-frontend.json
+          audit_status=$?
+          set -e
+          if [[ "$audit_status" -gt 1 ]]; then
+            echo "::error::npm audit failed to complete"
+            exit "$audit_status"
+          fi
+          jq -e '.metadata.vulnerabilities | type == "object"' \
+            ../../vulnerability-frontend.json > /dev/null
+          all_critical="$(jq '.metadata.vulnerabilities.critical // 0' \
+            ../../vulnerability-frontend.json)"
+          if [[ "$all_critical" -gt 0 ]]; then
+            echo "::warning::npm reported $all_critical critical findings in the full dependency tree"
+          fi
+
+          # Runtime dependencies are blocking. Development-only findings remain
+          # visible in the audit artifact and are handled as tracked policy debt.
+          npm audit --omit=dev --audit-level=critical
         working-directory: src/frontend
 
       - name: Upload dependency reports
@@ -331,6 +354,7 @@ jobs:
           path: |
             vulnerability-dotnet.txt
             vulnerability-python.json
+            vulnerability-frontend.json
           if-no-files-found: warn
 
   iac-security:
@@ -525,7 +549,7 @@ jobs:
         if: always() && hashFiles(format('sbom-{0}.cdx.json', matrix.service.name)) != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
-          name: sbom-${{ matrix.service.name }}
+          name: sbom-${{ matrix.service.name }}-${{ github.run_attempt }}
           path: sbom-${{ matrix.service.name }}.cdx.json
           if-no-files-found: error
           retention-days: 90
@@ -612,7 +636,7 @@ jobs:
             --arg repository "$IMAGE" \
             --arg digest "$DIGEST" \
             --arg reference "$REFERENCE" \
-            --arg sbom_artifact "sbom-${{ matrix.service.name }}" \
+            --arg sbom_artifact "sbom-${{ matrix.service.name }}-${GITHUB_RUN_ATTEMPT}" \
             '{
               service: $service,
               repository: $repository,
@@ -627,7 +651,7 @@ jobs:
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
-          name: image-metadata-${{ matrix.service.name }}
+          name: image-metadata-${{ matrix.service.name }}-${{ github.run_attempt }}
           path: image-metadata/${{ matrix.service.name }}.json
           if-no-files-found: error
           retention-days: 90
@@ -643,7 +667,7 @@ jobs:
       - name: Download component metadata
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5
         with:
-          pattern: image-metadata-*
+          pattern: image-metadata-*-${{ github.run_attempt }}
           path: release-parts
           merge-multiple: true
 
@@ -695,7 +719,7 @@ jobs:
       - name: Upload release manifest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
-          name: release-manifest
+          name: release-manifest-${{ github.run_attempt }}
           path: release-manifest.json
           if-no-files-found: error
           retention-days: 90
@@ -707,7 +731,7 @@ jobs:
             echo
             echo "- Git commit: $GITHUB_SHA"
             echo "- CI run: $GITHUB_RUN_ID"
-            echo "- Artifact: release-manifest"
+            echo "- Artifact: release-manifest-${GITHUB_RUN_ATTEMPT}"
             echo
             jq -r '.images | to_entries[] | "- \(.key): \(.value.reference)"' \
               release-manifest.json

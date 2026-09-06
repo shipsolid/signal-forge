@@ -14,6 +14,8 @@ src/**/TestResults/
 src/**/__pycache__/
 src/**/*.pyc
 src/**/.pytest_cache/
+scripts/**/__pycache__/
+scripts/**/*.pyc
 
 # Angular / frontend build artefacts
 src/frontend/coverage/

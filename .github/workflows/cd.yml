@@ -4,7 +4,7 @@ name: CD
   workflow_dispatch:
     inputs:
       ci_run_id:
-        description: Successful main-branch CI run containing release-manifest
+        description: Successful main-branch CI run containing an immutable release manifest
         required: true
         type: string
       confirm_production:
@@ -33,6 +33,7 @@ jobs:
       manifest: ${{ steps.release.outputs.manifest }}
     steps:
       - name: Validate CI run
+        id: ci-run
         env:
           CI_RUN_ID: ${{ inputs.ci_run_id }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -45,6 +46,8 @@ jobs:
           fi
 
           run="$(curl --fail --silent --show-error \
+            --connect-timeout 10 \
+            --max-time 60 \
             --header "Accept: application/vnd.github+json" \
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "X-GitHub-Api-Version: 2022-11-28" \
@@ -63,13 +66,17 @@ jobs:
               exit 1
             }
           head_sha="$(jq -r '.head_sha' <<< "$run")"
-          echo "CI_HEAD_SHA=$head_sha" >> "$GITHUB_ENV"
+          run_attempt="$(jq -r '.run_attempt' <<< "$run")"
+          {
+            echo "head-sha=$head_sha"
+            echo "run-attempt=$run_attempt"
+          } >> "$GITHUB_OUTPUT"
           jq '{id, head_sha, event, conclusion, html_url}' <<< "$run"
 
       - name: Download release manifest from CI
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5
         with:
-          name: release-manifest
+          name: release-manifest-${{ steps.ci-run.outputs.run-attempt }}
           path: release
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
@@ -78,7 +85,9 @@ jobs:
       - name: Validate release manifest
         id: release
         env:
+          CI_HEAD_SHA: ${{ steps.ci-run.outputs.head-sha }}
           CI_RUN_ID: ${{ inputs.ci_run_id }}
+          CI_RUN_ATTEMPT: ${{ steps.ci-run.outputs.run-attempt }}
         shell: bash
         run: |
           set -euo pipefail
@@ -89,6 +98,7 @@ jobs:
             --arg repository "$GITHUB_REPOSITORY" \
             --arg head_sha "$CI_HEAD_SHA" \
             --argjson run_id "$CI_RUN_ID" \
+            --argjson run_attempt "$CI_RUN_ATTEMPT" \
             --arg root "$expected_root" '
               .schema_version == 1 and
               .git.repository == $repository and
@@ -96,6 +106,7 @@ jobs:
               .git.commit == $head_sha and
               .build.workflow == ".github/workflows/ci.yml" and
               .build.run_id == $run_id and
+              .build.run_attempt == $run_attempt and
               (.images | keys | sort == [
                 "gateway-api", "notification-svc", "order-api", "otel-frontend"
               ]) and
@@ -119,6 +130,7 @@ jobs:
             echo "## Release selected"
             echo
             echo "- CI run: $CI_RUN_ID"
+            echo "- CI run attempt: $CI_RUN_ATTEMPT"
             echo "- Git commit: $git_sha"
             echo
             jq -r '.images | to_entries[] | "- \(.key): \(.value.reference)"' "$manifest"

@@ -9,6 +9,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
@@ -39,6 +40,7 @@ class DeploymentRenderer:
         otel_endpoint: str,
         faro_url: str,
         api_base_url: str,
+        public_url: str,
     ) -> None:
         self.release = release
         self.namespace = namespace
@@ -46,6 +48,7 @@ class DeploymentRenderer:
         self.otel_endpoint = otel_endpoint
         self.faro_url = faro_url
         self.api_base_url = api_base_url
+        self.public_url = public_url
         self.git_sha = self._required_string(release, "git", "commit")
         self.run_id = str(self._required_value(release, "build", "run_id"))
         self.image_references = self._validate_release_images()
@@ -58,6 +61,13 @@ class DeploymentRenderer:
             raise RenderError("OTLP endpoint must use http:// or https://")
         if not api_base_url.startswith(("/", "http://", "https://")):
             raise RenderError("API base URL must be an absolute URL or root-relative path")
+
+        parsed_public_url = urlparse(public_url)
+        if not parsed_public_url.hostname or parsed_public_url.scheme not in {"http", "https"}:
+            raise RenderError("public URL must include an http:// or https:// hostname")
+        if environment in {"qa", "prod"} and parsed_public_url.scheme != "https":
+            raise RenderError(f"{environment} public URL must use HTTPS")
+        self.public_host = parsed_public_url.hostname
 
     @staticmethod
     def _required_value(document: dict[str, Any], *path: str) -> Any:
@@ -108,6 +118,7 @@ class DeploymentRenderer:
             if not isinstance(document, dict):
                 raise RenderError("Kustomize emitted a non-object YAML document")
 
+            self._normalize_environment_labels(document)
             kind = document.get("kind")
             metadata = document.get("metadata") or {}
             name = metadata.get("name")
@@ -120,6 +131,8 @@ class DeploymentRenderer:
 
             if kind == "Deployment":
                 self._render_deployment(document, replaced)
+            elif kind == "Ingress" and name == "otel-lab-ingress":
+                self._render_ingress(document)
 
             rendered.append(document)
 
@@ -131,6 +144,42 @@ class DeploymentRenderer:
 
         rendered.extend(self._runtime_configmaps())
         return rendered
+
+    def _normalize_environment_labels(self, document: dict[str, Any]) -> None:
+        stack: list[Any] = [document]
+        while stack:
+            value = stack.pop()
+            if isinstance(value, dict):
+                labels = value.get("labels")
+                if (
+                    isinstance(labels, dict)
+                    and "signal-forge.environment" in labels
+                ):
+                    labels["signal-forge.environment"] = self.environment
+                stack.extend(value.values())
+            elif isinstance(value, list):
+                stack.extend(value)
+
+    def _render_ingress(self, document: dict[str, Any]) -> None:
+        if self.environment == "dev":
+            return
+
+        try:
+            spec = document["spec"]
+            hosted_rules = [rule for rule in spec["rules"] if rule.get("host")]
+            tls = spec["tls"]
+        except (KeyError, TypeError) as exc:
+            raise RenderError("application Ingress is missing rules or TLS configuration") from exc
+        if len(hosted_rules) != 1 or not isinstance(tls, list) or not tls:
+            raise RenderError("application Ingress must contain one host rule and TLS entry")
+
+        hosted_rules[0]["host"] = self.public_host
+        spec["rules"] = hosted_rules
+        tls[0]["hosts"] = [self.public_host]
+
+        annotations = document.setdefault("metadata", {}).setdefault("annotations", {})
+        annotations["traefik.ingress.kubernetes.io/router.entrypoints"] = "websecure"
+        annotations["traefik.ingress.kubernetes.io/router.tls"] = "true"
 
     def _render_deployment(
         self, document: dict[str, Any], replaced: set[str]
@@ -170,6 +219,15 @@ class DeploymentRenderer:
 
     def _runtime_configmaps(self) -> list[dict[str, Any]]:
         deployment_environment = f"signal-forge-{self.environment}"
+        allowed_hosts = ";".join(
+            (
+                "gateway-api",
+                f"gateway-api.{self.namespace}.svc.cluster.local",
+                "order-api",
+                f"order-api.{self.namespace}.svc.cluster.local",
+                self.public_host,
+            )
+        )
         resource_attributes = ",".join(
             (
                 f"service.namespace={self.namespace}",
@@ -191,8 +249,10 @@ class DeploymentRenderer:
                 "metadata": {
                     "name": "signal-forge-app-env",
                     "namespace": self.namespace,
+                    "labels": {"signal-forge.environment": self.environment},
                 },
                 "data": {
+                    "AllowedHosts": allowed_hosts,
                     "OTEL_EXPORTER_OTLP_ENDPOINT": self.otel_endpoint,
                     "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
                     "OTEL_LOGS_EXPORTER": "none",
@@ -206,6 +266,7 @@ class DeploymentRenderer:
                 "metadata": {
                     "name": "frontend-env-js",
                     "namespace": self.namespace,
+                    "labels": {"signal-forge.environment": self.environment},
                 },
                 "data": {"env.js": env_js},
             },
@@ -222,6 +283,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--otel-endpoint", required=True)
     parser.add_argument("--faro-url", default="")
     parser.add_argument("--api-base-url", default="/api")
+    parser.add_argument("--public-url", required=True)
     return parser.parse_args()
 
 
@@ -236,6 +298,7 @@ def main() -> int:
             otel_endpoint=args.otel_endpoint,
             faro_url=args.faro_url,
             api_base_url=args.api_base_url,
+            public_url=args.public_url,
         )
         documents = renderer.render(args.input.read_text(encoding="utf-8"))
         args.output.write_text(

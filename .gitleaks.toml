@@ -2,16 +2,5 @@ title = "signal-forge gitleaks config"
 
 [extend]
 # Start from gitleaks' built-in ruleset (AWS/GCP/Azure keys, generic API keys,
-# private keys, k8s Secret YAML shape, etc.) and layer the allowlist below on
-# top of it — don't replace it.
+# private keys, k8s Secret YAML shape, etc.) rather than replacing it.
 useDefault = true
-
-[allowlist]
-description = "Known dev-only placeholder credentials, not real secrets"
-paths = [
-  # k8s/infra/secrets.yaml ships base64-encoded placeholder values
-  # (gateway_pw, root_pw, order_pw, guest) for local k3d bootstrapping only —
-  # the file's own header comment already says "Replace base64 values before
-  # deploying to any non-local environment."
-  '''k8s/infra/secrets\.yaml''',
-]

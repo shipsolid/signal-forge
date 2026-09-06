@@ -63,12 +63,31 @@ class DeploymentRendererTests(unittest.TestCase):
 
     def _source(self, services: tuple[str, ...]) -> str:
         documents = [
-            {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "otel-lab"}},
+            {
+                "apiVersion": "v1",
+                "kind": "Namespace",
+                "metadata": {
+                    "name": "otel-lab",
+                    "labels": {"signal-forge.environment": "staging"},
+                },
+            },
             {
                 "apiVersion": "v1",
                 "kind": "Secret",
                 "metadata": {"name": "db-secrets", "namespace": "otel-lab"},
                 "data": {"PASSWORD": "unsafe-placeholder"},
+            },
+            {
+                "apiVersion": "networking.k8s.io/v1",
+                "kind": "Ingress",
+                "metadata": {"name": "otel-lab-ingress", "namespace": "otel-lab"},
+                "spec": {
+                    "tls": [{"hosts": ["signal-forge.local"], "secretName": "tls"}],
+                    "rules": [
+                        {"host": "signal-forge.local", "http": {"paths": []}},
+                        {"http": {"paths": []}},
+                    ],
+                },
             },
         ]
         for service in services:
@@ -95,14 +114,19 @@ class DeploymentRendererTests(unittest.TestCase):
             )
         return yaml.safe_dump_all(documents)
 
-    def _renderer(self):
+    def _renderer(
+        self,
+        environment: str = "dev",
+        public_url: str = "http://localhost:8080",
+    ):
         return render_deployment.DeploymentRenderer(
             release=json.loads(json.dumps(self.release)),
             namespace="otel-lab",
-            environment="dev",
+            environment=environment,
             otel_endpoint="http://alloy.monitoring.svc.cluster.local:4317",
             faro_url="https://faro.example.invalid/collect",
             api_base_url="/api",
+            public_url=public_url,
         )
 
     def test_renders_all_images_by_digest_and_runtime_contracts(self) -> None:
@@ -128,6 +152,32 @@ class DeploymentRendererTests(unittest.TestCase):
         self.assertIn("service.version=" + "b" * 40, resource_attributes)
         self.assertIn("deployment.environment=signal-forge-dev", resource_attributes)
         self.assertIn("frontend-env-js", configmaps)
+        self.assertIn(
+            "localhost", configmaps["signal-forge-app-env"]["data"]["AllowedHosts"]
+        )
+        for document in documents:
+            labels = document.get("metadata", {}).get("labels", {})
+            if "signal-forge.environment" in labels:
+                self.assertEqual("dev", labels["signal-forge.environment"])
+
+    def test_qa_ingress_is_host_scoped_and_tls_only(self) -> None:
+        documents = self._renderer(
+            environment="qa", public_url="https://qa.signal-forge.example"
+        ).render(self._source(tuple(render_deployment.SERVICE_IMAGES)))
+        ingress = next(doc for doc in documents if doc.get("kind") == "Ingress")
+        self.assertEqual(
+            ["qa.signal-forge.example"], ingress["spec"]["tls"][0]["hosts"]
+        )
+        self.assertEqual(1, len(ingress["spec"]["rules"]))
+        self.assertEqual(
+            "qa.signal-forge.example", ingress["spec"]["rules"][0]["host"]
+        )
+        self.assertEqual(
+            "websecure",
+            ingress["metadata"]["annotations"][
+                "traefik.ingress.kubernetes.io/router.entrypoints"
+            ],
+        )
 
     def test_missing_release_workload_is_rejected(self) -> None:
         with self.assertRaises(render_deployment.RenderError):
