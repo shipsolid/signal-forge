@@ -16,6 +16,8 @@ spec:
         tier: app
         app.kubernetes.io/name: order-api
         app.kubernetes.io/component: order-service
+        # Local fallback only. CD overwrites this with the full release Git SHA,
+        # matching OTEL service.version and the immutable image manifest.
         app.kubernetes.io/version: "1.0.0"
     spec:
       securityContext:
@@ -36,6 +38,9 @@ spec:
                     app: order-api
       containers:
         - name: order-api
+          # Local k3d imports this tag and therefore uses Never. CD replaces both
+          # fields with an immutable GHCR digest plus IfNotPresent; no promoted
+          # environment consumes the mutable/local marker.
           image: order-api:local
           imagePullPolicy: Never
           securityContext:
@@ -52,7 +57,9 @@ spec:
             - name: tmp
               mountPath: /tmp
           envFrom:
-            # Shared OTLP endpoint + resource attributes — see k8s/infra/app-env.yaml.tmpl
+            # Shared OTLP endpoint + resource attributes. Local deployment uses
+            # k8s/infra/app-env.yaml.tmpl; CD generates the same contract with
+            # the selected release SHA and target environment.
             - configMapRef:
                 name: signal-forge-app-env
           env:

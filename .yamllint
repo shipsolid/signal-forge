@@ -1,7 +1,11 @@
 extends: default
 
 rules:
+  # Embedded Alloy, PromQL, shell expressions, and immutable URLs are often not
+  # semantically safe to wrap merely to satisfy a presentation-width rule.
   line-length: disable
+  # Kubernetes manifests in this repository mix single and multi-document YAML;
+  # requiring `---` everywhere would add noise without improving parse safety.
   document-start: disable
   braces:
     max-spaces-inside: 1

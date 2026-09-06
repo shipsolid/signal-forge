@@ -26,6 +26,10 @@ spec:
           type: RuntimeDefault
       containers:
         - name: otel-frontend
+          # Base manifests target the local k3d workflow, where deploy-local.sh
+          # imports this tag into the node and registry pulls must be disabled.
+          # CD never applies these values directly: render_deployment.py replaces
+          # the tag with the release-manifest digest and sets IfNotPresent.
           image: otel-frontend:local
           imagePullPolicy: Never
           securityContext:
@@ -68,11 +72,12 @@ spec:
                 command: ["sh", "-c", "sleep 5"]
           volumeMounts:
             # Shadows the image's baked-in default env.js with the real
-            # FARO_URL/API_BASE_URL, rendered by deploy-local.sh's
-            # apply_frontend_env_configmap() from the same Grafana Cloud
-            # credentials already resolved for grafana-cloud-secrets. A
-            # pod restart with a changed ConfigMap picks up the new value
-            # immediately — nginx.conf disables caching on this path.
+            # FARO_URL/API_BASE_URL. Local deployment renders it from conf.yml;
+            # CD renders release/environment values through
+            # scripts/ci/render_deployment.py. This separation changes browser
+            # configuration without rebuilding the immutable image. A pod
+            # restart with a changed ConfigMap picks up the new value immediately
+            # because nginx.conf disables caching on this path.
             - name: frontend-env-js
               mountPath: /usr/share/nginx/html/assets/env.js
               subPath: env.js

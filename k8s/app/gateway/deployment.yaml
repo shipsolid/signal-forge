@@ -16,6 +16,8 @@ spec:
         tier: app
         app.kubernetes.io/name: gateway-api
         app.kubernetes.io/component: api-gateway
+        # Local fallback only. CD overwrites this with the full release Git SHA,
+        # matching OTEL service.version and the immutable image manifest.
         app.kubernetes.io/version: "1.0.0"
     spec:
       securityContext:
@@ -38,6 +40,9 @@ spec:
                     app: gateway-api
       containers:
         - name: gateway-api
+          # Local k3d imports this tag and therefore uses Never. CD replaces both
+          # fields with an immutable GHCR digest plus IfNotPresent; no promoted
+          # environment consumes the mutable/local marker.
           image: gateway-api:local
           imagePullPolicy: Never
           securityContext:
@@ -51,8 +56,9 @@ spec:
             - name: tmp
               mountPath: /tmp
           envFrom:
-            # Shared OTLP endpoint + resource attributes. Generated from conf.yml
-            # by deploy-local.sh → apply_app_env_configmap. See k8s/infra/app-env.yaml.tmpl.
+            # Shared OTLP endpoint + resource attributes. Local deployment
+            # renders k8s/infra/app-env.yaml.tmpl from conf.yml; CD creates the
+            # equivalent release-specific ConfigMap without rebuilding the app.
             - configMapRef:
                 name: signal-forge-app-env
           env:

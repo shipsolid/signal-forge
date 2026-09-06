@@ -1,5 +1,9 @@
+# Local interpreters, bytecode, and test state are host-specific inputs. The
+# container installs only requirements.txt into a clean pinned Python base.
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+# Corporate CA material is supplied as an ephemeral BuildKit secret, never as a
+# context file that could be retained in an image layer.
 zcert.crt

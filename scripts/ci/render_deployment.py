@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Render a Kustomize stream for one immutable Signal Forge release."""
+"""Render one environment plan from Kustomize and an immutable CI release.
+
+Kustomize owns the environment's resource topology; the CI release manifest
+owns deployable image identity. This renderer joins those inputs by replacing
+only the four ``:local`` application markers with GHCR digest references,
+removing repository placeholder Secrets, and appending runtime ConfigMaps.
+
+The output is deliberately secret-free and contains no image tag promotion.
+All four service markers and the target Namespace must be present or rendering
+fails, preventing a partial microservice release from reaching ``kubectl``.
+"""
 
 from __future__ import annotations
 
@@ -20,7 +30,13 @@ SERVICE_IMAGES = {
     "order-api": "order-api",
     "notification-svc": "notification-svc",
 }
+# A local marker is an explicit handoff point, not a general-purpose image
+# rewrite. Images for datastores and observability components remain owned by
+# their manifests and cannot be redirected by release metadata.
 LOCAL_IMAGE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*:local$")
+# Restrict releases to this product's GHCR namespace and full sha256 digests.
+# Accepting arbitrary registries/tags here would let a well-formed but malicious
+# manifest bypass the repository checks already performed in the workflows.
 DIGEST_REFERENCE_PATTERN = re.compile(
     r"^ghcr\.io/[a-z0-9._-]+/signal-forge/[a-z0-9._-]+@sha256:[0-9a-f]{64}$"
 )
@@ -32,6 +48,8 @@ class RenderError(RuntimeError):
 
 
 class DeploymentRenderer:
+    """Apply immutable-release and environment contracts to Kustomize output."""
+
     def __init__(
         self,
         release: dict[str, Any],
@@ -53,6 +71,9 @@ class DeploymentRenderer:
         self.run_id = str(self._required_value(release, "build", "run_id"))
         self.image_references = self._validate_release_images()
 
+        # Inputs later become labels, URLs, Kubernetes names, or process
+        # environment. Fail once at the boundary rather than emitting a plan
+        # whose error appears only during admission or application startup.
         if not ENVIRONMENT_PATTERN.fullmatch(environment):
             raise RenderError(f"invalid environment name: {environment!r}")
         if not namespace or len(namespace) > 63:
@@ -86,6 +107,8 @@ class DeploymentRenderer:
         return value
 
     def _validate_release_images(self) -> dict[str, str]:
+        """Return the complete service-to-digest map or reject the release."""
+
         if not re.fullmatch(r"[0-9a-f]{40}", self.git_sha):
             raise RenderError("release git.commit must be a full 40-character SHA")
 
@@ -105,6 +128,8 @@ class DeploymentRenderer:
         return references
 
     def render(self, source: str) -> list[dict[str, Any]]:
+        """Transform a multi-document Kustomize stream into a deployable plan."""
+
         try:
             documents = [doc for doc in yaml.safe_load_all(source) if doc is not None]
         except yaml.YAMLError as exc:
@@ -126,6 +151,9 @@ class DeploymentRenderer:
             if kind == "Namespace" and name == self.namespace:
                 namespace_seen = True
 
+            # Real secrets are created from GitHub Environment secrets in CD.
+            # Dropping both base placeholders here prevents an uploaded plan or
+            # later `kubectl apply` from exposing/overwriting protected values.
             if kind == "Secret" and name in {"db-secrets", "grafana-cloud-secrets"}:
                 continue
 
@@ -136,6 +164,8 @@ class DeploymentRenderer:
 
             rendered.append(document)
 
+        # Completeness is an atomic release invariant: promotion and rollback
+        # operate on the same four-image set, never an accidental subset.
         missing = sorted(set(SERVICE_IMAGES) - replaced)
         if missing:
             raise RenderError(f"Kustomize output did not contain app images: {', '.join(missing)}")
@@ -146,6 +176,13 @@ class DeploymentRenderer:
         return rendered
 
     def _normalize_environment_labels(self, document: dict[str, Any]) -> None:
+        """Replace inherited environment labels at every manifest depth.
+
+        QA intentionally reuses the historical ``staging`` Kustomize overlay.
+        Recursive normalization covers object metadata, pod templates, and any
+        nested selectors so telemetry and inventory consistently report ``qa``.
+        """
+
         stack: list[Any] = [document]
         while stack:
             value = stack.pop()
@@ -161,6 +198,8 @@ class DeploymentRenderer:
                 stack.extend(value)
 
     def _render_ingress(self, document: dict[str, Any]) -> None:
+        """Keep local HTTP behavior in dev and enforce host-scoped TLS elsewhere."""
+
         if self.environment == "dev":
             return
 
@@ -173,6 +212,8 @@ class DeploymentRenderer:
         if len(hosted_rules) != 1 or not isinstance(tls, list) or not tls:
             raise RenderError("application Ingress must contain one host rule and TLS entry")
 
+        # The base ingress includes a hostless convenience route for k3d. Remove
+        # that catch-all outside dev so QA/PROD cannot accept unintended hosts.
         hosted_rules[0]["host"] = self.public_host
         spec["rules"] = hosted_rules
         tls[0]["hosts"] = [self.public_host]
@@ -184,6 +225,8 @@ class DeploymentRenderer:
     def _render_deployment(
         self, document: dict[str, Any], replaced: set[str]
     ) -> None:
+        """Replace one local app image marker and stamp release provenance."""
+
         metadata = document.setdefault("metadata", {})
         annotations = metadata.setdefault("annotations", {})
         annotations["signal-forge.io/git-sha"] = self.git_sha
@@ -213,11 +256,22 @@ class DeploymentRenderer:
                 raise RenderError(f"local image {image} occurs more than once")
 
             container["image"] = self.image_references[service]
+            # Digest references are immutable, so IfNotPresent can safely reuse
+            # an already-cached byte-identical image while still allowing a new
+            # digest to be pulled from GHCR. `Never` is only valid for local k3d.
             container["imagePullPolicy"] = "IfNotPresent"
             pod_labels["app.kubernetes.io/version"] = self.git_sha
             replaced.add(service)
 
     def _runtime_configmaps(self) -> list[dict[str, Any]]:
+        """Build non-secret runtime configuration for the unchanged images.
+
+        Backend services consume common OpenTelemetry/host settings from
+        ``signal-forge-app-env``. Nginx mounts ``frontend-env-js`` over the
+        image's browser-visible default. Together they allow endpoints,
+        environment, and release identity to change without rebuilding layers.
+        """
+
         deployment_environment = f"signal-forge-{self.environment}"
         allowed_hosts = ";".join(
             (
@@ -228,6 +282,8 @@ class DeploymentRenderer:
                 self.public_host,
             )
         )
+        # The full Git SHA is the cross-signal service.version used by the CD
+        # telemetry gate to distinguish the candidate from prior releases.
         resource_attributes = ",".join(
             (
                 f"service.namespace={self.namespace}",

@@ -1,5 +1,10 @@
 name: Deploy immutable release to one environment
 
+# Reusable deployment boundary for exactly one GitHub Environment. The caller
+# supplies a CI-validated release manifest and commit; this workflow verifies
+# their immutable digests and supply-chain evidence, renders environment-only
+# configuration, deploys, and evaluates health. There is deliberately no source
+# compilation or container build anywhere in this file.
 'on':
   workflow_call:
     inputs:
@@ -16,10 +21,15 @@ name: Deploy immutable release to one environment
         required: true
         type: string
       release_manifest:
+        # The compact JSON value is passed unchanged from resolve-release through
+        # every environment. Treat it as the promotion unit, not user-authored
+        # configuration.
         required: true
         type: string
 
 permissions:
+  # Registry reads verify/pull the signed release. Deployments write records the
+  # protected-environment deployment; it does not grant Kubernetes access.
   contents: read
   deployments: write
   packages: read
@@ -29,13 +39,20 @@ jobs:
     name: Deploy + validate ${{ inputs.environment }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # Binding the job to a GitHub Environment scopes approvals, variables, and
+    # secrets to this target. Secrets are unavailable until protection rules pass.
     environment:
       name: ${{ inputs.environment }}
       url: ${{ vars.ENVIRONMENT_URL }}
     concurrency:
+      # Never overlap rollouts to one target. A newer release waits instead of
+      # cancelling an in-flight mutation that may still require rollback.
       group: signal-forge-${{ inputs.environment }}
       cancel-in-progress: false
     env:
+      # Non-secret deployment policy/configuration belongs in Environment vars;
+      # kubeconfig, database material, and an optional policy token remain in
+      # Environment secrets at the individual consuming step.
       DEPLOY_ENABLED: ${{ vars.DEPLOY_ENABLED }}
       ENVIRONMENT_URL: ${{ vars.ENVIRONMENT_URL }}
       FARO_COLLECTOR_URL: ${{ vars.FARO_COLLECTOR_URL }}
@@ -50,6 +67,9 @@ jobs:
       KUSTOMIZE_OVERLAY: ${{ inputs.overlay }}
     steps:
       - name: Checkout the exact release commit
+        # Deployment templates/scripts must come from the same commit recorded in
+        # the manifest. Checking out the workflow caller's ref would permit code
+        # drift while deploying otherwise valid image digests.
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           ref: ${{ inputs.git_sha }}
@@ -67,6 +87,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Validate all user-controlled workflow inputs before using them in a
+          # path, jq numeric argument, cluster command, or environment lookup.
           if [[ ! "$TARGET_ENVIRONMENT" =~ ^(dev|qa|prod)$ ]]; then
             echo "::error::Unsupported environment"
             exit 1
@@ -93,6 +115,9 @@ jobs:
             exit 1
           fi
 
+          # Re-validate the manifest at the environment boundary instead of
+          # trusting only the caller. Reusable workflows are independently
+          # callable and must preserve the same repository/digest invariants.
           printf '%s\n' "$RELEASE_MANIFEST" > release-manifest.json
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           expected_root="ghcr.io/${owner}/signal-forge"
@@ -118,6 +143,9 @@ jobs:
             ' release-manifest.json > /dev/null
 
           if [[ "$DEPLOY_ENABLED" == "true" ]]; then
+            # Render-only is the safe default. A real mutation fails closed unless
+            # application routing, browser telemetry, backend telemetry, external
+            # observability policy, cluster access, and database secrets exist.
             required_values=(
               ENVIRONMENT_URL
               FARO_COLLECTOR_URL
@@ -155,6 +183,10 @@ jobs:
 
           prod_secrets="k8s/overlays/prod/prod.secrets.env"
           created_prod_secrets=false
+          # Kustomize requires the generator input to exist before rendering the
+          # PROD overlay. This temporary file contains only committed placeholders;
+          # render_deployment.py removes every Secret from the uploaded/applied
+          # plan, and real values are created separately from Environment secrets.
           cleanup() {
             if [[ "$created_prod_secrets" == "true" ]]; then
               rm -f "$prod_secrets"
@@ -177,6 +209,9 @@ jobs:
               public_url="https://${TARGET_ENVIRONMENT}.signal-forge.invalid"
             fi
           fi
+          # The renderer is the build-once/promote-many bridge: it replaces local
+          # image markers with manifest digests and injects environment runtime
+          # ConfigMaps without modifying image contents.
           python scripts/ci/render_deployment.py \
             --input raw-deployment-plan.yaml \
             --output deployment-plan.yaml \
@@ -198,6 +233,8 @@ jobs:
           fi
 
       - name: Upload deployment plan
+        # The plan is deliberately secret-free, making it safe to retain for
+        # audit/debugging. The explicit check above guards that contract.
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: deployment-plan-${{ inputs.environment }}-${{ inputs.git_sha }}
@@ -206,6 +243,8 @@ jobs:
           retention-days: 30
 
       - name: Explain render-only mode
+        # New environments can validate manifest selection and rendering before
+        # any credentials are configured or cluster mutation is permitted.
         if: vars.DEPLOY_ENABLED != 'true'
         run: |
           {
@@ -232,6 +271,9 @@ jobs:
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3
 
       - name: Gate — published digests, signatures, and SBOM attestations
+        # Supply-chain evidence is checked before kubeconfig material is written
+        # or any cluster object changes. All four images must exist and be signed
+        # by the trusted main-branch CI workflow identity.
         if: vars.DEPLOY_ENABLED == 'true'
         shell: bash
         run: |
@@ -261,6 +303,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Materialize kubeconfig only in the runner's ephemeral directory with
+          # owner-only permissions. Do not write it into the checkout or an
+          # artifact path where later upload steps could expose it.
           kubeconfig="$RUNNER_TEMP/kubeconfig"
           printf '%s\n' "$KUBE_CONFIG" > "$kubeconfig"
           chmod 600 "$kubeconfig"
@@ -271,6 +316,9 @@ jobs:
           kubectl --kubeconfig "$kubeconfig" cluster-info
 
       - name: Apply environment-scoped database secrets
+        # Secret objects are intentionally absent from deployment-plan.yaml.
+        # Recreate the stable `db-secrets` name from the protected Environment so
+        # application manifests can remain identical across targets.
         if: vars.DEPLOY_ENABLED == 'true'
         env:
           DB_SECRETS_ENV: ${{ secrets.DB_SECRETS_ENV }}
@@ -308,6 +356,9 @@ jobs:
             | kubectl apply -f -
 
       - name: Capture previous known-good release
+        # Rollback is allowed only to immutable references already running in the
+        # target. Mutable tags are ignored because their content may have changed
+        # since the workload became known-good.
         if: vars.DEPLOY_ENABLED == 'true'
         shell: bash
         run: |
@@ -333,6 +384,9 @@ jobs:
           echo "PREVIOUS_IMAGES_FILE=$previous_images" >> "$GITHUB_ENV"
 
           for configmap in signal-forge-app-env frontend-env-js; do
+            # Runtime and telemetry identity must roll back with code. Restoring
+            # images without these ConfigMaps could report the previous binary as
+            # the failed candidate version/environment.
             output="$RUNNER_TEMP/previous-${configmap}.json"
             if kubectl -n "$namespace" get configmap "$configmap" -o json > "$output" 2>/dev/null; then
               echo "Captured previous $configmap"
@@ -348,6 +402,9 @@ jobs:
         run: |
           set -euo pipefail
           namespace="${K8S_NAMESPACE:-otel-lab}"
+          # Server-side dry-run catches admission/schema failures before mutation.
+          # Rollouts then wait in parallel to keep total gate time bounded; every
+          # PID is collected so one failed workload fails the whole release.
           kubectl apply --dry-run=server -f deployment-plan.yaml > /dev/null
           kubectl apply -f deployment-plan.yaml
 
@@ -373,6 +430,10 @@ jobs:
           exit "$rollout_status"
 
       - name: Gate — deployment health and exact image digests
+        # Check both desired and observed state: the Deployment spec must name the
+        # manifest reference, and container runtime imageIDs must contain the same
+        # digest. This catches stale pods or tag resolution drift that a readiness
+        # condition alone would miss.
         if: vars.DEPLOY_ENABLED == 'true'
         shell: bash
         run: |
@@ -413,6 +474,9 @@ jobs:
           done
 
       - name: Gate — smoke tests
+        # These are bounded usability checks, not arbitrary sleeps. Curl retries
+        # transient startup/network errors and the API response shape proves the
+        # request reached a functioning backend rather than only an ingress page.
         if: vars.DEPLOY_ENABLED == 'true'
         shell: bash
         run: |
@@ -427,6 +491,10 @@ jobs:
             | jq -e 'type == "array"' > /dev/null
 
       - name: Gate — configured observability release policy
+        # The external endpoint owns live Grafana/telemetry queries and approved
+        # thresholds. This workflow supplies exact release identity plus required
+        # signals/attributes and fails closed on missing or unknown status.
+        # `warn` supports learning in DEV/QA but is release-blocking in PROD.
         if: vars.DEPLOY_ENABLED == 'true'
         env:
           OBSERVABILITY_GATE_TOKEN: ${{ secrets.OBSERVABILITY_GATE_TOKEN }}
@@ -476,6 +544,9 @@ jobs:
           esac
 
       - name: Gate — OWASP ZAP baseline (DEV only)
+        # Baseline/passive DAST runs only against DEV. `-I` keeps ZAP warning-level
+        # rules informational, while action execution failures and blocking rules
+        # still fail promotion; no destructive active scan runs against PROD.
         if: inputs.environment == 'dev' && vars.DEPLOY_ENABLED == 'true'
         timeout-minutes: 10
         uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25  # v0.15.0
@@ -488,6 +559,9 @@ jobs:
           artifact_name: zap-dev-${{ inputs.git_sha }}
 
       - name: Roll back to the previous immutable release
+        # Any failure after apply—including health, smoke, telemetry, or DAST—uses
+        # the captured four-image set. A partial prior set is rejected because
+        # mixing versions would create an untested release that was never known-good.
         if: failure() && vars.DEPLOY_ENABLED == 'true' && steps.apply.outcome != 'skipped'
         shell: bash
         run: |
@@ -500,6 +574,8 @@ jobs:
           fi
 
           for configmap in signal-forge-app-env frontend-env-js; do
+            # Kubernetes read responses contain server-managed metadata that
+            # cannot be re-applied. Remove it while preserving the previous data.
             previous="$RUNNER_TEMP/previous-${configmap}.json"
             if [[ -s "$previous" ]]; then
               jq 'del(

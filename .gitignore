@@ -41,3 +41,6 @@ zcert.crt
 # `kubectl kustomize k8s/overlays/prod` fail loudly instead of silently inheriting
 # base's dev placeholder credentials.
 k8s/overlays/prod/prod.secrets.env
+
+# Personal Claude Code overrides — not shared with the team.
+.claude/settings.local.json

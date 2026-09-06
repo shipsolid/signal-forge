@@ -4,7 +4,12 @@ metadata:
   name: mysql-init
   namespace: otel-lab
 data:
+  # The MySQL image executes /docker-entrypoint-initdb.d only when its data
+  # directory is empty. Editing this ConfigMap does not migrate an existing PVC
+  # or rotate credentials; use a migration/secret-rotation procedure for that.
   init.sql: |
+    -- Local bootstrap only. The literal password matches the lab placeholder
+    -- Secret and must never be treated as a non-local credential source.
     CREATE DATABASE IF NOT EXISTS gatewaydb;
     CREATE USER IF NOT EXISTS 'gateway'@'%' IDENTIFIED BY 'gateway_pw';
     GRANT ALL PRIVILEGES ON gatewaydb.* TO 'gateway'@'%';

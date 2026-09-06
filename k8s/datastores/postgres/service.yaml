@@ -9,4 +9,6 @@ spec:
   ports:
     - port: 5432
       targetPort: 5432
+  # Headless discovery gives the StatefulSet a stable postgres DNS identity;
+  # clients are not intended to load-balance across independent database pods.
   clusterIP: None

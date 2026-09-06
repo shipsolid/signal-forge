@@ -26,6 +26,9 @@ RUN groupadd --system --gid 1000 app \
 USER 1000:1000
 
 ENV PYTHONUNBUFFERED=1
+# Application logs intentionally remain on stdout, where the node-level Alloy
+# pipeline tails and enriches them with Kubernetes metadata. Disabling direct
+# OTLP log export avoids paying for and querying duplicate log records.
 ENV OTEL_LOGS_EXPORTER=none
 
 EXPOSE 8000

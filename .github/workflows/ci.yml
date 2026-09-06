@@ -1,5 +1,17 @@
 name: CI
 
+# Release contract:
+#   * pull requests execute the complete validation/build/scan path but never
+#     authenticate to GHCR or publish release metadata;
+#   * trusted pushes to main execute the same gates, then build each service
+#     image once, scan that local image, publish it, and capture its registry
+#     digest;
+#   * CD consumes the resulting four-image release manifest. It does not
+#     reconstruct tags from source or rebuild an image for an environment.
+#
+# The path filters intentionally include deployment and operational policy
+# assets. A change to telemetry, infrastructure, or the release machinery is a
+# product change even when no application source file moved.
 'on':
   workflow_dispatch:
   pull_request:
@@ -32,9 +44,14 @@ name: CI
       - 'Makefile'
 
 permissions:
+  # Jobs inherit read-only repository access unless they explicitly request a
+  # narrower write capability such as SARIF upload, GHCR publication, or OIDC.
   contents: read
 
 concurrency:
+  # New commits supersede in-flight validation for the same PR/branch. Published
+  # main releases are protected by job ordering; CD has its own non-cancelling
+  # promotion lock because interrupting a deployment is unsafe.
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
@@ -48,6 +65,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
+          # Gitleaks needs commit history to detect a credential introduced and
+          # then deleted inside the range being evaluated.
           fetch-depth: 0
           persist-credentials: false
 
@@ -100,6 +119,9 @@ jobs:
         working-directory: src/frontend
 
       - name: Run pre-commit on all files
+        # Gitleaks is skipped here because the dedicated secret-scan job checks
+        # full Git history. Keeping one authoritative invocation avoids two
+        # tools reporting the same finding with different commit ranges.
         run: pre-commit run --all-files --show-diff-on-failure
         env:
           SKIP: gitleaks
@@ -203,6 +225,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Both .NET services must compile the one canonical contract. A copied
+          # service-local .proto can drift while still compiling, so duplicates
+          # are treated as a release-policy violation rather than a style issue.
           status=0
           [[ -f src/proto/orders.proto ]] || status=1
           for project in src/gateway-api/gateway-api.csproj src/order-api/order-api.csproj; do
@@ -226,10 +251,15 @@ jobs:
       contents: read
       security-events: write
     strategy:
+      # Each language database is independent. Running all entries even after
+      # one failure preserves complete security feedback for the commit.
       fail-fast: false
       matrix:
         include:
           - language: csharp
+            # C# needs an explicit build so CodeQL observes generated gRPC code
+            # and the actual compilation graph. Interpreted languages can use
+            # build-mode none.
             build-mode: manual
           - language: javascript-typescript
             build-mode: none
@@ -376,6 +406,9 @@ jobs:
           format: sarif
           output: trivy-iac.sarif
           severity: HIGH,CRITICAL
+          # Trivy must finish and leave a complete SARIF document so the next
+          # step can apply this repository's severity policy: CRITICAL blocks,
+          # HIGH warns. This zero is not failure suppression.
           exit-code: '0'
 
       - name: Enforce blocking IaC severity policy
@@ -420,6 +453,9 @@ jobs:
           python-version: '3.12'
 
       - name: Validate telemetry contracts, cardinality, dashboards, and templates
+        # This is a release control, not an informational lint. It verifies that
+        # the application and collector still agree on service identity and
+        # required resource attributes before an image can be published.
         run: |
           pip install PyYAML==6.0.3
           python -m unittest discover -s scripts/ci/tests -v
@@ -441,6 +477,9 @@ jobs:
 
   quality-gate:
     name: Security + observability policy gate
+    # `always()` makes the aggregator run even when an upstream job fails or is
+    # cancelled. It then accepts only `success`; skipped/cancelled checks cannot
+    # accidentally satisfy the publication dependency.
     if: always()
     needs:
       - secret-scan
@@ -470,6 +509,9 @@ jobs:
 
   build-images:
     name: Build once + scan + publish — ${{ matrix.service.name }}
+    # No image exists before every blocking application, security, IaC, and
+    # observability check has passed. This dependency is the boundary between
+    # validation and creation of a releasable supply-chain artifact.
     needs: quality-gate
     runs-on: ubuntu-latest
     permissions:
@@ -479,6 +521,8 @@ jobs:
       packages: write
       security-events: write
     strategy:
+      # A service failure does not hide scan/build results for the other
+      # services, but release-metadata cannot fan in unless every entry passes.
       fail-fast: false
       matrix:
         service:
@@ -500,6 +544,9 @@ jobs:
       - name: Stage shared protobuf sources
         if: matrix.service.name == 'order-api' || matrix.service.name == 'gateway-api'
         run: |
+          # Docker contexts are deliberately service-scoped. Stage the canonical
+          # repo-level contract without widening the context and leaking other
+          # source/build artifacts into either image.
           mkdir -p "${{ matrix.service.context }}/proto"
           cp src/proto/orders.proto src/proto/OrderValidation.cs \
             "${{ matrix.service.context }}/proto/"
@@ -508,6 +555,9 @@ jobs:
         uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25  # v5
         with:
           context: ${{ matrix.service.context }}
+          # Load one local Docker image so SBOM and Trivy inspect the exact image
+          # later tagged and pushed. There is intentionally no second registry
+          # build after scanning.
           push: false
           load: true
           tags: ${{ matrix.service.name }}:ci-${{ github.run_id }}
@@ -572,6 +622,9 @@ jobs:
           image="ghcr.io/${owner}/signal-forge/${{ matrix.service.name }}"
           local_image="${{ matrix.service.name }}:ci-${GITHUB_RUN_ID}"
 
+          # The commit tag provides a human-friendly lookup and `latest` remains
+          # only for the legacy scheduled rescan. Neither is a CD input: the
+          # registry-reported digest captured below is the deployment identity.
           docker tag "$local_image" "${image}:${GITHUB_SHA}"
           docker tag "$local_image" "${image}:latest"
           docker push "${image}:${GITHUB_SHA}"
@@ -599,6 +652,9 @@ jobs:
           IMAGE_REFERENCE: ${{ steps.publish.outputs.reference }}
         run: |
           set -euo pipefail
+          # Keyless signing binds the immutable digest to this main-branch
+          # workflow identity through GitHub OIDC. No reusable private signing
+          # key is stored in repository or environment secrets.
           cosign sign --yes "$IMAGE_REFERENCE"
           cosign attest --yes \
             --predicate "sbom-${{ matrix.service.name }}.cdx.json" \
@@ -611,6 +667,9 @@ jobs:
           IMAGE_REFERENCE: ${{ steps.publish.outputs.reference }}
         run: |
           set -euo pipefail
+          # Verify immediately with the same identity policy CD applies. This
+          # catches an issuance/attestation mistake before metadata is promoted
+          # as a release, rather than discovering it during deployment.
           identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/ci.yml@refs/heads/main"
           issuer="https://token.actions.githubusercontent.com"
           cosign verify \
@@ -630,6 +689,9 @@ jobs:
           DIGEST: ${{ steps.publish.outputs.digest }}
           REFERENCE: ${{ steps.publish.outputs.reference }}
         run: |
+          # Matrix jobs cannot safely append to one shared file. Each service
+          # emits one self-contained record; release-metadata downloads and
+          # validates all four records as an atomic fan-in step.
           mkdir -p image-metadata
           jq -n \
             --arg service "${{ matrix.service.name }}" \
@@ -651,6 +713,8 @@ jobs:
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
+          # Include run_attempt so a re-run cannot accidentally combine fresh
+          # metadata with artifacts retained from an earlier failed attempt.
           name: image-metadata-${{ matrix.service.name }}-${{ github.run_attempt }}
           path: image-metadata/${{ matrix.service.name }}.json
           if-no-files-found: error
@@ -658,6 +722,9 @@ jobs:
 
   release-metadata:
     name: Publish immutable release manifest
+    # The manifest is the only supported CI-to-CD release contract. It is
+    # published only when all four matrix jobs have built, scanned, pushed,
+    # signed, attested, and verified their images.
     needs: build-images
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -676,6 +743,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Exactly four component records prevents a partial microservice set
+          # from looking deployable. Promotion and rollback both operate on the
+          # complete set, even if only one service changed.
           mapfile -t parts < <(find release-parts -type f -name '*.json' -print | sort)
           if [[ "${#parts[@]}" -ne 4 ]]; then
             echo "::error::Expected metadata for four images, found ${#parts[@]}"
@@ -719,6 +789,8 @@ jobs:
       - name: Upload release manifest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
+          # CD resolves this exact run-attempt name after validating the source
+          # workflow run. The attempt suffix is part of the anti-mixing boundary.
           name: release-manifest-${{ github.run_attempt }}
           path: release-manifest.json
           if-no-files-found: error

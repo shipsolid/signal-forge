@@ -1,7 +1,10 @@
 # app-env.yaml.tmpl — shared env vars for all signal-forge app Deployments.
 #
-# TEMPLATE FILE. Rendered by deploy-local.sh before the `app` stage rolls.
-# App Deployments (gateway/order/notification) pull this via
+# TEMPLATE FILE. Local deployment renders this from conf.yml before the `app`
+# stage rolls. Production CD creates the equivalent ConfigMap through
+# scripts/ci/render_deployment.py so service.version can be the selected release
+# SHA; both paths preserve the same variable names consumed by Deployments.
+# App Deployments (gateway/order/notification) pull those values via
 #   envFrom:
 #     - configMapRef:
 #         name: signal-forge-app-env
@@ -25,5 +28,7 @@ data:
   # Logs exporter disabled on the app side; pod stdout is tailed by alloy-logs.
   OTEL_LOGS_EXPORTER: "none"
   OTEL_METRICS_EXEMPLAR_FILTER: "trace_based"
-  # Resource attributes stamped on every signal leaving the app.
+  # Local fallback resource identity. CD generates the same keys but replaces
+  # service.version with the immutable release commit and sets the target
+  # environment, allowing the live telemetry gate to select candidate signals.
   OTEL_RESOURCE_ATTRIBUTES: "service.namespace=${APP_NAMESPACE},service.version=1.0.0,deployment.environment=${DEPLOYMENT_ENVIRONMENT}"

@@ -1,25 +1,41 @@
 name: CD
 
+# Promotion contract:
+#   * the operator selects a successful trusted main-branch CI run, not an image
+#     tag and not a Git ref;
+#   * that run's manifest fixes the commit and all four repository@sha256:digest
+#     references for the lifetime of the promotion;
+#   * DEV, QA, and PROD receive the same manifest in sequence. Only
+#     environment-scoped runtime configuration may differ, and CD never builds.
 'on':
   workflow_dispatch:
     inputs:
       ci_run_id:
+        # A run ID is stable across the API and artifact service. The resolver
+        # also reads its run_attempt so a retried CI run cannot mix manifests.
         description: Successful main-branch CI run containing an immutable release manifest
         required: true
         type: string
       confirm_production:
+        # This chooses whether the PROD leg exists. Required reviewers and wait
+        # timers remain GitHub Environment policy, outside user-controlled input.
         description: Promote through the protected prod environment after QA
         required: true
         default: false
         type: boolean
 
 permissions:
+  # CD reads CI artifacts and private GHCR manifests. `deployments: write` is
+  # needed for GitHub Environment deployment records; source remains read-only.
   actions: read
   contents: read
   deployments: write
   packages: read
 
 concurrency:
+  # Serialize the entire DEV -> QA -> PROD chain. Per-environment locks in the
+  # reusable workflow prevent target races; this global lock also prevents two
+  # different releases from interleaving between environment boundaries.
   group: signal-forge-release-promotion
   cancel-in-progress: false
 
@@ -45,6 +61,9 @@ jobs:
             exit 1
           fi
 
+          # Artifact names alone are not a trust boundary. Resolve the run from
+          # GitHub's API and require the expected workflow, repository, branch,
+          # event, completion state, and successful conclusion before download.
           run="$(curl --fail --silent --show-error \
             --connect-timeout 10 \
             --max-time 60 \
@@ -74,6 +93,8 @@ jobs:
           jq '{id, head_sha, event, conclusion, html_url}' <<< "$run"
 
       - name: Download release manifest from CI
+        # The attempt-specific name prevents an operator from selecting a stale
+        # artifact left by an earlier failed attempt of the same workflow run.
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5
         with:
           name: release-manifest-${{ steps.ci-run.outputs.run-attempt }}
@@ -94,6 +115,10 @@ jobs:
           manifest=release/release-manifest.json
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           expected_root="ghcr.io/${owner}/signal-forge"
+          # Bind every deployable field back to the already trusted CI run and
+          # restrict image repositories to this product's GHCR namespace. This
+          # prevents a structurally valid manifest from redirecting deployment
+          # to a different commit, workflow, or container registry path.
           jq -e \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg head_sha "$CI_HEAD_SHA" \
@@ -138,6 +163,8 @@ jobs:
 
   deploy-dev:
     name: Promote immutable release to DEV
+    # Each reusable-workflow call receives the compact manifest unchanged. The
+    # dependent jobs below therefore promote evidence, not reconstructed tags.
     needs: resolve-release
     uses: ./.github/workflows/deploy-environment.yml
     with:
@@ -150,6 +177,9 @@ jobs:
 
   deploy-qa:
     name: Promote same immutable release to QA
+    # `staging` is the repository's historical Kustomize directory name. The CD
+    # renderer normalizes its inherited environment labels to the GitHub
+    # Environment name `qa`; the directory name does not change artifact identity.
     needs:
       - resolve-release
       - deploy-dev
@@ -164,6 +194,9 @@ jobs:
 
   deploy-prod:
     name: Promote same immutable release to PROD
+    # Selection is explicit, promotion still requires QA success, and the
+    # reusable workflow's `environment: prod` binding activates any configured
+    # GitHub Environment reviewers before secrets or cluster access are exposed.
     if: inputs.confirm_production
     needs:
       - resolve-release

@@ -1,6 +1,10 @@
+# Dependencies, compiler output, and coverage are generated; formatting them is
+# both expensive and non-reproducible across tool versions.
 node_modules/
 dist/
 coverage/
 .angular/
 out-tsc/
+# npm owns lockfile serialization. Prettier must not create a cosmetic lockfile
+# diff that suggests dependency resolution changed when it did not.
 package-lock.json

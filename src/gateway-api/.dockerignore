@@ -1,3 +1,8 @@
+# Publish output is produced inside the pinned SDK stage. Excluding host build
+# trees keeps the service-scoped context deterministic and prevents an old DLL
+# from being copied by a broad Dockerfile COPY.
 bin/
 obj/
+# Corporate CA material is supplied as an ephemeral BuildKit secret, never as a
+# context file that could be retained in an image layer.
 zcert.crt

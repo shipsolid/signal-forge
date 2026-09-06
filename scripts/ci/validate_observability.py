@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Validate Signal Forge observability assets and render Alloy test input."""
+"""Enforce Signal Forge's repository-level observability release policy.
+
+The policy verifies the shared telemetry resource contract, backend service
+identity, renderability of local/cloud Alloy inputs, explicitly forbidden
+span-metric dimensions, basic Grafana dashboard structure, and presence of
+required SLO/runbook assets. It also emits a concrete Alloy file for the CI
+workflow to validate with the real Alloy binary.
+
+This is static policy-as-code. It does not query live telemetry, calculate a
+complete cardinality budget, validate dashboard queries against a datasource,
+or prove that an alert routes successfully; those remain deployment/runtime
+gates and must not be inferred from a passing result here.
+"""
 
 from __future__ import annotations
 
@@ -15,11 +27,18 @@ import yaml
 
 
 BACKEND_SERVICES = ("gateway-api", "order-api", "notification-svc")
+# `service.name` is intentionally not shared: each Deployment supplies its own
+# OTEL_SERVICE_NAME. These attributes are common release/environment context
+# injected through signal-forge-app-env and therefore must exist for all backends.
 REQUIRED_RESOURCE_ATTRIBUTES = {
     "service.namespace",
     "service.version",
     "deployment.environment",
 }
+# Focused guardrail for explicitly configured Alloy span-metric dimensions.
+# This denylist catches known per-request/user identifiers; it is not a
+# substitute for estimating active series, samples/sec, or Grafana Cloud cost
+# whenever a new production metric label is proposed.
 UNBOUNDED_METRIC_DIMENSIONS = {
     "email",
     "enduser.id",
@@ -39,6 +58,14 @@ class ValidationError(RuntimeError):
 
 
 def _alloy_fragment_code(fragment: str) -> list[str]:
+    """Return only executable ``stage.*`` blocks from the shared fragment.
+
+    The fragment begins with human documentation that is valid in its source
+    context but should not be indented into generated River/Alloy blocks.
+    Locating the first stage keeps one shared executable fragment while allowing
+    its standalone file to retain operational guidance.
+    """
+
     lines = fragment.rstrip("\n").splitlines()
     try:
         first_code_line = next(
@@ -50,6 +77,8 @@ def _alloy_fragment_code(fragment: str) -> list[str]:
 
 
 def validate_metric_dimensions(alloy_config: str) -> set[str]:
+    """Reject known unbounded dimensions explicitly configured in Alloy."""
+
     dimensions = set(DIMENSION_PATTERN.findall(alloy_config))
     forbidden = sorted(dimensions & UNBOUNDED_METRIC_DIMENSIONS)
     if forbidden:
@@ -60,6 +89,8 @@ def validate_metric_dimensions(alloy_config: str) -> set[str]:
 
 
 class ObservabilityValidator:
+    """Validate repository assets and emit syntax-checkable generated files."""
+
     def __init__(self, repository: Path, output_dir: Path) -> None:
         self.repository = repository
         self.output_dir = output_dir
@@ -81,6 +112,9 @@ class ObservabilityValidator:
             raise ValidationError(f"cannot read {relative_path}: {exc}") from exc
 
     def _validate_telemetry_contract(self) -> None:
+        # Render the same shared ConfigMap template used by local deployment so
+        # validation follows the real substitution path rather than a duplicate
+        # hard-coded representation of the contract.
         rendered = Template(self._read("k8s/infra/app-env.yaml.tmpl")).substitute(
             APP_NAMESPACE="otel-lab",
             HELM_NAMESPACE="monitoring",
@@ -124,6 +158,8 @@ class ObservabilityValidator:
                 raise ValidationError(f"{service} does not consume signal-forge-app-env")
 
     def _render_local_alloy(self) -> str:
+        # CI validates the final embedded Alloy text, not merely the surrounding
+        # ConfigMap YAML. That catches River syntax and component wiring errors.
         fragment = self._read(
             "k8s/monitoring/grafana/shared/trace-correlation-stages.alloy"
         )
@@ -153,6 +189,9 @@ class ObservabilityValidator:
         fragment = self._read(
             "k8s/monitoring/grafana/shared/trace-correlation-stages.alloy"
         )
+        # Cloud values pass through both Python Template and Helm `tpl`. Protect
+        # literal Alloy Go-template delimiters in two phases so Helm emits them
+        # for Alloy instead of evaluating them while rendering chart values.
         escaped_lines = [
             line.replace("{{", "\x00")
             .replace("}}", '{{"}}"}}')
@@ -162,6 +201,9 @@ class ObservabilityValidator:
         escaped_fragment = "\n".join(
             ("    " + line if line else line) for line in escaped_lines
         )
+        # RFC 2606 `.invalid` destinations are syntax fixtures only. This method
+        # performs no network access and must never require real tenant secrets
+        # merely to prove that the values document renders as YAML.
         cloud_rendered = Template(
             self._read("k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl")
         ).substitute(
@@ -188,6 +230,9 @@ class ObservabilityValidator:
         (self.output_dir / filename).write_text(content, encoding="utf-8")
 
     def _validate_dashboards(self) -> None:
+        # JSON parsing plus title/panel shape catches corrupt or empty committed
+        # dashboards. Query semantics and datasource reachability require a live
+        # Grafana API and are intentionally outside this static validator.
         dashboard_dir = (
             self.repository / "k8s/monitoring/local/grafana/provisioning/dashboards"
         )
@@ -203,6 +248,10 @@ class ObservabilityValidator:
                 raise ValidationError(f"dashboard {dashboard.name} lacks title or panels")
 
     def _validate_required_assets(self) -> None:
+        # Presence is the minimum product-operability contract. The individual
+        # validators above cover syntax where local tooling exists; live rule
+        # evaluation, alert delivery, and runbook quality remain runtime/review
+        # responsibilities.
         required = (
             "k8s/monitoring/slo-rules.yaml",
             "k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl",

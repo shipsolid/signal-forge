@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run check)",
+      "Bash(npm run gita:check)",
+      "Bash(git fetch *)",
+      "Bash(command -v *)"
+    ]
+  }
+}

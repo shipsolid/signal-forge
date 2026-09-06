@@ -1,4 +1,9 @@
+# Keep dependency/build caches out of the BuildKit context. Besides reducing
+# transfer size, this ensures the image is built from the lockfile rather than a
+# developer's platform-specific node_modules or stale Angular output.
 node_modules
 dist
 .angular
+# Corporate trust material may enter a RUN command only through the optional
+# BuildKit secret mount declared in Dockerfile; it must never become context.
 zcert.crt

@@ -13,5 +13,8 @@ spec:
     - name: management
       port: 15672
       targetPort: 15672
+      # Local-lab browser access through the k3d port mapping. A production
+      # RabbitMQ management plane must use private ingress/access controls, not
+      # an unauthenticated node-wide exposure.
       nodePort: 30672
   type: NodePort

@@ -1,13 +1,17 @@
 name: Scheduled vulnerability re-scan
 
-# The main CI Trivy gate (build-images job in ci.yml) uses ignore-unfixed:
-# true — an unpatched HIGH/CRITICAL CVE ships, gets cosign-signed, and passes
-# silently, visible only in the Security tab, never blocking. That's the
-# correct call at build time (there's nothing actionable yet), but it means
-# nothing ever re-checks whether a fix has since shown up upstream for an
-# image that's already been pushed. This workflow closes that gap: same
-# images, same Trivy scan, but WITHOUT ignore-unfixed, on a schedule, so a
-# vulnerability that had no fix in it does surface once one exists.
+# The main CI image gate ignores vulnerabilities that have no upstream fix,
+# because rebuilding cannot remediate them. This audit repeats the scan without
+# `ignore-unfixed` so a newly actionable finding is visible in code scanning.
+#
+# Scope is intentionally explicit: this workflow examines the current mutable
+# `latest` compatibility tags, not every immutable digest deployed in DEV/QA/
+# PROD. `latest` is never a CD input. A complete deployed-inventory rescan would
+# need to enumerate release manifests or cluster imageIDs instead.
+#
+# The schedule remains commented while this is an opt-in lab control, so today
+# only `workflow_dispatch` runs it. Uncommenting the cron is an organizational
+# policy decision, not a prerequisite for the blocking scan performed at build.
 on:
   workflow_dispatch:
   # schedule:
@@ -27,6 +31,8 @@ jobs:
         service: [otel-frontend, gateway-api, order-api, notification-svc]
     steps:
       - name: Pull latest published image
+        # This tag answers "what would a new main build currently expose?" It
+        # does not prove the result applies to an older promoted digest.
         run: docker pull "ghcr.io/${{ github.repository_owner }}/signal-forge/${{ matrix.service }}:latest"
 
       # No ignore-unfixed here, deliberately — the whole point of this
@@ -38,7 +44,9 @@ jobs:
           format: sarif
           output: trivy-rescan-${{ matrix.service }}.sarif
           severity: HIGH,CRITICAL
-          exit-code: "0"   # report-only — this is a scheduled audit, not a merge gate
+          # Report-only is deliberate: there is no PR or release transaction to
+          # block here. Findings land in GitHub code scanning for remediation.
+          exit-code: "0"
           vuln-type: os,library
 
       - name: Upload Trivy SARIF to GitHub code-scanning

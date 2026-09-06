@@ -31,6 +31,9 @@ spec:
           # conf.yml) — it uses the grafana/k8s-monitoring Helm chart instead,
           # which reads grafana-cloud-secrets itself.
           ports:
+            # Host ports make the node-local Alloy receiver reachable through a
+            # stable port on every k3d node. This is a local topology choice;
+            # the Helm-managed cloud deployment uses Kubernetes Services instead.
             - name: otlp-grpc
               containerPort: 4317
               hostPort: 4317
@@ -54,6 +57,10 @@ spec:
               mountPath: /etc/alloy
             - name: data
               mountPath: /var/lib/alloy/data
+            # Node log collection requires host filesystem visibility. These
+            # mounts are read-only, but they still broaden the pod's host access
+            # and should not be copied into a production collector design without
+            # its Pod Security and node-log threat model.
             - name: varlog
               mountPath: /var/log
               readOnly: true
@@ -65,6 +72,8 @@ spec:
           configMap:
             name: alloy-config
         - name: data
+          # Persist file offsets/WAL-like component state on the node so a local
+          # Alloy pod restart does not blindly reread every available log.
           hostPath:
             path: /var/lib/alloy/data
             type: DirectoryOrCreate

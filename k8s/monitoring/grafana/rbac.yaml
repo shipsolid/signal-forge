@@ -1,3 +1,7 @@
+# Alloy watches cluster objects to discover scrape/log targets and attach
+# Kubernetes metadata to telemetry. The scope is cluster-wide because nodes and
+# namespaces are cluster-scoped, but every granted verb is read-only; collection
+# must never mutate workloads through this ServiceAccount.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

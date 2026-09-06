@@ -1,3 +1,11 @@
+"""Regression tests for immutable deployment and observability policy contracts.
+
+These tests exercise failure boundaries that are easy to weaken with an
+otherwise harmless workflow/template change: complete digest replacement,
+secret removal, runtime telemetry identity, environment normalization, non-dev
+ingress hardening, and rejection of incomplete releases.
+"""
+
 from __future__ import annotations
 
 import importlib.util
@@ -13,6 +21,8 @@ REPOSITORY = Path(__file__).resolve().parents[3]
 
 
 def load_module(name: str, relative_path: str):
+    """Load a CI script by path because ``scripts/ci`` is not a Python package."""
+
     spec = importlib.util.spec_from_file_location(name, REPOSITORY / relative_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {relative_path}")
@@ -29,6 +39,8 @@ validate_observability = load_module(
 
 class ObservabilityPolicyTests(unittest.TestCase):
     def test_repository_observability_assets_are_valid(self) -> None:
+        # Use a disposable output path because validation emits the exact Alloy
+        # file that the workflow later passes to the Alloy binary.
         with tempfile.TemporaryDirectory() as directory:
             validator = validate_observability.ObservabilityValidator(
                 REPOSITORY, Path(directory)
@@ -37,6 +49,8 @@ class ObservabilityPolicyTests(unittest.TestCase):
             self.assertTrue((Path(directory) / "config.alloy").is_file())
 
     def test_unbounded_metric_dimension_is_rejected(self) -> None:
+        # This is the policy's fail-closed regression: parsing dimensions without
+        # rejecting a request identifier would make the CI job falsely green.
         with self.assertRaises(validate_observability.ValidationError):
             validate_observability.validate_metric_dimensions(
                 'dimension { name = "request_id" }'
@@ -45,6 +59,8 @@ class ObservabilityPolicyTests(unittest.TestCase):
 
 class DeploymentRendererTests(unittest.TestCase):
     def setUp(self) -> None:
+        # Every service uses a recognizable but valid immutable reference. The
+        # renderer must consume all four as one release, never infer a tag.
         images = {}
         for service in render_deployment.SERVICE_IMAGES:
             digest = "a" * 64
@@ -62,6 +78,9 @@ class DeploymentRendererTests(unittest.TestCase):
         }
 
     def _source(self, services: tuple[str, ...]) -> str:
+        # Model the risky base conditions the production renderer is expected to
+        # repair: an inherited staging label, placeholder Secret, local image,
+        # Never pull policy, and a hostless ingress fallback.
         documents = [
             {
                 "apiVersion": "v1",
@@ -133,6 +152,8 @@ class DeploymentRendererTests(unittest.TestCase):
         documents = self._renderer().render(
             self._source(tuple(render_deployment.SERVICE_IMAGES))
         )
+        # Uploaded/applied plans must remain secret-free; environment-scoped CD
+        # steps create the stable Secret separately from protected values.
         self.assertFalse(any(doc.get("kind") == "Secret" for doc in documents))
 
         deployments = [doc for doc in documents if doc.get("kind") == "Deployment"]
@@ -161,6 +182,8 @@ class DeploymentRendererTests(unittest.TestCase):
                 self.assertEqual("dev", labels["signal-forge.environment"])
 
     def test_qa_ingress_is_host_scoped_and_tls_only(self) -> None:
+        # QA reuses the historical staging overlay, so this test proves the
+        # renderer removes local catch-all routing and applies the actual target.
         documents = self._renderer(
             environment="qa", public_url="https://qa.signal-forge.example"
         ).render(self._source(tuple(render_deployment.SERVICE_IMAGES)))
@@ -180,6 +203,8 @@ class DeploymentRendererTests(unittest.TestCase):
         )
 
     def test_missing_release_workload_is_rejected(self) -> None:
+        # A syntactically valid partial render is still unsafe: deployment and
+        # rollback are defined over the complete four-service release set.
         with self.assertRaises(render_deployment.RenderError):
             self._renderer().render(self._source(("gateway-api",)))
 
