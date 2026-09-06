@@ -1,5 +1,14 @@
 name: Docs
 
+# Builds docs/ (+ README.md) via the shared Starlight engine and publishes to
+# https://shipsolid.github.io/signal-forge/. Per-repo config: docs-site.yaml.
+#
+# @main is deliberate — this org owns shipsolid/docs-site and every consumer
+# tracks its main so engine fixes land without a version bump here. The engine's
+# own CI (tests/fixture-build.test.mjs) is the guard against a breaking change.
+#
+# One-time: repo Settings -> Pages -> Source = "GitHub Actions".
+
 on:
   push:
     branches: [main]
@@ -21,13 +30,16 @@ concurrency:
   group: pages-${{ github.ref }}
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
+# No workflow-level permissions — the reusable workflow's build job needs only
+# the default read scope; pages:write + id-token:write are granted to this one
+# job because the engine's deploy job (skipped on PRs, deploy=false) mints an
+# OIDC token for actions/deploy-pages.
 jobs:
   docs:
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     uses: shipsolid/docs-site/.github/workflows/build-deploy.yml@main
     with:
       deploy: ${{ github.event_name != 'pull_request' }}
