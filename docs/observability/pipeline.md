@@ -2,7 +2,7 @@
 title: "Observability Pipeline"
 description: "How the Grafana Alloy collector pipeline differs between SignalForge's local (hand-authored River) and cloud (Helm chart) monitoring modes."
 tags: ["ShipSolid", "Signal Forge", "Observability"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-25"
 relations:
   - slug: projects/app-signal-forge/observability/sampling
@@ -17,14 +17,14 @@ relations:
 
 ## Observability Pipeline
 
-Grafana Alloy is the collector for all signals, always installed by `./deploy-local.sh` via the
-`grafana/k8s-monitoring` Helm chart (`alloy-receiver` DaemonSet in the `monitoring` namespace, plus
-`alloy-logs`/`alloy-metrics`/`alloy-singleton`). **Local and cloud mode are two structurally
-different implementations, not two configmaps for the same pipeline:**
+Grafana Alloy is the collector for all signals. The local deployment always applies the bespoke
+local Alloy DaemonSet; the `grafana/k8s-monitoring` Helm chart is opt-in in local mode
+(`./deploy-local.sh --with-helm`) and mandatory in cloud mode. **Local and cloud mode are two
+structurally different implementations, not two configmaps for the same pipeline:**
 
 - **Local mode** (`monitoring.mode: local`) — a hand-authored River pipeline in
-  `k8s/monitoring/grafana/local/configmap.yaml`, applied directly by `deploy-local.sh` alongside the
-  Helm chart. Every stage below (receivers, k8sattributes, env-label, healthz filter, spanmetrics,
+  `k8s/monitoring/grafana/local/configmap.yaml`, applied directly by `deploy-local.sh`. Every stage
+  below (receivers, k8sattributes, env-label, healthz filter, spanmetrics,
   tail sampling, batch, exporters) is custom code in that file.
 - **Cloud mode** (`monitoring.mode: cloud`, default) — entirely the Helm chart's own
   `applicationObservability` feature, configured declaratively via
@@ -377,13 +377,11 @@ delimiters (`{{"{{"}}` / `{{"}}"}}`) before substitution, to survive Helm's rend
 
 ## Known gaps in cloud mode
 
-**No sampling of any kind.** The `grafana/k8s-monitoring` chart's `applicationObservability` feature
-has no tail-sampling or probabilistic-sampling processor anywhere in its values schema (verified by
-reading every processor/connector option in the chart's `feature-application-observability`
-subchart, v3.8.4) — head-based or tail-based. Adding one would require forking the chart's
-templates, which this repo deliberately doesn't do (no vendored chart copy). Cloud mode sends **100%
-of trace volume** to Tempo today. This is a real cost/cardinality tradeoff
+**No sampling configured in the chart-only cloud path.** This repository's current cloud values do
+not add a tail-sampling or probabilistic-sampling processor. Cloud mode therefore sends **100% of
+trace volume** to Tempo today. The selected chart version is pinned in `conf.yml`; verify its current
+schema before treating a previous version's limitation as permanent. This is a real cost/cardinality tradeoff
 worth naming explicitly rather than leaving silent: acceptable at this lab's traffic volume, but
-would need revisiting (either accepting the cost, or forking the chart) before treating cloud mode
-as production-representative at higher volume. See [[sampling|sampling.md]] for the local-mode
-reference implementation this doesn't have an equivalent for.
+would need revisiting (either accepting the cost or introducing an owned collector transform) before
+treating cloud mode as production-representative at higher volume. See [[sampling|sampling.md]] for
+the local-mode reference implementation this doesn't have an equivalent for.

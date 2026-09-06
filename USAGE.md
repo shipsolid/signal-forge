@@ -15,9 +15,10 @@ install/update as long as `.env` is already populated.
 ./deploy-local.sh
 ```
 
-Creates the k3d cluster (`otel-lab`), builds all 4 Docker images, applies manifests in dependency
-order (`infra/` → `datastores/` → `monitoring/` → `app/` → `post/`), and installs the Helm
-monitoring chart. Cold run: 5–15 min.
+Creates the k3d cluster (`otel-lab`), builds all 4 Docker images, and applies manifests in dependency
+order (`infra/` → `datastores/` → `monitoring/` → `app/` → `post/`). Cloud mode installs the Helm
+monitoring chart; local mode uses the bespoke collector unless `--with-helm` is supplied. Cold run:
+5–15 min.
 
 In `monitoring.mode: cloud` (the default), Grafana Cloud credentials come from the `.env` file named
 by `monitoring.grafana_cloud.use_env` in [conf.yml](conf.yml) — `deploy-local.sh` sources it
@@ -49,8 +50,10 @@ touch.
 | Local-mode Helm monitoring chart                  | `./deploy-local.sh --with-helm`                             |
 | Using a non-default config file                   | `./deploy-local.sh -c <path-to-conf.yml>`                   |
 
-`deploy-local.sh` is idempotent — re-running any variant is safe and is also the rollback path
-(reapply the last-known-good `conf.yml` / manifests).
+`deploy-local.sh` is idempotent — re-running any variant is safe and is the **local-lab** recovery
+path (reapply the last-known-good `conf.yml` / manifests). It is not the CI/CD rollback mechanism:
+an enabled GitHub Environment deployment restores the previous complete immutable four-image digest
+set and its runtime ConfigMaps. See [Immutable CI/CD Promotion](docs/deployment/ci-cd.md).
 
 ### Rotate Grafana Cloud credentials
 
@@ -144,7 +147,8 @@ The sole deploy path. Reads every knob from [conf.yml](conf.yml).
 
 ```bash
 kubectl kustomize k8s/base                  # render full stack
-kubectl kustomize k8s/overlays/prod         # render prod overlay (replicas=6, required anti-affinity)
+# Inspect topology only; CD adds immutable image digests and protected runtime configuration.
+kubectl kustomize k8s/overlays/prod
 kubectl apply -k k8s/overlays/dev           # apply dev overlay
 ```
 

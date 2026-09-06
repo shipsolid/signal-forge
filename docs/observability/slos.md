@@ -2,7 +2,7 @@
 title: "SLOs & burn-rate alerts"
 description: "SignalForge's published SLOs, how their SLIs are computed from span metrics, and how multi-window burn-rate alerts are structured."
 tags: ["ShipSolid", "Signal Forge", "Observability"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-27"
 relations:
   - slug: projects/app-signal-forge/operations/runbooks
@@ -15,8 +15,9 @@ relations:
 
 ## SLOs & burn-rate alerts
 
-What objectives signal-forge commits to, how they're measured, and how the alerts on them are
-structured. Rules as code live in
+The lab's defined objectives, how they are measured, and how the alerts are structured. They are
+engineering targets and rule-as-code examples, not an externally backed SLA or evidence that a
+remote environment is currently meeting them. Rules as code live in
 [k8s/monitoring/slo-rules.yaml](https://github.com/shipsolid/signal-forge/blob/main/k8s/monitoring/slo-rules.yaml).
 
 ## Published SLOs
@@ -115,6 +116,19 @@ maintained anywhere).
 local ConfigMap load and the kube-prometheus-stack fallback; it doesn't gate the cloud script, which
 you run explicitly when you want rules live in Grafana Cloud.
 
+## Release-gate boundary
+
+CI validates that this rule file exists and passes `promtool`, but does not evaluate the rules
+against live traffic. An enabled CD deployment has a separate external observability-gate contract:
+it must verify candidate metrics, logs, traces, and resource attributes for the exact commit and
+environment. That integration can choose to query these burn-rate rules, but no Grafana endpoint,
+query credentials, or approved SLO/error-budget threshold source is committed here.
+
+Consequently, do not describe an ordinary CI run as SLO-gated. `block` from the configured runtime
+gate fails DEV/QA/PROD; a `warn` is informational in DEV/QA and release-blocking in PROD. See
+[Immutable CI/CD Promotion](../deployment/ci-cd.md) and
+[OTel Signal Contracts](otel-contracts.md#observability-as-release-policy).
+
 ## Runbook links
 
 Every alert has a `runbook_url` annotation pointing at `https://example.com/runbooks/...` as a
@@ -122,8 +136,7 @@ placeholder. Real runbook content would live in:
 
 - [[projects/app-signal-forge/operations/runbooks|docs/operations/runbooks.md]] — update with a
   section per alert name
-- Or a Wiki / Notion / PagerDuty runbook field, replacing the URL in the `PrometheusRule`
-  annotations.
+- Or a Wiki / Notion / PagerDuty runbook field, replacing the URL in the rule annotations.
 
 ## Tuning
 

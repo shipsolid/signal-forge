@@ -1,8 +1,8 @@
 ---
 title: "Networking & TLS"
-description: "Network-plane security for Signal Forge: NetworkPolicy default-deny model, Ingress TLS via cert-manager, and the k3d flannel enforcement caveat."
+description: "Network-plane security for Signal Forge: enforced NetworkPolicy model, Ingress TLS via cert-manager, and environment-specific verification."
 tags: ["ShipSolid", "Signal Forge", "Operations"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-29"
 relations:
   - slug: projects/app-signal-forge/operations/security
@@ -22,21 +22,16 @@ The manifests in
 [k8s/infra/network-policies.yaml](https://github.com/shipsolid/signal-forge/blob/main/k8s/infra/network-policies.yaml)
 implement a **default-deny-plus-tiered-allows** model for the `otel-lab` namespace.
 
-### ⚠️ k3d caveat
+### k3d enforcement and target-cluster verification
 
-**Stock k3d uses flannel, which does not enforce NetworkPolicies.** The manifests are silently
-accepted but no pod-to-pod traffic is actually blocked. To enforce them locally, recreate the
-cluster with flannel disabled:
+This k3d/k3s lab uses kube-router's NetworkPolicy controller alongside flannel; the generated
+`KUBE-ROUTER-*`, `KUBE-NWPLCY-*`, and per-pod reject chains have been verified on the k3d server.
+The policies are therefore enforced locally, not merely accepted as inert YAML.
 
-```
-k3d cluster create otel-lab \
-  --k3s-arg '--flannel-backend=none@server:*' \
-  --k3s-arg '--disable-network-policy=false@server:*'
-# then install Calico or Cilium
-```
-
-For real clusters (EKS with the VPC CNI + NetworkPolicy, GKE with Dataplane V2, AKS with Azure CNI
-Overlay + Cilium) the manifests apply and enforce without any change.
+NetworkPolicy behavior remains CNI/controller dependent. Before promoting the manifests to another
+cluster, run a positive/negative connectivity test from representative pods and confirm the target
+controller enforces both ingress and egress. Do not assume that a successful `kubectl apply` proves
+isolation.
 
 ### Policies and what they allow
 
@@ -45,7 +40,8 @@ Overlay + Cilium) the manifests apply and enforce without any change.
 | `default-deny-all`              | `{}` (all pods)     | Ingress+Egress | nothing                                       |
 | `allow-dns-egress`              | `{}`                | Egress         | UDP/TCP 53 to kube-system                     |
 | `allow-ingress-from-controller` | `tier=app`          | Ingress        | any namespace → TCP 5000/5001/8000/8080       |
-| `allow-app-to-app`              | `tier=app`          | Egress         | tier=app → TCP 5000/5001/8000/8080            |
+| `allow-app-to-app`              | `tier=app`          | Egress         | tier=app → TCP 5000/5001/**5002**/8000/8080   |
+| `allow-app-ingress-from-app`    | `tier=app`          | Ingress        | tier=app → TCP 5000/5001/**5002**/8000/8080   |
 | `allow-app-to-datastore`        | `tier=app`          | Egress         | tier=datastore → 3306/5432/6379/5672          |
 | `allow-datastore-from-app`      | `tier=datastore`    | Ingress        | tier=app → all datastore ports                |
 | `allow-app-to-alloy-receiver`   | `tier=app`          | Egress         | ns=monitoring, app=alloy-receiver → 4317/4318 |

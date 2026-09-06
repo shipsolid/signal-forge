@@ -13,7 +13,7 @@ microservices validation lab.
 | [Architecture Overview](architecture/overview.md) | System design, service topology, signal-flow diagrams |
 | [Architecture Decisions](architecture/adrs/adr-log-tailing-not-otlp-export.md) | 10 ADRs for every non-obvious design choice — browse `architecture/adrs/` |
 | [Service: gateway-api](services/gateway-api.md) | .NET 8 API gateway — endpoints, OTel, failure modes |
-| [Service: order-api](services/order-api.md) | .NET 8 gRPC order service — streaming, RabbitMQ publishing |
+| [Service: order-api](services/order-api.md) | .NET 8 gRPC order service — streaming, transactional outbox, RabbitMQ publishing |
 | [Service: notification-svc](services/notification-svc.md) | Python FastAPI — async consumer, DLQ, Redis |
 | [Service: frontend](services/frontend.md) | Angular 17 SPA + Grafana Faro RUM |
 
@@ -26,7 +26,7 @@ microservices validation lab.
 | [Tail-Based Sampling](observability/sampling.md) | Sampling policies, validation, production tuning |
 | [Log-to-Trace Correlation](observability/correlation.md) | Loki structured metadata, .NET vs Python field names |
 | [Exemplars](observability/exemplars.md) | End-to-end exemplar pipeline from SDK to Grafana |
-| [SLOs & burn-rate alerts](observability/slos.md) | Multi-window SLO math, `PrometheusRule` manifest, alert policy |
+| [SLOs & burn-rate alerts](observability/slos.md) | Multi-window SLO math, portable `groups:` rule file, alert policy |
 
 ## Infrastructure
 
@@ -45,6 +45,7 @@ microservices validation lab.
 | [Local Deployment](deployment/local.md) | k3d cluster setup, local backends, step-by-step |
 | [Grafana Cloud Deployment](deployment/grafana-cloud.md) | Credentials, AKV integration, endpoint formats |
 | [Helm Monitoring Stack](deployment/helm.md) | grafana/k8s-monitoring chart, Alloy roles |
+| [Immutable CI/CD Promotion](deployment/ci-cd.md) | Trusted CI run selection, digest promotion, environment gates, rollback |
 
 ## Operations
 
@@ -52,7 +53,7 @@ microservices validation lab.
 | ---- | -------------- |
 | [Runbooks](operations/runbooks.md) | Troubleshooting playbooks for every failure mode |
 | [Security](operations/security.md) | Secrets lifecycle, credential rotation, threat model |
-| [Networking & TLS](operations/networking.md) | NetworkPolicies, Ingress TLS via cert-manager, flannel caveat |
+| [Networking & TLS](operations/networking.md) | NetworkPolicies, Ingress TLS via cert-manager, kube-router enforcement model |
 | [Reliability](operations/reliability.md) | PodDisruptionBudgets, pod anti-affinity, graceful shutdown |
 | [Resilience Patterns](operations/resilience-patterns.md) | App-level retry/circuit-breaker/backoff/DLQ patterns, per service |
 | [Supply-chain security](operations/supply-chain.md) | CI Trivy/Syft/cosign pipeline, digest pinning, SBOM verification |
@@ -72,7 +73,7 @@ different repository — for handing the pattern off to another team, not for wo
 
 | Page | What it covers |
 | ---- | -------------- |
-| [Guides index](guides/index.md) | Scope, assumptions, recommended order |
+| [Guides index](guides/README.md) | Scope, assumptions, recommended order |
 | [Collector & Pipeline Setup](guides/collector-pipeline-setup.md) | Alloy + `grafana/k8s-monitoring` Helm chart — do this first |
 | [.NET Instrumentation](guides/dotnet-instrumentation.md) | SDK wiring, custom spans/metrics, RabbitMQ outbox propagation |
 | [Python Instrumentation](guides/python-instrumentation.md) | SDK wiring, RabbitMQ consumer SpanLink propagation |
@@ -85,7 +86,7 @@ different repository — for handing the pattern off to another team, not for wo
 | [OTel Validation Spec](spec.md) | All services, patterns to validate, the validation checklist |
 | [OTel Instrumentation Patterns](otel-patterns.md) | Per-runtime instrumentation choices |
 | [Testing](testing.md) | Test strategy, isolation patterns, CI matrix |
-| [Project README](project-readme.md) | Deploy model, ownership boundary, dependencies, operational model |
+| [Project README](../README.md) | Deploy model, ownership boundary, dependencies, operational model |
 
 ## Quick orientation
 
@@ -122,9 +123,10 @@ Two deployment modes (set in
 | Understanding sampling behaviour | [Tail-Based Sampling](observability/sampling.md) |
 | Reviewing signal contracts | [OTel Signal Contracts](observability/otel-contracts.md) |
 | Reviewing security posture | [Security](operations/security.md) + [Container hardening](infrastructure/hardening.md) + [Supply-chain](operations/supply-chain.md) |
-| Promoting to staging / prod | [Datastore HA migration](infrastructure/datastore-ha.md) + [Kustomize overlays](infrastructure/kustomize.md) + [Reliability](operations/reliability.md) |
+| Reviewing an immutable promotion | [Immutable CI/CD Promotion](deployment/ci-cd.md) + [Supply-chain security](operations/supply-chain.md) |
+| Preparing a target cluster | [Datastore HA migration](infrastructure/datastore-ha.md) + [Kustomize layout](infrastructure/kustomize.md) + [Reliability](operations/reliability.md) |
 | Writing SLO alerts | [SLOs & burn-rate alerts](observability/slos.md) |
-| Handing this pattern to another team | [Replication guides](guides/index.md) |
+| Handing this pattern to another team | [Replication guides](guides/README.md) |
 
 ## Source
 

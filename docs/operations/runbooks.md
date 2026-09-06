@@ -2,7 +2,7 @@
 title: "Runbooks"
 description: "Troubleshooting playbooks for every known Signal Forge failure mode, from missing traces to Grafana Cloud export errors."
 tags: ["ShipSolid", "Signal Forge", "Operations", "Incident Response"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-32"
 relations:
   - slug: projects/app-signal-forge/deployment/grafana-cloud
@@ -16,6 +16,74 @@ relations:
 ## Runbooks
 
 Troubleshooting playbooks for every known failure mode.
+
+---
+
+## Immutable CD promotion blocked or rolled back
+
+### Scope
+
+This runbook applies only when a GitHub Environment has `DEPLOY_ENABLED=true`. Without that flag,
+CD is intentionally render-only and no cluster rollback is expected. The promotion input is a
+successful CI run ID and its immutable release manifest — never a tag, a source branch, or a locally
+rebuilt image.
+
+### First checks
+
+1. Open the CD run summary and record the selected CI run ID, release commit, target environment,
+   and the four `repository@sha256:...` references. Do not copy these from `latest`.
+2. Determine the failed boundary: pre-deploy evidence verification, server-side apply/rollout,
+   exact-digest health gate, smoke test, observability gate, or DEV-only ZAP baseline.
+3. Download the `deployment-plan-<environment>-<commit>` artifact. It is intentionally secret-free
+   and shows the rendered digest references, runtime ConfigMaps, ingress host, and labels used for
+   the attempted deployment.
+4. If the failure occurred before `Apply immutable release`, no cluster mutation occurred. Fix the
+   environment configuration or the release, then start a new promotion from a successful CI run.
+
+### Verify the currently running release
+
+```bash
+namespace=otel-lab  # replace only if the protected Environment uses another namespace
+for service in otel-frontend gateway-api order-api notification-svc; do
+  kubectl -n "$namespace" get deployment "$service" \
+    -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+done
+```
+
+Every returned application image must be a `ghcr.io/...@sha256:...` reference. A mutable tag is not
+a valid known-good rollback target. Confirm workload availability and restart counts before declaring
+recovery:
+
+```bash
+kubectl -n "$namespace" get deployments
+kubectl -n "$namespace" get pods -l tier=app
+```
+
+### Automatic rollback behavior
+
+After an apply, any failed health, smoke, observability, or DEV DAST gate triggers CD to restore the
+complete previous four-image immutable set and the previous `signal-forge-app-env` and
+`frontend-env-js` ConfigMaps. It refuses partial rollback because mixing independent service
+versions creates a release that was never tested together.
+
+If the run reports **"No complete previous immutable release is available for rollback"**, stop.
+Do not run `kubectl apply -k k8s/overlays/prod`, use `latest`, or rebuild a prior commit. Recover
+only with an operator-approved complete digest manifest after investigating why the target had no
+captured known-good state.
+
+### Observability-gate failure
+
+The external gate receives the environment, release commit, CI run, required backend services,
+metrics/logs/traces, and `service.name`/`service.version`/`deployment.environment` requirements.
+It fails closed for an unknown response or `block`; a `warn` is visible in DEV/QA but blocks PROD.
+
+Use the gate response summary and the configured observability platform to determine whether the
+candidate has missing telemetry, a deployment identity mismatch, an error/latency regression, or an
+approved-policy breach. This repository does not contain the external query endpoint or credentials,
+so do not substitute a green `/healthz` result for telemetry evidence.
+
+See [Immutable CI/CD Promotion](../deployment/ci-cd.md) for the complete gate order and environment
+contract.
 
 ---
 

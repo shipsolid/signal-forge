@@ -1,8 +1,10 @@
 # Security Policy
 
-SignalForge is a personal lab / portfolio project (single owner, no production deployment, no
-SLA — see [README.md § Ownership Boundary](README.md#ownership-boundary)). This page covers how to
-report a vulnerability. For the threat model, secrets lifecycle, and hardening controls, see
+SignalForge is a personal lab / portfolio project (single owner, no configured live production
+target or SLA — see [README.md § Ownership Boundary](README.md#ownership-boundary)). The repository
+does contain protected-environment CI/CD promotion in render-only mode until maintainers configure
+the required GitHub Environment variables and secrets. This page covers how to report a
+vulnerability. For the threat model, secrets lifecycle, and hardening controls, see
 [Security](https://shipsolid.github.io/signal-forge/operations/security/)
 in the docs.
 

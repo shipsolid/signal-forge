@@ -2,7 +2,7 @@
 title: "Service: order-api"
 description: "order-api's gRPC service definition, outbox-pattern RabbitMQ publishing, streaming pattern, and OTel instrumentation."
 tags: ["ShipSolid", "Signal Forge", "Services"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-40"
 relations:
   - slug: projects/app-signal-forge/api/grpc
@@ -123,12 +123,13 @@ Fail-fast: empty `ConnectionStrings__DefaultConnection` throws at startup.
 
 Publishing is **not** part of `CreateOrder`. It's the
 [[patterns/04-microservice-patterns/14-outbox/14-outbox|outbox pattern]]: `CreateOrder` writes the
-`Order` and an `OutboxMessage` row in the same `SaveChanges` call, then returns — the caller sees
+`Order` and an `OutboxMessage` row in the same atomic `SaveChangesAsync` unit, then returns — the caller sees
 success as soon as PostgreSQL commits, regardless of RabbitMQ's state.
 
 1. `OutboxRelayWorker` polls `WHERE ProcessedAt IS NULL` every 5s, oldest first, in batches of 100.
-2. For each pending row it starts an `INTERNAL` span, `outbox.relay`, then calls
-   `OrderPublisher.PublishAsync`.
+2. For each pending row it restores the stored request `traceparent` as the parent of an `INTERNAL`
+   `outbox.relay` span and adds an `ActivityLink`, then calls `OrderPublisher.PublishAsync`. A retry
+   is separately observable while retaining the original trace ID.
 3. `PublishAsync` starts a `PRODUCER` span, `order.publish` (`ActivityKind.Producer`), as a **child
    of `outbox.relay`** — not of the original request's `order.create`. `order.create` has already
    finished and returned by the time this runs.
@@ -141,11 +142,10 @@ if (!string.IsNullOrEmpty(traceParent))
     props.Headers["traceparent"] = Encoding.UTF8.GetBytes(traceParent);
 ```
 
-This is deliberately **not** `Propagators.Inject(Activity.Current, ...)` — `Activity.Current` at
-this point is `order.publish`/`outbox.relay`'s own (new, disconnected) trace, not the original
-request's. Using the stored value is what lets notification-svc's CONSUMER span link back to
-`order.create` correctly; see [[projects/app-signal-forge/api/grpc#RPC: CreateOrder|grpc.md]] for
-what this means for trace continuity on the order-api side.
+This is deliberately **not** `Propagators.Inject(Activity.Current, ...)`. The stored value is the
+durable request context captured at persistence time; it keeps a worker retry from replacing it with
+an incidental background context and lets notification-svc link back to the original request. See
+[[projects/app-signal-forge/api/grpc#RPC: CreateOrder|grpc.md]] for the complete trace topology.
 
 5. Publish to exchange `orders`, routing key `order.created`:
 
@@ -196,11 +196,11 @@ fetched. Memory usage is O(1) regardless of result size. `ToListAsync()` was int
 | Instrument                   | Type             | Labels                                                                  | Description                                                                                     |
 | ---------------------------- | ---------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | `order.create` span          | `INTERNAL`       | `order.id`, `order.project_id`, `order.amount`                          | Wraps validate + DB write (order + outbox row) only — no publish; see below                     |
-| `outbox.relay` span          | `INTERNAL`       | `outbox.message_id`, `order.id`                                         | `OutboxRelayWorker`'s per-message span, its own disconnected trace root                         |
-| `order.publish` span         | `PRODUCER`       | `order.id`, `messaging.system=rabbitmq`, `messaging.destination=orders` | RabbitMQ publish with W3C header injection; child of `outbox.relay`, not `order.create`         |
-| `orders.created.total`       | Counter          | `project_id`                                                            | Increments on each successful `CreateOrder`                                                     |
-| `orders.amount.total`        | Counter (double) | `project_id`                                                            | Running sum of order amounts (financial throughput gauge)                                       |
-| `orders.processing.duration` | Histogram        | `project_id`                                                            | Time from CreateOrder RPC received to DB write commit (not publish — that's later, out of band) |
+| `outbox.relay` span          | `INTERNAL`       | `outbox.message_id`, `order.id`                                         | Per-message span; restored request parent + ActivityLink, so retries remain trace-correlated    |
+| `order.publish` span         | `PRODUCER`       | `order.id`, `messaging.system=rabbitmq`, `messaging.destination=orders` | RabbitMQ publish with stored W3C header injection; child of `outbox.relay`                      |
+| `orders.created.total`       | Counter          | none                                                                    | Increments on each successful `CreateOrder`                                                     |
+| `orders.amount.total`        | Counter (double) | none                                                                    | Running sum of order amounts (financial throughput gauge)                                       |
+| `orders.processing.duration` | Histogram        | none                                                                    | Time from CreateOrder RPC received to DB write commit (not publish — that's later, out of band) |
 
 ### Trace context in custom span attributes
 
@@ -219,7 +219,7 @@ activity?.SetTag("order.amount", request.Amount);
 | Scenario                            | Behaviour                                                                                                                                                                                                             | Evidence                                                        |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | PostgreSQL unavailable              | `CrashLoopBackOff`                                                                                                                                                                                                    | Error in pod logs (fail-fast)                                   |
-| RabbitMQ publish fails              | Does **not** affect `CreateOrder` — the RPC already returned. `OutboxRelayWorker` logs the error on the `outbox.relay` span and leaves `ProcessedAt` null; retried on the next 5s poll, indefinitely, with no backoff | Error span on `outbox.relay`, not on the original request trace |
+| RabbitMQ publish fails              | Does **not** affect `CreateOrder` — the RPC already returned. `OutboxRelayWorker` logs the error on the `outbox.relay` span and leaves `ProcessedAt` null; retried on the next 5s poll, indefinitely, with no backoff | Error span is correlated to the stored original request context |
 | Retried `CreateOrder` (idempotency) | `idempotency_key` unique index + replay: a repeated key returns the original order instead of inserting a duplicate                                                                                                   | `logger.LogInformation("CreateOrder replay detected...")`       |
 | Invalid input                       | `RpcException(StatusCode.InvalidArgument)`                                                                                                                                                                            | No error span (client fault)                                    |
 | Client disconnects mid-stream       | `CancellationToken` cancels DB cursor                                                                                                                                                                                 | `OperationCanceledException` logged at debug level              |

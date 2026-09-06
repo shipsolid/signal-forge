@@ -2,7 +2,7 @@
 title: "Known issues"
 description: "Recurring limitations and accepted trade-offs across Signal Forge, consolidated in one place to check before assuming a gap is new."
 tags: ["ShipSolid", "Signal Forge", "Operations"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-28"
 relations:
   - slug: projects/app-signal-forge/operations/reliability
@@ -27,8 +27,8 @@ log — this is a personal lab with no on-call and no incident process (see
 
 Planned/deferred work that's already tracked with a target is in
 [README.md § Roadmap](https://github.com/shipsolid/signal-forge/blob/main/README.md#roadmap)
-(SLO rules default-off, Pyroscope profiling, Faro source-map upload, datastore HA operator
-migration) and is not duplicated here.
+(a live external SLO/telemetry promotion gate, Pyroscope profiling, Faro source-map upload, datastore
+HA operator migration) and is not duplicated here.
 
 | ID     | Symptom                                                                                                                                                                                                                                                                                                                                                        | Workaround                                                                                                               | Root cause                                                                                                                                                                                                                                                              | Reference                                                                                                                                                                                 | Status                                                                                                                                                                   |
 | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |

@@ -1,8 +1,8 @@
 ---
 title: "Supply-chain security"
-description: "What CI verifies before a Signal Forge image ships: vulnerability scanning, SBOM generation, and cosign keyless signing."
+description: "How SignalForge validates, scans, signs, attests, and verifies immutable release images before promotion."
 tags: ["ShipSolid", "Signal Forge", "Operations"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-34"
 relations:
   - slug: projects/app-signal-forge/operations/security
@@ -15,13 +15,16 @@ relations:
 
 ## Supply-chain security
 
-What CI verifies before an image can land in production: vulnerability scanning, SBOM generation,
-and keyless signing.
+What CI and CD verify before an image can reach an environment: source/repository policy,
+vulnerability scanning, SBOM generation, keyless signing/attestation, and immutable digest
+verification.
 
 ## The pipeline
 
 [`.github/workflows/ci.yml`](https://github.com/shipsolid/signal-forge/blob/main/.github/workflows/ci.yml)
-— job `build-images` runs a matrix across the four services (`otel-frontend`, `gateway-api`,
+first runs a blocking quality gate (Gitleaks, repository policy, unit/build/protobuf validation,
+CodeQL, SCA, Trivy IaC scan, and observability-as-policy). Its `build-images` job then runs a
+matrix across the four services (`otel-frontend`, `gateway-api`,
 `order-api`, `notification-svc`) and, for each:
 
 1. **Build** the image with Docker buildx (`load: true` so the following steps see the same
@@ -29,21 +32,41 @@ and keyless signing.
 2. **Trivy scan** for HIGH/CRITICAL CVEs with an available fix (`ignore-unfixed: true`). Fails the
    job if any are found.
 3. **SBOM** generation with Syft (CycloneDX JSON) — uploaded as an artifact.
-4. **Push** to GHCR (main branch only).
+4. **Push** the already scanned local image to GHCR (main branch only), then record the
+   registry-reported digest.
 5. **Sign** with cosign keyless OIDC (main branch only).
 6. **Attest** the SBOM via `cosign attest --type cyclonedx` — binds the SBOM to the image digest.
-7. **Verify** the signature just produced, on the same digest, in the same job (main branch only) —
+7. **Verify** the signature and attestation just produced, on the same digest, in the same job (main branch only) —
    see §Signing below.
+8. **Publish** an attempt-specific `release-manifest.json` only after all four service records are
+   present, scanned, pushed, signed, attested, and verified.
 
 PRs run steps 1–3 only; push/sign/verify require `id-token: write` + GHCR auth, which we restrict to
 `main`.
 
-A separate scheduled workflow,
+A separate manual-only workflow,
 [`scheduled-vuln-rescan.yml`](https://github.com/shipsolid/signal-forge/blob/main/.github/workflows/scheduled-vuln-rescan.yml),
-re-scans the last-published `:latest` image for each service weekly — same Trivy severities, but
+re-scans the last-published `:latest` image for each service when dispatched — same Trivy severities, but
 _without_ `ignore-unfixed`, so a CVE that had no fix at build time still gets caught once one
 appears upstream. Report-only (`exit-code: "0"`), visible in the Security tab; it doesn't block
-anything since there's no PR to fail.
+anything since there's no PR or release transaction to fail. Its schedule is commented until an
+owner adopts an operational cadence; `latest` is never a CD input.
+
+## Promotion verification
+
+CD consumes a successful `main` CI **run ID**, not a tag or source ref. It validates the GitHub run
+and its attempt-specific manifest, then passes the unchanged four-image digest set through DEV, QA,
+and optional protected PROD. The reusable deployment workflow verifies every digest exists in GHCR
+and verifies its Cosign signature and CycloneDX attestation against the trusted CI workflow identity
+**before** it writes kubeconfig or applies a Kubernetes object.
+
+This is supply-chain verification at the deployment boundary; it is not a second image build. The
+renderer changes only environment-specific ConfigMaps, ingress host/TLS configuration, labels, and
+secret references. It replaces local application image markers with `repository@sha256:...` values
+from the manifest and rejects a partial service set.
+
+See [Immutable CI/CD Promotion](../deployment/ci-cd.md) for environment prerequisites, release
+ordering, live gates, and rollback behavior.
 
 ## Trivy policy
 
@@ -80,11 +103,11 @@ signature's certificate embeds:
 - The ref that produced the signature (`refs/heads/main`)
 - The commit SHA
 
-**Verified automatically**: the `build-images` job runs `cosign verify` against the exact digest it
-just signed, in the same job, before the workflow completes — the sign→verify round-trip is
-exercised on every push to `main`, not just documented as something you could do. That catches
-config drift in the signing step itself (wrong identity, wrong issuer, etc.) immediately instead of
-only ever being noticed the first time someone tries to verify manually.
+**Verified automatically**: the `build-images` job runs `cosign verify` and
+`cosign verify-attestation --type cyclonedx` against the exact digest it just signed, in the same
+job, before the workflow completes. CD repeats the same identity-bound checks immediately before an
+enabled deployment. The two boundaries catch issuance/attestation errors before release metadata is
+published and prevent an unverified manifest digest from reaching a cluster.
 
 Verify downstream yourself, any time:
 
@@ -152,8 +175,9 @@ To reject unsigned images at deploy time, install one of:
 [connaisseur]: https://github.com/sse-secure-systems/connaisseur
 [kyverno]: https://kyverno.io/docs/writing-policies/verify-images/
 
-None of these are installed in the lab. The CI signing side ships signatures and now verifies them
-itself (see §Signing above); no cluster gates on them at deploy time yet.
+None of these are installed in the lab. CI and an enabled CD deployment both verify signatures and
+attestations before apply (see §Signing above), but no cluster admission policy independently
+refuses an unsigned image at scheduling time.
 
 ## What this doesn't cover
 

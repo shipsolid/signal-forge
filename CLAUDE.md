@@ -11,9 +11,8 @@ Every meaningful behavioural switch flows from **`monitoring.mode`** in [conf.ym
   traces/metrics/logs to Grafana Cloud Tempo/Mimir/Loki. **No in-cluster
   Jaeger/Prometheus/Loki/Grafana are deployed.**
 - `local` — a bespoke Alloy DaemonSet in [k8s/monitoring/grafana/](k8s/monitoring/grafana/) exports
-  to in-cluster backends under [k8s/monitoring/local/](k8s/monitoring/local/). The Helm chart is
-  still installed (apps target `grafana-k8s-alloy-receiver` regardless); only its destinations
-  change.
+  to in-cluster backends under [k8s/monitoring/local/](k8s/monitoring/local/). Helm is optional in
+  this mode and is installed only with `--with-helm`; cloud mode always uses the Helm receiver.
 
 The modes are mutually exclusive. There is **no dual-export** — any doc or code comment that says
 otherwise is stale. `http://localhost:3000` / `:16686` / `:9090` only exist in local mode.
@@ -54,7 +53,8 @@ explanation.
 - `monitoring.deployment_environment` — stamped on every signal (Helm `extraLabels`, app env via
   ConfigMap)
 - `security.tls.{enabled, hostname, cert_manager}` — gates cert-manager install
-- `observability.slo_rules.{enabled, manifest}` — gates PrometheusRule apply
+- `observability.slo_rules.{enabled, manifest}` — gates local SLO rule loading (and optional
+  kube-prometheus-stack wrapping when that operator exists)
 
 Changing a URL / user / key in `monitoring.grafana_cloud` and re-running
 `./deploy-local.sh --skip-cluster --skip-build` is sufficient to propagate — no other files need
@@ -222,8 +222,8 @@ kubectl apply -k k8s/overlays/dev           # apply dev overlay
   `.gitignore` has negations for this pattern.
 - **Rendered Helm values directories are tracked.** `k8s/monitoring/grafana-helm/generated/` is a
   committed snapshot, not derived at build time.
-- **Vendored chart.** `grafana/k8s-monitoring` v3.8.4 is pulled at deploy time — no local vendored
-  copy in this directory.
+- **Vendored chart.** The `grafana/k8s-monitoring` version is pinned in `conf.yml` and pulled at
+  deploy time — there is no local vendored copy in this directory.
 
 ## Docs map
 
@@ -244,7 +244,7 @@ top-level `README.md`; a `[[wiki-link]]` pass and a broken-link check run at bui
   - `infrastructure/kustomize.md` — base + overlays layout, how deploy-local.sh consumes it
   - `infrastructure/datastore-ha.md` — operator migration (CNPG / MySQL Operator / RabbitMQ
     Operator / Redis Sentinel) when graduating beyond single-replica
-  - `operations/networking.md` — NetworkPolicy model + flannel caveat + cert-manager flow
+  - `operations/networking.md` — NetworkPolicy model + kube-router enforcement model + cert-manager flow
   - `operations/supply-chain.md` — CI scan/SBOM/sign
   - `observability/slos.md` — SLI recording rules + multi-window burn alerts
   - `deployment/grafana-cloud.md` — full AKV → conf.yml → Secret credential model

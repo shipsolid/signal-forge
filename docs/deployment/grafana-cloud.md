@@ -2,7 +2,7 @@
 title: "Grafana Cloud Deployment"
 description: "How Alloy exports traces, metrics, and logs to Grafana Cloud, including credential architecture, Azure Key Vault setup, and troubleshooting."
 tags: ["ShipSolid", "Signal Forge", "Deployment"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-14"
 relations:
   - slug: projects/app-signal-forge/deployment/helm
@@ -19,6 +19,11 @@ relations:
 
 Alloy exports all signals to Grafana Cloud (Tempo, Mimir, Loki) when credentials are configured.
 When credentials are absent, cloud exporters are no-ops — local backends are unaffected.
+
+This page documents the `deploy-local.sh` collector/export path and Azure Key Vault credential
+model. It is not the application-release promotion path: CD takes collector endpoints and any
+observability-gate token from protected GitHub Environments without rebuilding application images.
+See [Immutable CI/CD Promotion](ci-cd.md) for that boundary.
 
 ---
 

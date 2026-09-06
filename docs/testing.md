@@ -2,7 +2,7 @@
 title: "Testing"
 description: "Reference for signal-forge's 140 automated tests across all four services, including setup commands, per-suite coverage, and known gaps."
 tags: ["ShipSolid", "Signal Forge", "Testing"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-42"
 relations:
   - slug: patterns/04-microservice-patterns/05-backpressure/05-backpressure
@@ -17,7 +17,8 @@ relations:
 
 ## Testing
 
-This project has 140 automated tests across all four services. Most run locally without a running
+This project has 140 fast automated service tests across all four services, plus an opt-in
+cross-language integration test and repository policy tests. Most run locally without a running
 cluster, database, or message broker — the one exception is `OutboxRelayWorkerTests`, which needs a
 real PostgreSQL via Testcontainers (Docker required), not a cluster or broker.
 
@@ -46,6 +47,22 @@ cd src/frontend
 npm ci --legacy-peer-deps   # jest/jest-preset-angular are real devDependencies now
 npx jest --config jest.config.js
 ```
+
+### CI policy tests
+
+The release workflow also executes a small Python regression suite for the immutable-deployment and
+observability-policy contracts. It is distinct from service unit tests: it asserts that all four
+local app image markers become digest references, Secrets are excluded from the rendered plan,
+runtime telemetry identity is preserved, QA ingress is TLS/host scoped, incomplete releases fail,
+and known unbounded metric dimensions are rejected.
+
+```bash
+python3 -m unittest discover -s scripts/ci/tests -v
+```
+
+The workflow additionally renders the collector inputs, runs `promtool` against SLO rules, and runs
+the real Alloy validator. See [Immutable CI/CD Promotion](deployment/ci-cd.md) and
+[OTel Signal Contracts](observability/otel-contracts.md#observability-as-release-policy).
 
 ## Test suites
 

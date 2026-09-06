@@ -48,20 +48,26 @@ bleed into production pipelines.
 ## Architecture
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'#0f172a','primaryColor':'#bae6fd','primaryTextColor':'#0f172a','primaryBorderColor':'#7dd3fc','secondaryColor':'#bbf7d0','tertiaryColor':'#fde68a','lineColor':'#cbd5e1','clusterBkg':'#1e293b','clusterBorder':'#94a3b8','titleColor':'#f8fafc','edgeLabelBackground':'#1e293b'}}}%%
 flowchart TD
     Browser["Browser (Faro RUM)"] --> Gateway["gateway-api (.NET 8, :5000)"]
     Gateway --> MySQL["MySQL 8 (EF Core)"]
-    Gateway --> OrderAPI["order-api (.NET 8, gRPC :5001)"]
+    Gateway --> OrderAPI["order-api (.NET 8, gRPC :5002)"]
     Gateway -->|HTTP| Notification["notification-svc (Python, :8000)"]
     OrderAPI --> Postgres["PostgreSQL 16 (Npgsql)"]
-    OrderAPI --> RabbitMQ["RabbitMQ"]
+    OrderAPI -->|outbox relay| RabbitMQ["RabbitMQ"]
     RabbitMQ --> Notification
     Notification --> Redis["Redis 7"]
+    classDef app fill:#bae6fd,stroke:#7dd3fc,color:#0f172a;
+    classDef data fill:#bbf7d0,stroke:#4ade80,color:#0f172a;
+    class Browser,Gateway,OrderAPI,Notification app;
+    class MySQL,Postgres,RabbitMQ,Redis data;
 ```
 
 All services push OTLP to `alloy-receiver` (Helm-managed DaemonSet, `monitoring` namespace):
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'#0f172a','primaryColor':'#bae6fd','primaryTextColor':'#0f172a','primaryBorderColor':'#7dd3fc','secondaryColor':'#bbf7d0','tertiaryColor':'#fde68a','lineColor':'#cbd5e1','clusterBkg':'#1e293b','clusterBorder':'#94a3b8','titleColor':'#f8fafc','edgeLabelBackground':'#1e293b'}}}%%
 flowchart TD
     SDK["App SDK"] -->|OTLP gRPC :4317| Receiver[alloy-receiver]
     Receiver --> K8sAttrs[k8sattributes enrichment]
@@ -76,6 +82,10 @@ flowchart TD
     Logs["alloy-logs (DaemonSet)"] --> LogsTail["pod stdout tailing"] --> LogsCorr["trace correlation"] --> Loki[Loki]
 
     Metrics["alloy-metrics (StatefulSet)"] --> MetricsScrape["kubelet/cAdvisor/KSM"] --> Backend2["Mimir | Prometheus"]
+    classDef pipeline fill:#bae6fd,stroke:#7dd3fc,color:#0f172a;
+    classDef backend fill:#bbf7d0,stroke:#4ade80,color:#0f172a;
+    class SDK,Receiver,K8sAttrs,Transform,Filter,SpanMetrics,RED,TailSampling,Batch,Logs,LogsTail,LogsCorr,Metrics,MetricsScrape pipeline;
+    class Backend1,Loki,Backend2 backend;
 ```
 
 The single most important configuration knob is `monitoring.mode` in [conf.yml](conf.yml):
@@ -88,10 +98,9 @@ The single most important configuration knob is `monitoring.mode` in [conf.yml](
 The two modes are mutually exclusive — there is no dual-export. Any doc saying otherwise is stale.
 
 In **cloud mode**, the chart's Alloy agents are the entire pipeline — no in-cluster Jaeger /
-Prometheus / Loki / Grafana are deployed. In **local mode**, a parallel bespoke Alloy DaemonSet in
-[k8s/monitoring/grafana/](k8s/monitoring/grafana/) exports to in-cluster backends; the Helm chart is
-still installed and still serves as the app OTLP ingress, but its destinations point at the
-in-cluster services.
+Prometheus / Loki / Grafana are deployed. In **local mode**, a bespoke Alloy DaemonSet in
+[k8s/monitoring/grafana/](k8s/monitoring/grafana/) exports to in-cluster backends. Helm is optional
+there and is installed only with `--with-helm`; it is mandatory in cloud mode.
 
 `alloy-logs` tails pod stdout/stderr with trace-id correlation. `alloy-metrics` scrapes cluster
 infra metrics. See
@@ -159,12 +168,17 @@ live values.
 
 ## Deployment Model
 
-| Environment            | Method              | Trigger                       | Target                                |
-| ---------------------- | ------------------- | ----------------------------- | ------------------------------------- |
-| local (lab)            | `./deploy-local.sh` | manual                        | k3d cluster `otel-lab` on localhost   |
-| CI (build + test only) | GitHub Actions      | push / PR / workflow_dispatch | no cluster — tests + image scans only |
+| Stage | Method | Trigger | Outcome |
+| --- | --- | --- | --- |
+| local lab | `./deploy-local.sh` | manual | Builds/imports local images into k3d `otel-lab` |
+| PR CI | GitHub Actions | PR / manual | Blocking validation, local build/scan/SBOM; no registry publication |
+| trusted `main` CI | GitHub Actions | push / manual | Builds each image once, publishes signed digest references and a release manifest |
+| CD | GitHub Actions | manual successful CI run selection | Promotes the same four digest references DEV → QA → optional protected PROD |
 
-There is no staging or production deployment of this lab. The k3d cluster is ephemeral and local.
+The repository contains no live target credentials or URLs. CD therefore renders a secret-free plan
+and makes no cluster change unless environment-scoped `DEPLOY_ENABLED=true`, variables, secrets, and
+an observability gate are configured. This is distinct from the local k3d lab, which remains
+ephemeral and is the default development path. See [Immutable CI/CD Promotion](docs/deployment/ci-cd.md).
 
 ```bash
 # Full deploy: cluster + Docker builds + manifests + Helm (5-15 min cold)
@@ -176,7 +190,7 @@ There is no staging or production deployment of this lab. The k3d cluster is eph
 # Local mode: also install the Helm monitoring chart
 ./deploy-local.sh --with-helm
 
-# Rollback: re-run the deploy — it is idempotent
+# Local-only reapply: this is not the CD rollback path.
 ./deploy-local.sh --skip-cluster --skip-build
 
 # Teardown: delete the k3d cluster entirely
@@ -211,19 +225,11 @@ Auth: `az login` first, or export `ARM_CLIENT_ID` + `ARM_CLIENT_SECRET` in the s
 [docs/deployment/grafana-cloud.md](https://shipsolid.github.io/signal-forge/deployment/grafana-cloud/)
 for the full credential model and rotation procedure.
 
-### Helm upgrade invocation (used by deploy-local.sh, cloud mode)
+### Helm version and values
 
-```bash
-helm upgrade --install grafana-k8s grafana/k8s-monitoring \
-  --version 3.8.4 \
-  --namespace monitoring --create-namespace \
-  --values k8s/monitoring/grafana-helm/values-cloud.yaml \
-  --wait --timeout 5m
-```
-
-The values file is rendered from
-[values-cloud.yaml.tmpl](k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl) using credentials from
-`conf.yml`. Do not edit the rendered file — edit the template or `conf.yml`.
+`deploy-local.sh` reads the pinned `monitoring.helm.version` from `conf.yml` and renders the cloud
+values template before invoking Helm. Do not duplicate the chart version in commands or hand-edit a
+rendered values file; update the source configuration and then re-run the deploy script.
 
 ### Kustomize overlays
 
@@ -248,13 +254,13 @@ kubectl apply -k k8s/overlays/dev           # apply dev overlay
 | Grafana Cloud stack (`example-org.grafana.net`) | upstream | cloud mode only                   | Tempo, Mimir, Loki endpoints; credentials in AKV                                                                                     |
 | Azure Key Vault (`example-org-prd-kv`)          | upstream | cloud mode only                   | Stores Grafana Cloud API key + endpoint URLs                                                                                         |
 | Zscaler CA (`zcert.crt`)                        | infra    | corporate networks only           | Passed to local builds as an optional BuildKit secret; omitted in CI and never copied into a build context or image                   |
-| `grafana/k8s-monitoring` Helm chart v3.8.4      | infra    | cloud mode (auto-installed)       | Pulled at deploy time; no local vendored copy                                                                                        |
-| cert-manager v1.18.2 (jetstack chart)           | infra    | when `security.tls.enabled: true` | Installs into `cert-manager` namespace; skip by setting `security.tls.enabled: false`                                                |
+| `grafana/k8s-monitoring` Helm chart             | infra    | cloud mode (auto-installed)       | Version is pinned in `conf.yml`; pulled at deploy time with no local vendored copy                                                   |
+| cert-manager (jetstack chart)                   | infra    | when `security.tls.enabled: true` | Version is pinned in `conf.yml`; installs into `cert-manager`; skip by setting `security.tls.enabled: false`                        |
 
 **Version pins that must not drift:**
 
-- `grafana/k8s-monitoring` is pinned to `3.8.4` in `conf.yml`. Upgrading requires re-validating all
-  Alloy role names and values schema — the chart has breaking changes between minor versions.
+- `grafana/k8s-monitoring` is pinned in `conf.yml`. Upgrading requires re-validating all Alloy role
+  names and values schema — the chart has breaking changes between minor versions.
 - `.NET 8.0` in Dockerfiles — do not bump to .NET 9 without re-testing the OTel SDK compatibility
   matrix.
 
@@ -294,9 +300,10 @@ fields and attaches them as Loki structured metadata, enabling "Logs for this sp
 
 **Alerts:**
 
-SLO rules live in [k8s/monitoring/slo-rules.yaml](k8s/monitoring/slo-rules.yaml) (disabled by
-default — set `observability.slo_rules.enabled: true` in conf.yml and ensure the
-`prometheusrules.monitoring.coreos.com` CRD is present).
+SLO rules live in [k8s/monitoring/slo-rules.yaml](k8s/monitoring/slo-rules.yaml). The local deploy
+path loads the bare Prometheus rule groups when `observability.slo_rules.enabled: true` (the current
+default); no Prometheus Operator CRD is required. Cloud Mimir publication remains an explicit
+operation via `scripts/push-slo-rules-to-mimir.sh`.
 
 | Alert                              | Severity | Trigger                                           |
 | ---------------------------------- | -------- | ------------------------------------------------- |
@@ -385,7 +392,7 @@ signal-forge/
 │   ├── app/                    # Application Deployments + Services
 │   ├── datastores/             # MySQL, PostgreSQL, Redis, RabbitMQ
 │   ├── monitoring/
-│   │   ├── slo-rules.yaml      #   PrometheusRule (SLOs + burn-rate alerts)
+│   │   ├── slo-rules.yaml      #   Prometheus/Mimir rule groups (SLOs + burn-rate alerts)
 │   │   ├── grafana/            #   Bespoke Alloy DaemonSet (local mode only)
 │   │   ├── grafana-helm/       #   grafana/k8s-monitoring Helm values
 │   │   └── local/              #   In-cluster backends: Jaeger, Prometheus, Loki, Grafana
@@ -416,7 +423,7 @@ context-guard and NodePort drift-check.
 | ---------------- | ------------------ | --------------------------- | ---------- | ------------------------------- |
 | otel-frontend    | Angular 17 + nginx | 80 (host: 8080 via ingress) | —          | SPA + Faro RUM                  |
 | gateway-api      | .NET 8 Minimal API | 5000                        | MySQL      | BFF, gRPC client                |
-| order-api        | .NET 8 gRPC        | 5001                        | PostgreSQL | Order CRUD + RabbitMQ publisher |
+| order-api        | .NET 8 gRPC        | 5001 health; 5002 gRPC      | PostgreSQL | Order CRUD + transactional-outbox publisher |
 | notification-svc | Python/FastAPI     | 8000                        | Redis      | RabbitMQ consumer + REST        |
 
 ---
@@ -436,14 +443,12 @@ python -m pytest src/notification-svc/tests/ -v --tb=short
 cd src/frontend && npm ci --legacy-peer-deps && npx jest --config jest.config.js
 ```
 
-CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on `push`/`pull_request` to `main`
-and on manual `workflow_dispatch`:
-
-- `.NET` + Python + Angular unit tests
-- `pip-audit` + `dotnet list package --vulnerable` for known CVEs
-- Trivy image scan (HIGH/CRITICAL, fixed-only) for all four images
-- Syft SBOM generation (CycloneDX JSON)
-- cosign keyless signing on `main` push (OIDC — no long-lived secrets)
+CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) gates a release with Gitleaks,
+repository policy, unit/build/protobuf validation, CodeQL, SCA, Trivy IaC/container scans, and
+observability-as-policy validation. A trusted `main` run then builds each service image once,
+generates a CycloneDX SBOM, signs and attests the GHCR digest with keyless Cosign, and emits the
+release manifest consumed by CD. See [Immutable CI/CD Promotion](docs/deployment/ci-cd.md) for the
+trust and rollback boundaries.
 
 ---
 
@@ -510,11 +515,13 @@ For any step beyond local lab, the following controls are already implemented:
 - [Reliability](https://shipsolid.github.io/signal-forge/operations/reliability/)
   — PodDisruptionBudgets, pod anti-affinity, graceful shutdown
 - [Networking & TLS](https://shipsolid.github.io/signal-forge/operations/networking/)
-  — NetworkPolicies, cert-manager, flannel caveat
+  — NetworkPolicies, cert-manager, and the lab's kube-router enforcement model
 - [Supply-chain security](https://shipsolid.github.io/signal-forge/operations/supply-chain/)
-  — Trivy scan, Syft SBOM, cosign keyless signing
+  — SBOM, keyless signing/attestation, immutable digest verification before deploy
+- [Immutable CI/CD promotion](https://shipsolid.github.io/signal-forge/deployment/ci-cd/)
+  — build-once release manifest, DEV → QA → PROD serialization, protected-environment rollback
 - [SLOs & burn-rate alerts](https://shipsolid.github.io/signal-forge/observability/slos/)
-  — `PrometheusRule` with multi-window burn thresholds
+  — validated SLO rules and multi-window burn thresholds; live promotion needs a configured telemetry gate
 - [Datastore HA migration](https://shipsolid.github.io/signal-forge/infrastructure/datastore-ha/)
   — CloudNativePG / RabbitMQ Operator / Redis Sentinel paths
 
@@ -616,11 +623,11 @@ test scenarios, including:
 | ----- | ------------------------------------------------------------------ | -------- | -------------------------------------------------------------------------------------------- |
 | 1     | Core 4-service OTel stack with cloud + local mode                  | done     | —                                                                                            |
 | 1     | Kustomize overlays (dev/staging/prod)                              | done     | —                                                                                            |
-| 1     | CI pipeline: tests + Trivy + SBOM + cosign                         | done     | —                                                                                            |
+| 1     | Immutable CI/CD: security gates, SBOM, Cosign, digest promotion    | done     | Render-only until GitHub Environment configuration is supplied                               |
 | 1     | SLO recording rules + multi-window burn alerts                     | done     | —                                                                                            |
 | 1     | Tail-based sampling + spanmetrics                                  | done     | —                                                                                            |
 | 2     | Faro RUM source-map upload + error grouping                        | active   | TBD — depends on Faro source-map token in AKV                                                |
-| 2     | SLO rules enabled by default (`slo_rules.enabled: true`)           | planned  | Requires Prometheus Operator CRD install in deploy-local.sh                                  |
+| 1     | Local SLO rule loading (`slo_rules.enabled: true`)                 | done     | Bare rules load into local Prometheus; cloud Mimir publishing remains an explicit operation  |
 | 3     | k6 CronJob for continuous synthetic traffic                        | planned  | Required for client-perceived SLO validation                                                 |
 | 3     | Pyroscope continuous profiling (alloy-profiles enable)             | planned  | Blocked on in-cluster Pyroscope backend                                                      |
 | 3     | Datastore HA operators (CNPG / RabbitMQ Operator / Redis Sentinel) | deferred | See https://shipsolid.github.io/signal-forge/infrastructure/datastore-ha/ |

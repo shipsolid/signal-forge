@@ -1,8 +1,8 @@
 ---
 title: "Kustomize layout"
-description: "How signal-forge's Kustomize base and per-environment overlays are laid out, rendered, and consumed by deploy-local.sh."
+description: "How SignalForge's Kustomize topology is rendered locally and combined with immutable release evidence by CD."
 tags: ["ShipSolid", "Signal Forge", "Infrastructure"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-21"
 relations:
   - slug: projects/app-signal-forge/infrastructure/kubernetes
@@ -13,31 +13,36 @@ relations:
 
 ## Kustomize layout
 
-signal-forge ships a Kustomize base + per-env overlays alongside the `deploy-local.sh` driver.
-Consumers that prefer GitOps (ArgoCD, Flux, Rancher Fleet) or
-`kubectl apply -k` can use the Kustomize path directly. `deploy-local.sh` is aware of this and will
-`kubectl apply -k <dir>` whenever a directory contains a `kustomization.yaml`.
+SignalForge ships a Kustomize base + per-environment overlays alongside the `deploy-local.sh`
+driver. Kustomize owns resource topology (replicas, affinity, host/TLS shape); the immutable CI
+release manifest owns application image identity. `deploy-local.sh` is aware of sub-kustomizations
+and will `kubectl apply -k <dir>` for the local lab path.
+
+The non-dev overlays are **not**, by themselves, deployable immutable releases: they still contain
+local application image markers and placeholder Secret inputs. CD renders an overlay, replaces only
+the four app markers with release-manifest digests, removes every Secret from the plan, creates the
+real environment secret separately, and injects runtime ConfigMaps. Any GitOps implementation must
+preserve those evidence and secret boundaries rather than directly syncing an overlay from `main`.
 
 ## Directory layout
 
 ```mermaid
-mindmap
-  root["k8s/"]
-    n1["base/"]
-      n1a["kustomization.yaml # aggregates every component"]
-    n2["overlays/"]
-      n2a["dev/kustomization.yaml # identity overlay — matches base"]
-      n2b["staging/kustomization.yaml # replicas=3, staging ingress host"]
-      n2c["prod/kustomization.yaml # replicas=6, required anti-affinity, prod ingress host"]
-    n3["infra/"]
-      n3a["kustomization.yaml # namespace + secrets + pdb + netpol + ingress"]
-      n3b["*.yaml"]
-    n4["app/{gateway,order,notification,frontend}/"]
-      n4a["kustomization.yaml # deployment + service"]
-      n4b["*.yaml"]
-    n5["datastores/{mysql,postgres,redis,rabbitmq}/"]
-      n5a["kustomization.yaml"]
-      n5b["*.yaml"]
+%%{init: {'theme':'base','themeVariables':{'background':'#0f172a','primaryColor':'#bae6fd','primaryTextColor':'#0f172a','primaryBorderColor':'#7dd3fc','secondaryColor':'#bbf7d0','tertiaryColor':'#fde68a','lineColor':'#cbd5e1','clusterBkg':'#1e293b','clusterBorder':'#94a3b8','titleColor':'#f8fafc','edgeLabelBackground':'#1e293b'}}}%%
+flowchart TD
+  root["k8s/"] --> base["base/\nkustomization.yaml aggregates components"]
+  root --> overlays["overlays/"]
+  overlays --> dev["dev\nidentity overlay"]
+  overlays --> staging["staging\nQA topology"]
+  overlays --> prod["prod\nHA/replica topology"]
+  root --> infra["infra/\nnamespace, secrets, PDB, network policy, ingress"]
+  root --> apps["app/{gateway,order,notification,frontend}/\nDeployment + Service"]
+  root --> data["datastores/{mysql,postgres,redis,rabbitmq}/\nkustomizations"]
+  classDef structure fill:#bae6fd,stroke:#7dd3fc,color:#0f172a;
+  classDef environment fill:#fde68a,stroke:#fbbf24,color:#0f172a;
+  classDef runtime fill:#bbf7d0,stroke:#4ade80,color:#0f172a;
+  class root,base,infra structure;
+  class overlays,dev,staging,prod environment;
+  class apps,data runtime;
 ```
 
 The manifest files themselves **did not move** during the Kustomize refactor. They stayed in their
@@ -59,23 +64,19 @@ This matters because:
 # Full stack, no env overrides:
 kustomize build k8s/base
 
-# Dev (identity overlay):
+# Dev topology for local inspection or the local lab:
 kubectl kustomize k8s/overlays/dev
 kubectl apply -k k8s/overlays/dev
 
-# Prod (6 replicas, required anti-affinity, prod hostname):
-kubectl apply -k k8s/overlays/prod
+# QA/PROD: inspect topology only. CD is the supported immutable deployment path;
+# direct rendering may also require the ignored prod secret-generator input.
+kubectl kustomize k8s/overlays/staging
 ```
 
-ArgoCD `Application` spec targeting staging:
-
-```yaml
-spec:
-  source:
-    repoURL: https://github.com/...
-    path: d-services/11-signal-forge/k8s/overlays/staging
-    targetRevision: main
-```
+For a GitOps controller, use the rendered, secret-free deployment plan from CD as the audited input
+or implement equivalent manifest/digest/signature verification. A direct source that targets the
+historical `staging` overlay is insufficient because it bypasses the release manifest, treats
+`staging` rather than `qa` as the environment label, and can apply local images.
 
 **Prerequisite for TLS:** the Ingress in this layout references a `ClusterIssuer`
 (`cert-manager.io/cluster-issuer: signal-forge-ca`) that this Kustomize tree does **not** create —
@@ -92,11 +93,12 @@ The current k3d lab settings _are_ the base (2 replicas, 150m CPU, soft anti-aff
 overlay is identity plus a `signal-forge.environment: dev` label. The kustomization file has a
 commented-out example showing how to add a patch without having to re-discover the syntax.
 
-### staging
+### staging (CD's QA topology)
 
 - `gateway-api`, `order-api`, `notification-svc` → `replicas: 3`
-- Ingress host → `signal-forge.staging.example.com` (edit before use)
-- All pods get `signal-forge.environment: staging`
+- Ingress host → `signal-forge.staging.example.com` before CD rendering
+- CD uses this historical directory for the GitHub `qa` environment and normalizes all inherited
+  environment labels and ingress/TLS host values at render time
 
 ### prod
 
@@ -126,9 +128,10 @@ So `conf.yml`'s `manifests.datastores: [k8s/datastores/mysql/, ...]` triggers
 applies the labels, and obeys any overlay patches at the pathway level.
 
 Overlays are **not** used by `deploy-local.sh` today; it targets the per-component
-sub-kustomizations directly. If you want deploy-local to honor an overlay, set
-`manifests.app: [k8s/overlays/dev]` and it will `apply -k` that overlay instead. You lose per-stage
-ordering (`overlays/*` is a single apply call); acceptable for dev, rebuildable CI pipelines.
+sub-kustomizations directly. A developer can point the local lab at the dev overlay for topology
+experimentation, but must not use that mechanism for QA/PROD: it has no release-manifest, signature,
+attestation, environment-secret, health-gate, or rollback handling. Use
+[Immutable CI/CD Promotion](../deployment/ci-cd.md) for those environments.
 
 ## Patch syntax
 

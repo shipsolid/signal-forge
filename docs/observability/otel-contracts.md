@@ -2,7 +2,7 @@
 title: "OTel Signal Contracts"
 description: "The OpenTelemetry signal contracts—spans, metrics, and log fields—for every SignalForge service and the frontend RUM app."
 tags: ["ShipSolid", "Signal Forge", "Observability"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-24"
 relations:
   - slug: projects/app-signal-forge/observability/correlation
@@ -38,7 +38,8 @@ built and maintained against a stable interface.
 7. [notification-svc](#notification-svc)
 8. [frontend (Faro RUM)](#frontend-faro-rum)
 9. [Cross-Service Trace Topology](#cross-service-trace-topology)
-10. [Validation Queries](#validation-queries)
+10. [Observability as release policy](#observability-as-release-policy)
+11. [Validation Queries](#validation-queries)
 
 ---
 
@@ -85,7 +86,7 @@ Set by
 | Attribute                    | Source                             | Example           |
 | ---------------------------- | ---------------------------------- | ----------------- |
 | `service.name`               | `AddService()`                     | `"gateway-api"`   |
-| `service.version`            | `AddService()` or env              | `"1.0.0"`         |
+| `service.version`            | Shared runtime ConfigMap via env detector | local: `"1.0.0"`; CD: full release commit SHA |
 | `telemetry.sdk.name`         | `AddTelemetrySdk()`                | `"opentelemetry"` |
 | `telemetry.sdk.language`     | `AddTelemetrySdk()`                | `"dotnet"`        |
 | `telemetry.sdk.version`      | `AddTelemetrySdk()`                | `"1.7.0"`         |
@@ -99,8 +100,8 @@ Set manually in `telemetry.py` via `Resource.create()`:
 | ------------------------ | ---------------------------------------------------- |
 | `service.name`           | `"notification-svc"`                                 |
 | `service.namespace`      | `"otel-lab"`                                         |
-| `service.version`        | `"1.0.0"`                                            |
-| `deployment.environment` | `DEPLOYMENT_ENVIRONMENT` env var (default `"local"`) |
+| `service.version`        | Local default `"1.0.0"`; immutable CD release commit SHA |
+| `deployment.environment` | Shared `OTEL_RESOURCE_ATTRIBUTES`; local config or CD target (`signal-forge-dev`, `-qa`, `-prod`) |
 
 ### Alloy-injected k8s attributes (all services, collector-side)
 
@@ -142,8 +143,9 @@ SDK injects/extracts headers automatically via `AddGrpcClientInstrumentation` an
 RabbitMQ message header "traceparent" = UTF-8 bytes of W3C traceparent value
 ```
 
-`Propagators.DefaultTextMapPropagator.Inject()` writes each header as `byte[]` because RabbitMQ
-header values are typed as `object`.
+The outbox relay restores the persisted request context for its own span, but the publisher writes
+the original stored `traceparent` directly as `byte[]`; this prevents a background retry from
+silently replacing request identity with worker identity.
 
 **Extract side** (`consumer.py`):
 
@@ -309,11 +311,14 @@ header) to every gRPC SERVER span.
 | `order.create`         | INTERNAL | gRPC SERVER span    | `order.project_id` (set on entry), `order.amount`, `order.id` (set after `SaveChangesAsync`)                                                                   | ERROR + RecordException on unhandled exception    |
 | `order.get_by_project` | INTERNAL | gRPC SERVER span    | `order.project_id`                                                                                                                                             | OK                                                |
 | `order.get`            | INTERNAL | gRPC SERVER span    | `order.id`                                                                                                                                                     | ERROR with description `"Order not found"` on 404 |
-| `order.publish`        | PRODUCER | `order.create` span | `messaging.system=rabbitmq`, `messaging.destination=orders`, `messaging.destination_kind=exchange`, `messaging.rabbitmq.routing_key=order.created`, `order.id` | OK                                                |
+| `outbox.relay`         | INTERNAL | persisted `order.create` context | `outbox.message_id`, `order.id` | Restores the stored parent context and adds an `ActivityLink`; each retry is separately observable |
+| `order.publish`        | PRODUCER | `outbox.relay` span | `messaging.system=rabbitmq`, `messaging.destination=orders`, `messaging.destination_kind=exchange`, `messaging.rabbitmq.routing_key=order.created`, `order.id` | OK                                                |
 
-**`order.publish` propagation detail:** `Propagators.DefaultTextMapPropagator.Inject()` writes the
-W3C `traceparent` (and `tracestate` if present) into `IBasicProperties.Headers` as `byte[]` (UTF-8
-encoded strings). The Python consumer's `HeadersGetter` decodes these back to strings.
+**Outbox propagation detail:** `CreateOrder` stores the original W3C `traceparent` with the order
+and outbox row. A later relay poll restores that context as `outbox.relay`'s parent and adds an
+`ActivityLink`, then `order.publish` writes the stored `traceparent` into AMQP headers as UTF-8
+`byte[]`. The Python consumer's `HeadersGetter` decodes those values before it creates its linked
+consumer span. The publisher does not call `Propagators.Inject()` from a detached worker context.
 
 ### Metrics
 
@@ -486,7 +491,7 @@ call made by the Angular app and injects W3C `traceparent` into request headers.
 | `createProject(...)`     | `POST /api/projects`            | `gateway.create_project`                            |
 | `deleteProject(id)`      | `DELETE /api/projects/{id}`     | `gateway.delete_project`                            |
 | `getOrdersByProject(id)` | `GET /api/projects/{id}/orders` | `gateway.fanout` → order-api                        |
-| `createOrder(...)`       | `POST /api/orders`              | `gateway.fanout` → `order.create` → `order.publish` |
+| `createOrder(...)`       | `POST /api/orders`              | `gateway.fanout` → `order.create` → asynchronous `outbox.relay` → `order.publish` |
 | `getNotifications()`     | `GET /api/notifications`        | notification-svc FastAPI span                       |
 | `triggerError()`         | `GET /api/error`                | `gateway.error`                                     |
 
@@ -502,6 +507,7 @@ nginx health-check poll noise from polluting the Faro event stream.
 The complete 5-hop trace for a `POST /api/orders` request:
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'#0f172a','primaryColor':'#bae6fd','primaryTextColor':'#0f172a','primaryBorderColor':'#7dd3fc','secondaryColor':'#bbf7d0','tertiaryColor':'#fde68a','lineColor':'#cbd5e1','clusterBkg':'#1e293b','clusterBorder':'#94a3b8','titleColor':'#f8fafc','edgeLabelBackground':'#1e293b'}}}%%
 flowchart TD
     subgraph Browser["Browser (Faro)"]
         A["[CLIENT] XHR fetch span<br/>TracingInstrumentation, W3C traceparent → HTTP header"]
@@ -517,6 +523,7 @@ flowchart TD
         E["[SERVER] orders.OrderService/CreateOrder"]
         F["[INTERNAL] order.create<br/>tags: project_id, amount, id"]
         G["[CLIENT] EF Core INSERT Orders<br/>db.system=postgresql"]
+        R["[INTERNAL] outbox.relay<br/>later poll; restored parent + ActivityLink"]
         H["[PRODUCER] order.publish<br/>W3C traceparent → RabbitMQ header"]
     end
 
@@ -532,22 +539,55 @@ flowchart TD
 
     A --> B --> C --> D --> E --> F
     F --> G
-    F --> H
+    F -.->|stored traceparent; asynchronous relay| R
+    R --> H
     H -.->|SpanLink, async queue crossing| I
     I --> J --> K --> L --> M --> N
     I --> O
+    classDef app fill:#bae6fd,stroke:#7dd3fc,color:#0f172a;
+    classDef store fill:#bbf7d0,stroke:#4ade80,color:#0f172a;
+    class A,B,C,D,E,F,R,H,I,O app;
+    class G,J,K,L,M,N store;
 ```
 
 **Trace continuity rules:**
 
-- Hops 1–4 (Browser → gateway-api → order-api) share the same `traceId` via HTTP/gRPC W3C header
-  propagation — they form a connected parent-child tree.
-- Hop 5 (RabbitMQ → notification-svc) shares the same `traceId` but is attached via a `SpanLink`
+- Hops 1–4 (Browser → gateway-api → `order.create`) share the same `traceId` via HTTP/gRPC W3C
+  header propagation — they form a connected parent-child tree.
+- The later outbox relay restores the stored request context as its parent and adds an
+  `ActivityLink`. This retains one trace query across the asynchronous DB boundary while making a
+  retry attempt separately visible; it is not an inline RabbitMQ publish.
+- The RabbitMQ → notification-svc hop shares the same `traceId` but is attached via a `SpanLink`
   rather than a parent reference, reflecting the asynchronous delivery model.
 - `notification.process` has `parentSpanId = nil` (it is a root span) but carries
   `links[0] = order.publish.spanContext`.
 
 ---
+
+## Observability as release policy
+
+This repository implements a **static, blocking observability-as-policy gate** in CI. The policy
+script validates the contract this page describes before a release image can be published:
+
+- backend `OTEL_SERVICE_NAME` values must match service identity;
+- `service.namespace`, `service.version`, and `deployment.environment` must be present in the
+  shared runtime resource attributes;
+- local Alloy and cloud Helm inputs must render as YAML/River, Prometheus rules must pass
+  `promtool`, and the rendered Alloy file must pass the real Alloy validator;
+- committed local dashboards must be valid JSON with a title and panel array, and SLO/runbook assets
+  must exist;
+- explicitly configured span-metric dimensions cannot include known unbounded request/user/session
+  identifiers such as `trace_id`, `request_id`, `user_id`, raw URL, or email.
+
+This is intentionally a focused release contract, not a fabricated runtime health check. It does
+not query Grafana, prove dashboard query semantics, measure telemetry arrival, validate alert
+delivery, calculate a full cardinality/cost budget, or determine whether an SLO is currently met.
+
+For an enabled DEV/QA/PROD deployment, CD calls a separately configured observability gate with the
+exact environment, commit, CI run, required services, signals, and resource attributes. `block`
+fails every environment; `warn` is visible in DEV/QA but fails PROD. The repository does not define
+that external API, its query credentials, or its approved thresholds, so a static CI pass must not
+be represented as evidence of live telemetry. See [Immutable CI/CD Promotion](../deployment/ci-cd.md).
 
 ## Validation Queries
 

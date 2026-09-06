@@ -2,7 +2,7 @@
 title: "SignalForge: OTel Microservices Validation Lab"
 description: "The architecture spec for SignalForge, a multi-service .NET/Python/Angular lab validating every OpenTelemetry instrumentation pattern end-to-end."
 tags: ["ShipSolid", "Signal Forge", "Architecture"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-41"
 relations:
   - slug: projects/app-signal-forge/readme
@@ -43,6 +43,7 @@ There is no configuration that sends the same signal to both destinations at onc
 ## 2. Architecture Overview
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'#0f172a','primaryColor':'#bae6fd','primaryTextColor':'#0f172a','primaryBorderColor':'#7dd3fc','secondaryColor':'#bbf7d0','tertiaryColor':'#fde68a','lineColor':'#cbd5e1','clusterBkg':'#1e293b','clusterBorder':'#94a3b8','titleColor':'#f8fafc','edgeLabelBackground':'#1e293b'}}}%%
 flowchart TD
     subgraph CLUSTER["k3d cluster: otel-lab (namespace: otel-lab)"]
         FE["Angular SPA (Faro RUM)<br/>nginx:8080, UID 101"]
@@ -59,7 +60,7 @@ flowchart TD
         NOTIF -.->|"nack → DLQ"| MQ
 
         TLSNOTE["TLS ingress (Traefik + cert-manager): signal-forge.local:8443 → frontend / gateway"]
-        NPNOTE["NetworkPolicies: default-deny + tiered allow-list (not enforced on k3d/flannel)"]
+        NPNOTE["NetworkPolicies: default-deny + tiered allow-list (enforced by k3s kube-router in this lab)"]
     end
 
     subgraph LOCALMODE["monitoring.mode = local"]
@@ -77,7 +78,7 @@ flowchart TD
     end
 
     subgraph CLOUDMODE["monitoring.mode = cloud (default)"]
-        CL_INFO["grafana/k8s-monitoring Helm chart v3.8.4<br/>namespace: monitoring, MANDATORY"]
+        CL_INFO["grafana/k8s-monitoring Helm chart<br/>version pinned in conf.yml; namespace: monitoring, MANDATORY"]
         CL_RECEIVER["alloy-receiver DaemonSet<br/>OTLP :4317/:4318 — is the sole ingress"]
         CL_DEST_M["grafana-cloud-metrics → Mimir Prometheus remote_write<br/>(NOT /api/v1/otlp)"]
         CL_DEST_L["grafana-cloud-logs → Loki push"]
@@ -89,6 +90,10 @@ flowchart TD
         CL_DISABLED["Disabled: Beyla auto-instrumentation, Pyroscope profiling, Fleet Management."]
         CL_NONE["No in-cluster Jaeger/Prometheus/Loki/Grafana deployed in this mode."]
     end
+    classDef app fill:#bae6fd,stroke:#7dd3fc,color:#0f172a;
+    classDef data fill:#bbf7d0,stroke:#4ade80,color:#0f172a;
+    class FE,GW,ORD,NOTIF,L1,L2,L3,L4,L5,L6,L7,CL_RECEIVER app;
+    class MQ,L8,L9,CL_DEST_M,CL_DEST_L,CL_DEST_T data;
 ```
 
 ---
@@ -632,9 +637,9 @@ acceptable for a lab-only backend, worth hardening before treating this stack as
   convenience only (flagged in-file: delete rather than "fix" before promoting to staging/prod).
 - **NetworkPolicies** (`k8s/infra/network-policies.yaml`): default-deny-all + a tiered allow-list
   (DNS egress, ingress-controller → app tier, app-to-app, app-to-datastore + reverse,
-  app-to-alloy-receiver, frontend HTTPS egress for Grafana Cloud Faro). **Not enforced on k3d's
-  default flannel CNI** — this is the production-intent baseline, evaluated only with
-  Calico/Cilium/Weave.
+  app-to-alloy-receiver, frontend HTTPS egress for Grafana Cloud Faro). k3s bundles kube-router as
+  the NetworkPolicy controller alongside flannel in this lab, so these policies are enforced here;
+  validate the equivalent controller and intended traffic matrix again on every target cluster.
 - **PodDisruptionBudgets** (`k8s/infra/pdb.yaml`): `minAvailable: 1` (absolute) in base, patched to
   `50%` in the `prod` overlay so it scales with the replica-count patch there.
 
@@ -673,7 +678,7 @@ flowchart TD
 No Grafana Cloud exporters exist in this file at all — confirmed explicitly by a comment in
 `daemonset.yaml`: cloud mode doesn't deploy this DaemonSet.
 
-### 5.2 Cloud mode — Helm chart (`grafana/k8s-monitoring` v3.8.4)
+### 5.2 Cloud mode — Helm chart (`grafana/k8s-monitoring`, version pinned in `conf.yml`)
 
 Mandatory in cloud mode (opt-in via `--with-helm` in local mode). Values come from
 `k8s/monitoring/grafana-helm/values-cloud.yaml.tmpl`, a template rendered by `deploy-local.sh` from
@@ -1268,8 +1273,6 @@ dashboards driven by span metrics now exist and are wired into both deploy modes
 - **Beyla auto-instrumentation** — explicitly disabled in the current Helm values.
 - **HPA wired to SLO burn-rate** — the illustrative `prod` overlay HPA is CPU-based only; a
   burn-rate-driven HPA would need `prometheus-adapter`, not installed by `deploy-local.sh`.
-- **NetworkPolicy enforcement** — policies exist (§4.4) but aren't evaluated on k3d's flannel CNI;
-  would need Calico/Cilium/Weave to actually test the intended isolation.
 - **securityContext hardening for the local-mode observability backends** (§4.3) — Jaeger/
   Prometheus/Loki/Grafana run without a non-root UID today, unlike every app/datastore workload.
 - **Synthetic monitoring** via Grafana Cloud k6 checks against the lab endpoints (the in-cluster k6

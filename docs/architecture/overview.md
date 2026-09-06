@@ -2,7 +2,7 @@
 title: "Architecture Overview"
 description: "Signal Forge's topology, service communication, trace propagation, and per-signal pipeline flow across local and Grafana Cloud deployment modes."
 tags: ["ShipSolid", "Signal Forge", "Architecture"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-13"
 relations:
   - slug: projects/app-signal-forge/architecture/adrs/adr-spanlink-for-async-rabbitmq
@@ -20,6 +20,7 @@ relations:
 ## System topology
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'#0f172a','primaryColor':'#bae6fd','primaryTextColor':'#0f172a','primaryBorderColor':'#7dd3fc','secondaryColor':'#bbf7d0','tertiaryColor':'#fde68a','lineColor':'#cbd5e1','clusterBkg':'#1e293b','clusterBorder':'#94a3b8','titleColor':'#f8fafc','edgeLabelBackground':'#1e293b'}}}%%
 flowchart TD
     subgraph otelns["Namespace: otel-lab"]
         spa["Angular SPA<br/>Faro RUM<br/>nginx :80"]
@@ -31,11 +32,11 @@ flowchart TD
         spa -- HTTP --> gw
         gw -- gRPC --> oa
         gw -- HTTP --> ns
-        oa -- AMQP --> rmq
+        oa -- "outbox relay / AMQP" --> rmq
         rmq -- consume --> ns
     end
 
-    subgraph monns["Namespace: monitoring (grafana/k8s-monitoring Helm v3.8.4)"]
+    subgraph monns["Namespace: monitoring (grafana/k8s-monitoring; version pinned in conf.yml)"]
         subgraph alloyrecv["alloy-receiver (DaemonSet)"]
             otlp["OTLP :4317/:4318"]
             faro["Faro :12347"]
@@ -79,6 +80,10 @@ flowchart TD
     end
 
     otelns -- "All services: OTLP gRPC :4317" --> otlp
+    classDef app fill:#bae6fd,stroke:#7dd3fc,color:#0f172a;
+    classDef data fill:#bbf7d0,stroke:#4ade80,color:#0f172a;
+    class spa,gw,oa,ns,otlp,faro,k8sattr,transform,filterhz,spanm,tail,batchp,proc,alogs,amet,asing app;
+    class rmq,jaegerL,promL,lokiL,tempoC,mimirC,lokiC data;
 ```
 
 ## Service inventory
@@ -97,7 +102,7 @@ flowchart TD
 | Browser     | gateway-api      | HTTP/JSON                       | Faro injects `traceparent` header                        |
 | gateway-api | order-api        | gRPC (unary + server-streaming) | Auto-injected in gRPC metadata                           |
 | gateway-api | notification-svc | HTTP/JSON                       | Auto-injected via `HttpClient` instrumentation           |
-| order-api   | RabbitMQ         | AMQP 0-9-1                      | Manual `TextMapPropagator.Inject()` into message headers |
+| order-api   | RabbitMQ         | AMQP 0-9-1, via transactional outbox | Persisted request `traceparent` written directly into message headers |
 | RabbitMQ    | notification-svc | AMQP 0-9-1                      | Manual `TraceContextTextMapPropagator.extract()`         |
 
 ## Trace propagation map
@@ -105,6 +110,7 @@ flowchart TD
 A single "Create Order" click produces a trace spanning five hops and three runtimes:
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'#0f172a','primaryColor':'#bae6fd','primaryTextColor':'#0f172a','primaryBorderColor':'#7dd3fc','secondaryColor':'#bbf7d0','tertiaryColor':'#fde68a','lineColor':'#cbd5e1','actorBkg':'#fde68a','actorBorder':'#fbbf24','actorTextColor':'#0f172a','signalColor':'#cbd5e1','signalTextColor':'#f8fafc','noteBkgColor':'#1e293b','noteTextColor':'#f8fafc','noteBorderColor':'#94a3b8'}}}%%
 sequenceDiagram
     participant Browser as Browser (Faro)
     participant Gateway as gateway-api
@@ -120,8 +126,9 @@ sequenceDiagram
     Gateway->>MySQL: EF Core child: db.mysql
     Gateway->>Order: gRPC call (traceparent in metadata)
     Note right of Order: gRPC server span
-    Order->>Postgres: EF Core child: db.postgresql
-    Order-)RabbitMQ: AMQP publish (traceparent in message headers, async)
+    Order->>Postgres: atomically persist Order + OutboxMessage
+    Note right of Order: CreateOrder returns after commit
+    Order-)RabbitMQ: later outbox relay publish (stored traceparent, async)
     RabbitMQ-)Notif: consume
     Note right of Notif: CONSUMER span (SpanLink to producer, same traceId)
     Notif->>Redis: Redis child: db.redis
@@ -133,8 +140,10 @@ sequenceDiagram
 
 The RabbitMQ hop uses a
 [[projects/app-signal-forge/architecture/adrs/adr-spanlink-for-async-rabbitmq|**SpanLink**]] (not
-parent-child) because message processing is asynchronous and may involve retries. Both spans share
-the same `traceId`. In Jaeger this renders as a dashed arrow.
+parent-child) because message processing is asynchronous and may involve retries. The outbox relay
+also restores the persisted request context and adds an `ActivityLink`, so one trace query includes
+the asynchronous persistence/publish chain without claiming the publish happened synchronously.
+Both hops share the same `traceId`; their links render as dashed references in Jaeger.
 
 ## Signal flow by type
 

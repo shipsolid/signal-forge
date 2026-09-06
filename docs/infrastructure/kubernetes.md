@@ -2,7 +2,7 @@
 title: "Kubernetes Infrastructure"
 description: "Reference for signal-forge's Kubernetes infrastructure — namespaces, secrets, deployments, RBAC, ingress, health probes, and deploy order."
 tags: ["ShipSolid", "Signal Forge", "Infrastructure"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-20"
 relations:
   - slug: projects/app-signal-forge/infrastructure/kustomize
@@ -29,48 +29,56 @@ relations:
 ## Directory structure
 
 ```mermaid
-mindmap
-  root["k8s/"]
-    n1["base/"]
-      n1a["kustomization.yaml — aggregates every component (ArgoCD / Flux entrypoint)"]
-    n2["overlays/"]
-      n2a["dev/kustomization.yaml — identity overlay (matches base)"]
-      n2b["staging/kustomization.yaml — replicas=3, staging ingress host"]
-      n2c["prod/kustomization.yaml — replicas=6, required anti-affinity, prod ingress host"]
-    n3["infra/"]
-      n3a["kustomization.yaml — aggregates the files below"]
-      n3b["namespace.yaml — otel-lab Namespace"]
-      n3c["secrets.yaml — db-secrets Secret (DB credentials)"]
-      n3d["app-env.yaml.tmpl — template for signal-forge-app-env ConfigMap"]
-      n3e["pdb.yaml — PodDisruptionBudgets (app + datastore tiers)"]
-      n3f["network-policies.yaml — default-deny + tiered allows"]
-      n3g["cert-manager-issuer.yaml — self-signed ClusterIssuer (gated by security.tls.enabled)"]
-      n3h["ingress.yaml — Traefik Ingress (TLS + hostless fallback)"]
-    n4["datastores/"]
-      n4a["mysql/ — StatefulSet, Service, init ConfigMap, kustomization.yaml"]
-      n4b["postgres/ — StatefulSet, Service, init ConfigMap, kustomization.yaml"]
-      n4c["redis/ — Deployment, Service, kustomization.yaml"]
-      n4d["rabbitmq/ — StatefulSet, Service, kustomization.yaml"]
-    n5["app/"]
-      n5a["gateway/ — Deployment, Service, kustomization.yaml"]
-      n5b["order/ — Deployment, Service, kustomization.yaml"]
-      n5c["notification/ — Deployment, Service, kustomization.yaml"]
-      n5d["frontend/ — Deployment, Service, kustomization.yaml"]
-    n6["monitoring/"]
-      n6a["slo-rules.yaml — PrometheusRule (SLOs + burn-rate alerts)"]
-      n6b["grafana/ — bespoke Alloy DaemonSet + RBAC + Service (local mode only)"]
-        n6b1["local/configmap.yaml — alloy River config for local-backend export"]
-      n6c["grafana-helm/"]
-        n6c1["values-local.yaml — Helm values, local destinations"]
-        n6c2["values-cloud.yaml.tmpl — Helm values template, Grafana Cloud destinations"]
-      n6d["local/"]
-        n6d1["jaeger/ — Deployment, Service"]
-        n6d2["prometheus/ — Deployment, ConfigMap, Service"]
-        n6d3["loki/ — StatefulSet, ConfigMap, Service"]
-        n6d4["grafana/ — Deployment, ConfigMap, Service, dashboards"]
-    n7["loadtest/"]
-      n7a["job.yaml — k6 load test Job"]
-      n7b["script.js — k6 script"]
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#A7D8F0','primaryTextColor':'#172033','primaryBorderColor':'#467A9A','lineColor':'#AAB7C4','secondaryColor':'#C8E6C9','tertiaryColor':'#F8D6A4','clusterBkg':'#1D2939','clusterBorder':'#6E8BA3'}}}%%
+flowchart TB
+    root["k8s/"]
+    root --> base["base/"]
+    base --> baseK["kustomization.yaml — aggregates every component (ArgoCD / Flux entrypoint)"]
+    root --> overlays["overlays/"]
+    overlays --> dev["dev/kustomization.yaml — identity overlay (matches base)"]
+    overlays --> staging["staging/kustomization.yaml — replicas=3, staging ingress host"]
+    overlays --> prod["prod/kustomization.yaml — replicas=6, required anti-affinity, prod ingress host"]
+    root --> infra["infra/"]
+    infra --> infraK["kustomization.yaml — aggregates the files below"]
+    infra --> namespace["namespace.yaml — otel-lab Namespace"]
+    infra --> secrets["secrets.yaml — db-secrets Secret (DB credentials)"]
+    infra --> appEnv["app-env.yaml.tmpl — template for signal-forge-app-env ConfigMap"]
+    infra --> pdb["pdb.yaml — PodDisruptionBudgets (app + datastore tiers)"]
+    infra --> policies["network-policies.yaml — default-deny + tiered allows"]
+    infra --> issuer["cert-manager-issuer.yaml — self-signed ClusterIssuer (gated by security.tls.enabled)"]
+    infra --> ingress["ingress.yaml — Traefik Ingress (TLS + hostless fallback)"]
+    root --> datastores["datastores/"]
+    datastores --> mysql["mysql/ — StatefulSet, Service, init ConfigMap, kustomization.yaml"]
+    datastores --> postgres["postgres/ — StatefulSet, Service, init ConfigMap, kustomization.yaml"]
+    datastores --> redis["redis/ — Deployment, Service, kustomization.yaml"]
+    datastores --> rabbitmq["rabbitmq/ — StatefulSet, Service, kustomization.yaml"]
+    root --> app["app/"]
+    app --> gateway["gateway/ — Deployment, Service, kustomization.yaml"]
+    app --> order["order/ — Deployment, Service, kustomization.yaml"]
+    app --> notification["notification/ — Deployment, Service, kustomization.yaml"]
+    app --> frontend["frontend/ — Deployment, Service, kustomization.yaml"]
+    root --> monitoring["monitoring/"]
+    monitoring --> slo["slo-rules.yaml — Prometheus/Mimir rule groups (SLOs + burn-rate alerts)"]
+    monitoring --> alloy["grafana/ — bespoke Alloy DaemonSet + RBAC + Service (local mode only)"]
+    alloy --> alloyConfig["local/configmap.yaml — Alloy River config for local-backend export"]
+    monitoring --> alloyHelm["grafana-helm/"]
+    alloyHelm --> helmLocal["values-local.yaml — Helm values, local destinations"]
+    alloyHelm --> helmCloud["values-cloud.yaml.tmpl — Helm values template, Grafana Cloud destinations"]
+    monitoring --> local["local/"]
+    local --> jaeger["jaeger/ — Deployment, Service"]
+    local --> prometheus["prometheus/ — Deployment, ConfigMap, Service"]
+    local --> loki["loki/ — StatefulSet, ConfigMap, Service"]
+    local --> grafana["grafana/ — Deployment, ConfigMap, Service, dashboards"]
+    root --> loadtest["loadtest/"]
+    loadtest --> job["job.yaml — k6 load test Job"]
+    loadtest --> script["script.js — k6 script"]
+
+    classDef rootNode fill:#F8D6A4,stroke:#B87826,color:#172033
+    classDef directory fill:#A7D8F0,stroke:#467A9A,color:#172033
+    classDef item fill:#C8E6C9,stroke:#4E8A5D,color:#172033
+    class root rootNode
+    class base,overlays,infra,datastores,app,monitoring,loadtest,alloy,alloyHelm,local directory
+    class baseK,dev,staging,prod,infraK,namespace,secrets,appEnv,pdb,policies,issuer,ingress,mysql,postgres,redis,rabbitmq,gateway,order,notification,frontend,slo,alloyConfig,helmLocal,helmCloud,jaeger,prometheus,loki,grafana,job,script item
 ```
 
 Every subdirectory referenced by `deploy-local.sh`'s apply stages has its own `kustomization.yaml`,

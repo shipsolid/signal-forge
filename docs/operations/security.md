@@ -2,7 +2,7 @@
 title: "Security"
 description: "Threat model and secrets lifecycle reference for Signal Forge, covering credential management, input validation, CORS, RBAC, and rotation procedures."
 tags: ["ShipSolid", "Signal Forge", "Operations"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-33"
 relations:
   - slug: projects/app-signal-forge/operations/networking
@@ -23,27 +23,28 @@ have their own page are linked out:
 - [[hardening|Container hardening]] — securityContext, non-root UIDs, readOnlyRootFilesystem,
   digest-pinned base images, Pod Security Standards
 - [[networking|Networking & TLS]] — NetworkPolicy default-deny, Ingress TLS via cert-manager,
-  flannel caveat
+  and the lab's kube-router enforcement model
 - [[supply-chain|Supply-chain security]] — CI Trivy scan, Syft SBOM, cosign keyless signing
 - [[reliability|Reliability]] — PodDisruptionBudgets, graceful shutdown (defence against
   availability loss during drains)
 
 ## Threat model summary
 
-| Threat                             | Control                                                                                                                                                                | Page                           |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ----------------- |
-| Credentials in source code         | Kubernetes Secrets sourced from Azure Key Vault via `scripts/fetch-grafana-cloud-conf-from-akv.sh`                                                                     | this page, §Secrets management |
-| Credentials in git history         | `.env` + `conf.yml` tracked as learning-lab scaffolding; **rotate anything real before committing**. `secrets.yaml` uses placeholder base64 values                     | this page                      |
-| Container compromise → host escape | `securityContext.runAsNonRoot` + `allowPrivilegeEscalation: false` + `capabilities.drop: [ALL]` + seccomp RuntimeDefault on every workload                             | [[hardening                    | hardening.md]]    |
-| Vulnerable base image              | Digest-pinned `FROM` + monthly refresh; Trivy scan in CI fails on HIGH/CRITICAL with a fix                                                                             | [[supply-chain                 | supply-chain.md]] |
-| Unauthenticated API access         | `AllowedHosts` restriction; CORS limited to known origins                                                                                                              | this page                      |
-| Injection via user input           | Input validation at API boundary (gateway-api + order-api gRPC layer)                                                                                                  | this page                      |
-| Credential leakage in logs         | `logger.exception()` used without string interpolation of sensitive fields                                                                                             | this page                      |
-| Privilege escalation in-cluster    | Alloy ServiceAccount has minimum RBAC; every app pod drops all Linux capabilities                                                                                      | this page + [[hardening        | hardening.md]]    |
-| Poison message amplification       | Dead Letter Queue isolates unprocessable messages                                                                                                                      | this page                      |
-| Unauthorised cross-tier traffic    | `NetworkPolicy` default-deny + tiered allows (apps ↔ datastores, apps → alloy-receiver)                                                                               | [[networking                   | networking.md]]   |
-| MITM on Ingress                    | TLS via cert-manager (self-signed CA → leaf cert on each host)                                                                                                         | [[networking                   | networking.md]]   |
-| Tampered image in production       | cosign keyless signing + CI-side verification on every push; admission-time verification gate at deploy time _not yet wired_ — see supply-chain §Admission enforcement | [[supply-chain                 | supply-chain.md]] |
+| Threat | Control | Reference |
+| --- | --- | --- |
+| Credentials in source code | Kubernetes Secrets sourced from Azure Key Vault via `scripts/fetch-grafana-cloud-conf-from-akv.sh`. | This page, [Secrets management](#secrets-management) |
+| Credentials in git history | `.env` + `conf.yml` are tracked learning-lab scaffolding; rotate anything real before committing. `secrets.yaml` uses placeholder base64 values. | This page |
+| Container compromise → host escape | `securityContext.runAsNonRoot`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`, and seccomp RuntimeDefault on every workload. | [Container hardening](../infrastructure/hardening.md) |
+| Vulnerable base image | Digest-pinned `FROM` plus a CI Trivy scan that blocks HIGH/CRITICAL findings with a fix. | [Supply-chain security](supply-chain.md) |
+| Unauthenticated API access | `AllowedHosts` restriction and CORS limited to known origins. | This page |
+| Injection via user input | Input validation at the gateway API and order API gRPC boundaries. | This page |
+| Credential leakage in logs | `logger.exception()` is used without string interpolation of sensitive fields. | This page |
+| Privilege escalation in-cluster | The Alloy ServiceAccount has minimum RBAC; every app pod drops all Linux capabilities. | This page; [Container hardening](../infrastructure/hardening.md) |
+| Poison message amplification | A dead-letter queue isolates unprocessable messages. | This page |
+| Unauthorised cross-tier traffic | `NetworkPolicy` default-deny and tiered allows cover apps, datastores, and Alloy. | [Networking & TLS](networking.md) |
+| MITM on Ingress | cert-manager creates a self-signed CA and leaf certificate for lab Ingress. | [Networking & TLS](networking.md) |
+| Tampered release image | CI signs and attests each immutable digest. An enabled CD run verifies both against the trusted workflow identity before materialising kubeconfig or applying manifests. Cluster admission enforcement remains unwired. | [Supply-chain security](supply-chain.md) |
+| CI/CD credential exposure | Least-privilege workflow permissions and GitHub Environment protection scope credentials. Kubeconfig is materialised only in an ephemeral runner temporary directory. | [Immutable CI/CD promotion](../deployment/ci-cd.md) |
 
 ---
 

@@ -2,7 +2,7 @@
 title: "SignalForge Instrumentation Reference"
 description: "Reference explaining every OpenTelemetry instrumentation decision in the signal-forge lab — what's configured, why, and what correct behavior looks like."
 tags: ["ShipSolid", "Signal Forge", "Observability"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-35"
 relations:
   - slug: projects/app-signal-forge/deployment/grafana-cloud
@@ -100,9 +100,9 @@ flowchart TD
 All OTel signal types (traces, metrics) flow through `alloy-receiver`. Logs are tailed at the node
 level by `alloy-logs` (not OTLP export from apps). Infra metrics are collected by `alloy-metrics`.
 
-The `monitoring` namespace is managed by the `grafana/k8s-monitoring` v3.8.4 Helm chart (five
-specialised Alloy roles). The hand-rolled DaemonSet in `k8s/alloy/` is kept as reference only —
-**not deployed**.
+The `monitoring` namespace uses the `grafana/k8s-monitoring` Helm chart at the version pinned in
+`conf.yml` when cloud mode is active. Local mode uses the hand-authored collector path under
+`k8s/monitoring/grafana/local/`; it is a separate local topology, not a second exporter path.
 
 ---
 
@@ -697,9 +697,10 @@ Both levels are needed because:
 
 ## 15. Helm-Based Monitoring (Required)
 
-The `grafana/k8s-monitoring` Helm chart (v3.8.4) is the **canonical collector stack** for this lab.
-The hand-rolled `k8s/alloy/` DaemonSet is kept as a reference artifact but is **not deployed** — it
-was removed to eliminate the duplicate Alloy collector that was causing CrashLoopBackOff.
+The `grafana/k8s-monitoring` Helm chart at the version pinned in `conf.yml` is the canonical
+collector stack for cloud mode. The hand-authored local Alloy DaemonSet is selected only in local
+mode; do not run both collector paths against the same application traffic because duplicate spans,
+metrics, and incompatible configuration are the likely result.
 
 App services send OTLP to `grafana-k8s-alloy-receiver.monitoring.svc.cluster.local:4317`.
 `./deploy-local.sh` installs the Helm chart unconditionally in `mode: cloud`; in `mode: local`, pass

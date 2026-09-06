@@ -2,7 +2,7 @@
 title: "gRPC API Reference"
 description: "Reference for the OrderService gRPC contract between gateway-api and order-api, covering RPCs, error codes, and trace propagation."
 tags: ["ShipSolid", "Signal Forge", "API"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847"
 relations:
   - slug: projects/app-signal-forge/services/order-api
@@ -181,13 +181,12 @@ These attributes appear in Jaeger and can be used as search filters.
 | `GetOrdersByProject` | gRPC CLIENT span (streaming)                | gRPC SERVER span (streaming)                    |
 | `GetOrder`           | gRPC CLIENT span                            | gRPC SERVER span                                |
 
-The `order.publish` PRODUCER span is **not** a child of `order.create`. `CreateOrder` writes the
-order and an outbox row in one transaction and returns immediately; the actual RabbitMQ publish
-happens later, out-of-band, inside `OutboxRelayWorker`'s poll loop, as a child of its own
-`outbox.relay` span — a separate, disconnected trace from the original request. See the trace-shape
-comment at the top of `OrderGrpcService.cs` and `OutboxRelayWorker.cs`/`OrderPublisher.cs` for the
-full picture, including why notification-svc's CONSUMER span still correctly links back to
-`order.create` even though `order.publish` itself doesn't.
+`order.publish` is not an inline child of `order.create`: `CreateOrder` persists the order/outbox
+row and returns, while `OutboxRelayWorker` publishes later. The worker restores the persisted
+request context as `outbox.relay`'s parent and adds an `ActivityLink`; `order.publish` is the relay
+span's child. The whole chain keeps the original trace ID, while retry attempts remain visible as
+separate asynchronous work. notification-svc then creates a linked CONSUMER span from the same
+stored `traceparent`. See `OutboxRelayWorker.cs` and `OrderPublisher.cs` for the implementation.
 
 ---
 
@@ -197,8 +196,8 @@ The proto file is included in each .NET project's `.csproj`:
 
 ```xml
 <ItemGroup>
-  <Protobuf Include="Protos\orders.proto" GrpcServices="Server" />  <!-- order-api -->
-  <Protobuf Include="Protos\orders.proto" GrpcServices="Client" />  <!-- gateway-api -->
+  <Protobuf Include="..\proto\orders.proto" GrpcServices="Server" />  <!-- order-api -->
+  <Protobuf Include="..\proto\orders.proto" GrpcServices="Client" />  <!-- gateway-api -->
 </ItemGroup>
 ```
 

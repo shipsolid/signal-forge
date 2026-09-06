@@ -2,7 +2,7 @@
 title: "Local Deployment"
 description: "Step-by-step guide to deploying the full lab locally on k3d via deploy-local.sh, including cluster setup and mode switching."
 tags: ["ShipSolid", "Signal Forge", "Deployment"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-16"
 relations:
   - slug: projects/app-signal-forge/deployment/grafana-cloud
@@ -20,6 +20,11 @@ relations:
 This guide sets up the full lab on a local machine using k3d. No cloud accounts required.
 `./deploy-local.sh` is the sole deploy path — the Makefile only builds images, runs tests, and
 fetches/applies Grafana Cloud credentials (see [[grafana-cloud|grafana-cloud.md]]).
+
+This is intentionally separate from the immutable GitHub Actions promotion path. Local deployment
+builds/imports `:local` images for fast k3d iteration; it does not create a release manifest, sign
+an image, or simulate DEV → QA → PROD promotion. See [Immutable CI/CD Promotion](ci-cd.md) for the
+environment deployment contract.
 
 ## Prerequisites
 

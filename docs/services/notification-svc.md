@@ -2,7 +2,7 @@
 title: "Service: notification-svc"
 description: "notification-svc's RabbitMQ consumer architecture, dead-letter routing, idempotency handling, and OTel instrumentation."
 tags: ["ShipSolid", "Signal Forge", "Services"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-39"
 relations:
   - slug: projects/app-signal-forge/services/order-api
@@ -160,14 +160,13 @@ def handle_order_created(ch, method, properties, body: bytes):
     #    deliveries could both pass the check before either set the key.
     #    SET NX closes that window in one round trip.
     dedup_key = f"dedup:{event.order_id}"
-    if not r.set(dedup_key, "1", nx=True, ex=3600):  # 1h dedup window
+    if not r.set(dedup_key, "1", nx=True, ex=86400):  # 24h dedup window
         span.set_attribute("notification.duplicate", True)
         ch.basic_ack(delivery_tag=method.delivery_tag)
         return  # Already processed
 
-    # 2. Store notification (separate 24h TTL from the 1h dedup key above —
-    #    a redelivery between 1h and 24h bypasses dedup; see docs/reviews/
-    #    2026-07-08-principal-staff-review.md §2.2 for the open gap this leaves)
+    # 2. Store notification for the same 24h window as the atomic dedup key.
+    #    LREM before LPUSH remains defense-in-depth if the TTLs ever drift.
     notification_id = f"notif-{event.order_id}"
     r.hset(f"notifications:{notification_id}", mapping={
         "id": notification_id,

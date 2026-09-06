@@ -2,7 +2,7 @@
 title: "Helm Monitoring Stack"
 description: "How the grafana/k8s-monitoring Helm chart deploys Alloy roles for collecting and exporting telemetry, and why it replaced the legacy Makefile flow."
 tags: ["ShipSolid", "Signal Forge", "Deployment"]
-updated: 2026-07-10
+updated: 2026-09-06
 zettelId: "202607091847-15"
 relations:
   - slug: projects/app-signal-forge/architecture/adrs/adr-helm-managed-alloy-stack
@@ -17,8 +17,9 @@ relations:
 
 ## Helm Monitoring Stack
 
-The observability collector stack uses the `grafana/k8s-monitoring` Helm chart (v3.8.4). It deploys
-up to five specialised Grafana Alloy roles into the `monitoring` namespace. **`./deploy-local.sh` is
+The observability collector stack uses the `grafana/k8s-monitoring` Helm chart at the version pinned
+in `conf.yml`. It deploys up to five specialised Grafana Alloy roles into the `monitoring` namespace.
+**`./deploy-local.sh` is
 the only supported way to install it** — see [[local|local.md]] and
 [[grafana-cloud|grafana-cloud.md]]. The Makefile-driven `make deploy-helm` / `make helm-render` /
 `make deploy-helm-cloud` flow described in earlier versions of this doc has been retired: it was a
@@ -152,7 +153,7 @@ automatically.
 
 ## Chart version pinning
 
-The chart version is pinned in `conf.yml`'s `monitoring.helm.version` (currently 3.8.4). To upgrade:
+The chart version is pinned in `conf.yml`'s `monitoring.helm.version`. To upgrade:
 
 1. Update `monitoring.helm.version` in `conf.yml`.
 2. Review the chart changelog for breaking changes.

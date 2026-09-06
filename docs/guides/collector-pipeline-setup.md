@@ -2,7 +2,7 @@
 title: "Guide: Collector & Pipeline Setup"
 description: "Step-by-step: stand up a Grafana Alloy + grafana/k8s-monitoring Helm chart pipeline that receives OTLP traces/metrics/logs from your services and exports to Grafana Cloud or a self-hosted backend."
 tags: ["ShipSolid", "Signal Forge", "Observability", "Guides"]
-updated: 2026-07-30
+updated: 2026-09-06
 zettelId: "202607301400-02"
 relations:
   - slug: projects/app-signal-forge/guides/README
@@ -46,7 +46,7 @@ helm repo add grafana https://grafana.github.io/helm-charts
 helm repo update
 ```
 
-Pin a chart version explicitly (this project pins `3.8.4`) and keep the version pinned in your own
+Pin a chart version explicitly (this project currently pins `4.3.1` in `conf.yml`) and keep the version pinned in your own
 config source of truth, not just the `helm install` command line — you'll re-run this on every
 deploy.
 
@@ -57,7 +57,7 @@ Maintain two values files, selected by your backend choice:
 
 ```bash
 helm upgrade --install grafana-k8s grafana/k8s-monitoring \
-  --version 3.8.4 \
+  --version 4.3.1 \
   --namespace monitoring --create-namespace \
   -f values-cloud.yaml   # or values-local.yaml
 ```
@@ -360,9 +360,9 @@ Browser RUM data (from [[frontend-rum-instrumentation|Grafana Faro]]) does **not
   This can live on the same Alloy instance as your OTLP receiver (a different `faro.receiver` block,
   same config file) or a wholly separate one — but it is never the same receiver component as the
   OTLP one, and the `grafana/k8s-monitoring` chart's `applicationObservability` feature does not
-  expose a Faro receiver option at all as of chart `3.8.4`. If you need in-cluster Faro ingestion on
-  that chart, you'll be running a hand-authored Alloy config alongside it, not configuring the chart
-  for it.
+  expose a Faro receiver option in this repository's current configuration. Verify the values schema
+  for the chart version you pin; if it lacks that capability, run a hand-authored Alloy config
+  alongside it rather than assuming the chart configures Faro for you.
 
 ### Step 10 — Network policy
 
@@ -391,10 +391,11 @@ internet — Faro's collector endpoint isn't a fixed, allowlistable IP range.
 
 ### Step 11 — Known gap: no sampling in the chart-only path
 
-The `grafana/k8s-monitoring` chart's `applicationObservability` feature (as of `3.8.4`) has **no
-tail-sampling or span-metrics-before-sampling processor** anywhere in its values schema. If you rely
-on the chart alone, every trace your services emit ships to your backend at 100% volume — fine at
-low traffic, a real cost and cardinality concern at scale.
+This repository's chart-only cloud configuration does **not** add tail sampling or a
+span-metrics-before-sampling processor. If you rely on the chart alone, every trace your services
+emit ships to your backend at 100% volume — fine at low traffic, a real cost and cardinality concern
+at scale. Verify the selected chart's values schema before treating that implementation detail as a
+permanent product limitation.
 
 If you need tail-based sampling (keep 100% of errors and slow requests, sample the rest at, say,
 25%), you need a hand-authored Alloy River pipeline instead of (or as an addition alongside) the
