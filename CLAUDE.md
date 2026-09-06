@@ -223,9 +223,13 @@ kubectl apply -k k8s/overlays/dev           # apply dev overlay
 ## Docs map
 
 Full docs for this app live in **`docs/`** in this repo — that tree is the single source of truth.
-It is published to GitHub Pages at <https://shipsolid.github.io/signal-forge/> by the Starlight
-build in [`website/`](website/README.md) (`.github/workflows/deploy-docs.yml`); `website/` never
-holds content of its own — it generates `src/content/docs/` from `docs/` at build time.
+It is published to GitHub Pages at <https://shipsolid.github.io/signal-forge/> by the shared
+Starlight engine in **`shipsolid/docs-site`** (its reusable
+`.github/workflows/build-deploy.yml@main`), invoked from
+[`.github/workflows/docs.yml`](.github/workflows/docs.yml). Per-repo settings — title, sidebar,
+cross-repo `[[wiki-link]]` resolution — live in [`docs-site.yaml`](docs-site.yaml). This repo holds
+**no Astro code**; `docs/` is the only docs input. The engine renders `docs/**` plus the top-level
+`README.md`; a `[[wiki-link]]` pass and a broken-link check run at build time.
 
 - **Canonical source** — `docs/` (start at `docs/README.md` for the full index). Read pages
   directly with the `Read` tool regardless of your current working directory. The most load-bearing
