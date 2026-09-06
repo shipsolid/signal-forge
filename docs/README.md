@@ -73,7 +73,7 @@ different repository — for handing the pattern off to another team, not for wo
 
 | Page | What it covers |
 | ---- | -------------- |
-| [Guides index](guides/README.md) | Scope, assumptions, recommended order |
+| [Guides index](guides/) | Scope, assumptions, recommended order |
 | [Collector & Pipeline Setup](guides/collector-pipeline-setup.md) | Alloy + `grafana/k8s-monitoring` Helm chart — do this first |
 | [.NET Instrumentation](guides/dotnet-instrumentation.md) | SDK wiring, custom spans/metrics, RabbitMQ outbox propagation |
 | [Python Instrumentation](guides/python-instrumentation.md) | SDK wiring, RabbitMQ consumer SpanLink propagation |
@@ -86,7 +86,7 @@ different repository — for handing the pattern off to another team, not for wo
 | [OTel Validation Spec](spec.md) | All services, patterns to validate, the validation checklist |
 | [OTel Instrumentation Patterns](otel-patterns.md) | Per-runtime instrumentation choices |
 | [Testing](testing.md) | Test strategy, isolation patterns, CI matrix |
-| [Project README](../README.md) | Deploy model, ownership boundary, dependencies, operational model |
+| [Project README](project-readme.md) | Deploy model, ownership boundary, dependencies, operational model |
 
 ## Quick orientation
 
@@ -126,7 +126,7 @@ Two deployment modes (set in
 | Reviewing an immutable promotion | [Immutable CI/CD Promotion](deployment/ci-cd.md) + [Supply-chain security](operations/supply-chain.md) |
 | Preparing a target cluster | [Datastore HA migration](infrastructure/datastore-ha.md) + [Kustomize layout](infrastructure/kustomize.md) + [Reliability](operations/reliability.md) |
 | Writing SLO alerts | [SLOs & burn-rate alerts](observability/slos.md) |
-| Handing this pattern to another team | [Replication guides](guides/README.md) |
+| Handing this pattern to another team | [Replication guides](guides/) |
 
 ## Source
 
